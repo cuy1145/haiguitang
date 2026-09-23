@@ -405,8 +405,8 @@ export async function saveSession(db: D1Database, tokenHash: string, roomId: str
 }
 
 export async function findRoomByCode(db: D1Database, code: string): Promise<string | null> {
-  const row = await db.prepare('SELECT room_id FROM rooms WHERE code = ?').bind(code.toUpperCase()).first<Row>();
-  return row ? String(row.room_id) : null;
+  const row = await db.prepare('SELECT id FROM rooms WHERE code = ?').bind(code.toUpperCase()).first<Row>();
+  return row ? String(row.id) : null;
 }
 
 export async function roomCodeTaken(db: D1Database, code: string): Promise<boolean> {

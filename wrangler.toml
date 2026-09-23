@@ -21,6 +21,11 @@ directory = "packages/web/public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
+# 打包器别名：pnpm workspace 的软链（node_modules/@ht/core → packages/core）
+# esbuild 不跟随这种软链，必须显式指向源码入口。规则域仍然只有一份实现。
+[alias]
+"@ht/core" = "./packages/core/src/index.ts"
+
 # 状态存储：单个 D1 数据库，所有房间共用（room_id 作为分区键）
 [[d1_databases]]
 binding = "DB"

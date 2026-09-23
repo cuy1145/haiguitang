@@ -9,6 +9,7 @@
  * 未完成端点统一返回 501 + 明确的 `MIGRATION_IN_PROGRESS`，避免"看起来能玩但行为不对"。
  */
 import { json, securityHeaders } from './http.ts';
+import { handleApi } from './room-api.ts';
 
 export interface Env {
   DB: D1Database;
@@ -62,11 +63,14 @@ export default {
       });
     }
 
-    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/debug/')) {
+    if (url.pathname.startsWith('/api/')) {
+      return handleApi(request, env, url);
+    }
+
+    if (url.pathname.startsWith('/debug/')) {
       return json({
         error: 'MIGRATION_IN_PROGRESS',
-        message: '房间 API 正在从 Durable Objects 迁移到 D1 方案，见 packages/worker/README.md 的待办清单',
-        available: ['/api/health', '/api/config'],
+        message: '调试接口待移植（见 packages/worker/README.md）',
       }, 501);
     }
 
@@ -88,3 +92,4 @@ export default {
     return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
   },
 } satisfies ExportedHandler<Env>;
+
