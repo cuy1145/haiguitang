@@ -9,13 +9,27 @@
 
 ## 0. 先看这一屏：整体流程
 
+**你的当前进度**（2026-09-23 实测）：
+
+| 项 | 状态 |
+|---|---|
+| Cloudflare 账号 | ✅ 已登录（Account ID `cc4c2dfb7c9cf38819d09cae71ab7d0f`） |
+| `wrangler login` | ✅ 已完成（OAuth Token 已存到本机） |
+| GitHub 仓库 | ✅ 已建：<https://github.com/cuy1145/haiguitang> |
+| 本地 git remote | ✅ 已配置 `origin` |
+| **workers.dev 子域** | ❌ **未注册 —— 这是当前唯一的硬阻塞，必须先做（见 §2.0）** |
+| Cloudflare API Token | ⬜ 可选（只为 GitHub Actions 自动部署；本地部署不需要，见 §2.3） |
+| Worker 移植 | ⬜ 我这边收尾中（`packages/worker/README.md`） |
+
 ```
-① GitHub 建仓库 → ② 推送代码 → ③ 配置 2 个仓库 Secret（给自动部署用）
-                                           ↓
-④ Cloudflare 建 API Token + 记下 Account ID → ⑤ 本地 wrangler login
-                                           ↓
+⓪ 注册 workers.dev 子域（必须先做，30 秒）
+    ↓
+① GitHub 建仓库 → ② 推送代码 → ③ 配置 2 个仓库 Secret（可选，给自动部署用）
+    ↓
+④ Cloudflare 建 API Token + 记下 Account ID（可选）→ ⑤ 本地 wrangler login（✅ 已完成）
+    ↓
 ⑥ 我完成 CF 移植（library-do.ts + 端到端验证）
-                                           ↓
+    ↓
 ⑦ 设置运行期密钥（MASTER_KEY / 可选 AI_KEY）→ ⑧ 首次部署 → ⑨ 两台设备试玩
 ```
 
@@ -87,6 +101,31 @@ git push -u origin main
 
 ## 2. 🧑 Cloudflare 配置
 
+### 2.0 注册 workers.dev 子域（**必须先做**）
+
+没有子域时，任何 `wrangler deploy` 都会失败并提示：
+
+```
+X [ERROR] You can either deploy your worker to one or more routes by specifying them in your wrangler.toml file,
+          or register a workers.dev subdomain here:
+          https://dash.cloudflare.com/<你的 Account ID>/workers/onboarding
+```
+
+**操作**：
+
+1. 打开 <https://dash.cloudflare.com/cc4c2dfb7c9cf38819d09cae71ab7d0f/workers/onboarding>
+   （或：Dashboard → 左侧 **Workers & Pages** → 按引导走）
+2. 它会要求你**选一个子域前缀**，完整域名就是 `<前缀>.workers.dev`
+   - 只能用字母/数字/连字符，例如 `haiguitang-cuy1145`
+   - 这个前缀是**账号级**的，之后所有 Worker 默认都挂在它下面（本项目会得到 `https://haiguitang.<前缀>.workers.dev`）
+   - 名字不涉及隐私（它只会出现在你的网址里），但**选个自己记得住的**；虽然官方允许改，但改了老网址会失效
+3. 点确认完成注册（免费计划同样可以注册）
+4. 回到项目目录重试部署即可
+
+> 注册完成后告诉我，我会立刻重跑那个 Durable Object 探针，实测三件事：
+> ① 免费计划能否创建 **SQLite 后端**的 DO；② DO SQLite 持久化是否跨请求生效；③ **alarm** 能否在无请求时自行触发。
+> 这三条都通过，才说明架构选型在这个账号上成立。
+
 ### 2.1 确认计划与 Durable Objects 可用性
 
 1. 登录 <https://dash.cloudflare.com>
@@ -109,17 +148,58 @@ git push -u origin main
 
 ### 2.3 创建 API Token（给 GitHub Actions 用）
 
-1. <https://dash.cloudflare.com/profile/api-tokens> → **Create Token**
-2. 拉到底部 **Custom token** → **Get started**
-3. **Token name**：`haiguitang-deploy`
-4. **Permissions**（点 `+` 逐条添加）：
-   - `Account` → `Workers Scripts` → **Edit**
-   - `Account` → `Durable Objects` → **Edit**
-   - `Account` → `Account Settings` → **Read**（wrangler 需要读账号信息）
-5. **Account Resources**：Include → 选你的账号
-6. **Zone Resources**：不选（本项目用 `*.workers.dev`，不需要域名权限）
-7. **Continue to summary** → **Create Token** → **立刻复制**（只显示一次）
-8. 把这个 Token 填到第 1.3 步的 `CLOUDFLARE_API_TOKEN`
+> **先明确一件事**：如果你只想**先把网站跑起来**，这一步可以跳过。
+> 你已经执行过 `npx wrangler login`，直接在本地 `pnpm cf:deploy` 就能上线。
+> API Token **只为让 GitHub Actions 自动部署**而存在（以后 push 一次就自动发布）。
+
+**点击路径（逐屏对照）**
+
+1. 打开 <https://dash.cloudflare.com/profile/api-tokens>
+   （也可以从右上角头像 → **My Profile** → 左侧 **API Tokens** 进入）
+2. 点右上/中间的 **Create Token** 按钮
+3. 页面上半部分是模板（Templates），**别点那些**。拉到底部找到 **Custom token** 区块 → 点 **Get started**
+4. **Token name** 填：`haiguitang-deploy`
+5. **Permissions** 是这次的重点。每一行是「三个下拉框」，点右侧 **+ Add more** 可以加行。共需要 **3 行**：
+
+   | 第 1 个下拉（作用域） | 第 2 个下拉（资源） | 第 3 个下拉（权限级别） |
+   |---|---|---|
+   | `Account` | `Workers Scripts` | `Edit` |
+   | `Account` | `Durable Objects` | `Edit` |
+   | `Account` | `Account Settings` | `Read` |
+
+   > 第 2 行（Durable Objects）**不能少**：模板里的 "Edit Cloudflare Workers" 不包含它，这是本项目必须自建 Token 的原因。
+   > 权限级别必须是 `Edit`，`Read` 会导致部署报 `Authentication error [code: 10000]`。
+
+6. **Account Resources**：选 `Include` → 右侧下拉选你的账号名（通常只有一个）
+7. **Zone Resources**：本项目用 `*.workers.dev`，**不需要任何 Zone 权限**，保持默认即可（不要选域名）
+8. **Client IP Address Filtering** / **TTL**：
+   - IP 过滤留空（家里/公司网络会变）
+   - TTL 建议设一个到期日（例如 1 年后），到期重新生成即可
+9. 点 **Continue to summary** → 核对三行权限没问题 → 点 **Create Token**
+10. **立刻复制**这串 Token（形如 `abcdefg...`，只在这一次显示，关掉页面就再也看不到）
+
+**粘贴到哪里**
+
+- 第 1.3 步的仓库 Secret：名称必须**逐字**是 `CLOUDFLARE_API_TOKEN`
+- 不要粘贴到 `wrangler.toml`、任何文件、聊天窗口或截图里
+- 如果哪一步复制丢了：不用找回，直接再建一个 Token 并删掉旧的（API Tokens 页面每行右侧有 **Delete**）
+
+**验证 Token 是否正确（可选，推荐）**
+
+在项目目录执行下面两行 —— `Read-Host` 的输入不会进入命令历史，也不会写进任何文件：
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN = Read-Host "粘贴 Token 后回车"
+npx wrangler whoami            # 会打印账号名 + 这个 Token 拥有的权限列表
+Remove-Item Env:CLOUDFLARE_API_TOKEN
+```
+
+`wrangler whoami` 输出里应当能看到 `Account Name`、`Account ID`，以及一段权限列表（包含 Workers Scripts、Durable Objects）。
+如果提示 `not authenticated` 或权限列表里缺 Durable Objects，就回到第 5 步补权限重新建。
+
+> 部署工作流里已经加了"先 `whoami` 再 deploy"的步骤：万一 Token 配错，Actions 日志会直接打印它实际拥有的权限，
+> 而不是等到部署失败才看不出来。
+
 
 ### 2.4 本地登录（首次部署走这条路最简单）
 
