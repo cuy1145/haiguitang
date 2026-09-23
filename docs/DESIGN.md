@@ -47,6 +47,12 @@ Node 24 原生支持 TypeScript 类型剥离（`node file.ts` 直接可跑），
 近似抄写事实点、超长或写成反问句，都**只丢弃这一句**，判定本身照样成立 —— 一句多嘴绝不会中断整局。
 `irrelevant / unanswerable` 不带说明（那两类结论本身就说明了范围）。
 
+**提示是可选玩法**：`config.hintsEnabled` 默认 `false`，关闭时 `requestHint()` 直接返回 `HINTS_DISABLED`，
+前端连按钮都不渲染。房主可在「对局参数」里随时打开（属于 `free` 项，不受"只允许增大"限制）。
+
+**汤底揭晓仅房主可见**：`GET /api/recap` 除参与者/结算门禁外，还要求 `room.hostId === viewer`，
+否则返回 `NOT_HOST`（HTTP 403）。汤底本就只在服务端注入，其他玩家的客户端里从来不存在这段文本。
+
 判定缓存写在 SQLite（`verdict_cache`，主键 = 题目 + 问题哈希 + 提示词版本 + 事实集版本），
 所以"同一问题永远同一答案"跨进程、跨重启都成立（`tests/integration` I-13 直接断言）。
 
