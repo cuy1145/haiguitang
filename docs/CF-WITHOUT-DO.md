@@ -160,11 +160,11 @@ D1 就是 SQLite，所以《阶段1》/`store.ts` 的表结构**几乎可以原�
 
 1. ✅ 端口化（`packages/server/src/ports.ts`）——已完成，本轮改动才能这么小
 2. ✅ Worker 侧适配器起步（入口/保险箱/脱敏日志/DO 仓储）——其中 DO 相关部分本轮作废重写
-3. ⬜ `store-d1.ts`：D1 版仓储（含 CAS 写、事件表、会话表）
+3. ✅ `store-d1.ts`：D1 版仓储（预读快照 + 缓冲写 + CAS 单事务批次 + 事件表 + 会话表）
 4. ⬜ `room-api.ts`：无状态房间 API（载入 → catch-up → 动作 → CAS 写回 → 返回事件）
-5. ⬜ `index.ts` 路由收口 + `wrangler.toml` 换 D1 绑定 + Cron 清理
+5. 🟡 `wrangler.toml` 已换 D1 绑定 + Cron；`index.ts` 基础层就绪（health/config/静态资源/501），路由收口待完成
 6. ⬜ 前端从 WS 改轮询
-7. ⬜ `wrangler d1 migrations` 建表；`pnpm cf:dev` 端到端跑通
+7. 🟡 本地迁移已应用、`wrangler dev` 已验证 D1 绑定；端到端待房间 API 完成
 8. ⬜ 把集成测试搬到 HTTP 形态（假时钟继续用），核心 50 项不动
 9. ⬜ 部署 + 两台设备试玩验收（`docs/DEPLOY.md` §4）
 10. ⬜ GitHub Actions 的 CI/CD 不变（deploy 前需先 `wrangler d1 create` 并在仓库里记录 database_id）
@@ -180,3 +180,4 @@ D1 就是 SQLite，所以《阶段1》/`store.ts` 的表结构**几乎可以原�
 3. 如果你愿意每月付 $5 上 Workers Paid，架构可以完全不动（DO 全功能可用）——我不推销，只把选项摆出来。
 
 选 A 的话我立刻开始第 3～9 步；其中 4、6 两步是这次"去掉 DO"的主要工作量，其余是搬运。
+

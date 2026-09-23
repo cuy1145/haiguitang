@@ -1,73 +1,107 @@
-# packages/worker —— 生产运行时（Cloudflare Workers + Durable Objects）
+# packages/worker —— 生产运行时（Cloudflare Workers + D1，无 Durable Objects）
 
-> **状态：移植进行中（WIP）**。端口层与大部分适配器已完成，尚缺 Library DO；**当前不要执行 `pnpm cf:dev`**
-> （`src/index.ts` 引用了尚未落地的 `library-do.ts`）。生产运行时以本目录为准，Node 版仅作备份/回归夹具。
+> **状态：基础层已本地实测通过，房间 API 正在落地（见下方待办）。**
+> 你账号的 Durable Objects 需要付费，因此按 `docs/CF-WITHOUT-DO.md` 的**方案 A** 实现：
+> **D1（云端 SQLite）+ 惰性推进 + 客户端轮询 + 乐观锁 CAS**。
 
-## 目标架构
+## 已实测（本地 workerd，`wrangler dev`）
+
+| 项 | 结果 |
+|---|---|
+| Worker 启动 | ✅ `wrangler dev` 正常 |
+| **D1 绑定 + 迁移** | ✅ `0001_init.sql` 20 条语句执行成功；`/api/health` 真实查询 `SELECT COUNT(*) FROM rooms` 返回 `{ok:true, rooms:0}` |
+| 静态资源托管 | ✅ `GET /` 返回 200（35 KB，含前端标题） |
+| 安全响应头 | ✅ CSP / nosniff / frame-ancestors 等 |
+| 未完成端点 | ✅ 返回 501 + `MIGRATION_IN_PROGRESS`（不假装可用） |
+| D1 免费额度可用性 | ✅ 建库/建表/CAS 更新已在你的账号实测通过（见 `docs/CF-WITHOUT-DO.md` §0） |
+
+## 架构（方案 A）
 
 ```
-Worker（边缘）
-├─ 静态资源（Static Assets）           → packages/web/public
-├─ /api/health, /api/config            → Library DO
-├─ /api/rooms*, /api/session/recap/... → Library DO（鉴权）→ Room DO
-├─ /ws?token=...                       → Room DO（每房一个，WebSocket Hibernation）
-└─ /debug/*（DEV_TOOLS=1 时）          → Room DO
+Worker（无状态，边缘）
+├─ 静态资源（Static Assets）      → packages/web/public
+├─ GET  /api/health /api/config   → 直接返回（含 D1 探活）
+├─ POST /api/rooms                → 建房（分配房间码 + 成员 + 令牌）
+├─ POST /api/rooms/:code/join     → 加入
+├─ GET  /api/session              → 令牌 → {roomId, memberId, view}
+├─ GET  /api/rooms/:id/state      → 全量快照
+├─ GET  /api/rooms/:id/events?since=seq → 增量事件（原 WebSocket 广播的内容）
+├─ POST /api/rooms/:id/actions    → 提交动作（提问/提示/揭秘/投票/参数/房主操作）
+├─ GET  /api/recap                → 复盘（汤底唯一出口，三道门禁不变）
+└─ POST|DELETE /api/credentials   → 房主自备 Key（连接测试 + WebCrypto 加密入库）
 
-LibraryDurableObject（单例）  · 房间码索引 · 会话令牌索引（只存哈希）· 题库种子 · 站点用量
-RoomDurableObject（每房一个） · 房间状态（内存 + SQLite）· 该房 SQLite · WS · alarm tick · 密钥密文
+D1（单个数据库，room_id 分区）
+rooms / members / questions / matches / votes / credentials / verdict_cache
+audit_events / usage_counters / credit_grants / sessions / room_events / room_codes
 ```
 
-## 为什么是 Durable Object（对应《产出/阶段6》）
+**每个请求的三段式**（`store-d1.ts` 已实现第 ①③ 段）：
 
-| 原设计（自托管） | CF 等价物 | 性质 |
-|---|---|---|
-| 自研「房间级 Promise 串行队列」 | DO 单线程强一致 | 自研 → **平台保证**（跨网络/跨重启/跨实例） |
-| `setInterval` 扫描 | DO **alarm** | 常驻进程 → 可休眠的平台定时器 |
-| `node:sqlite` | DO **SQLite**（表结构与唯一索引原样保留） | API 换掉，schema 不变 |
-| JSONL 日志文件 | Workers Logs / `wrangler tail` | 无文件系统 |
-| `node:crypto` AES-GCM | **WebCrypto** AES-GCM（AAD 绑定不变） | 算法不变，异步化 |
-| `MASTER_KEY` 环境变量 | **Worker secret** | 更安全、不进配置 |
+```
+① 预读（async）：房间 + 成员 + 当前对局 + 凭据 + 用量 + 判定缓存（+ 复盘时的问题记录）
+② 纯计算（sync，复用原逻辑）：catch-up 补算过期事件 → 处理本次动作 → 生成事件
+③ 写回（async，单事务批次）：
+     UPDATE rooms SET <全部内容>, state_version = state_version + 1
+      WHERE id = ? AND state_version = ?            -- ← CAS：抢占版本
+     INSERT OR REPLACE INTO members(...) SELECT ... WHERE EXISTS(SELECT 1 FROM rooms WHERE id=? AND state_version=?)  -- ← 新版本为条件
+     （questions / votes / room_events / audit / usage 同理）
+   第 ① 条影响 0 行 → 有人抢先 → 重新预读并重放动作（最多 3 次）
+```
+
+**为什么定时器没了也不影响正确性**：核心规则全是阈值型纯函数（`now >= deadline`），所以
+「每个请求先补算」与「每秒 tick 一次」结果等价；顺序固定为
+`tickTurn → presenceTick → 移交判定 → 投票截止 → 中断超时自动投票`（与 Node 版 tick 顺序一致）。
+Cron（每小时）只负责清理无人访问的房间与过期密钥，**不承担对局计时**。
 
 ## 文件职责
 
 | 文件 | 状态 | 说明 |
 |---|---|---|
-| `src/index.ts` | ✅ | Worker 入口：静态资源、API 路由、WS 升级、安全响应头 |
-| `src/http.ts` | ✅ | JSON 响应、请求体解析、昵称清洗、固定错误文案、房间码、令牌哈希 |
-| `src/vault.ts` | ✅ | WebCrypto AES-256-GCM 保险箱（与 Node 版行为等价，含 AAD 绑定与所有权校验） |
+| `src/index.ts` | ✅ 基础层 | 路由入口：健康检查（D1 探活）、配置、静态资源、安全头；未完成端点 501 |
+| `src/http.ts` | ✅ | JSON 响应、请求体解析、昵称清洗、固定文案、房间码、令牌哈希（WebCrypto） |
+| `src/vault.ts` | ✅ | WebCrypto AES-256-GCM 保险箱（AAD 绑定 `credential|owner|room`，与 Node 版行为等价） |
 | `src/log.ts` | ✅ | 控制台脱敏日志（与 Node 版同一套屏蔽字段） |
-| `src/store-do.ts` | ✅ | DO SQLite 仓储，实现 `RoomStorePort`（20 个方法，schema 与 Node 版一致） |
-| `src/room-do.ts` | ✅ | 房间 DO：alarm 驱动 tick、WS 休眠、帧分发、房主自备 Key 的连接测试与加密入库 |
-| `src/library-do.ts` | ⬜ **待实现** | 单例 DO：房间码分配、会话令牌索引（token 哈希 → roomId/memberId）、题库种子、站点用量 |
+| `src/store-d1.ts` | ✅ | D1 仓储：预读快照 + 请求级同步仓储 + CAS 单事务批次写回 + 事件表 + 会话表 |
+| `migrations/0001_init.sql` | ✅ | 全部表与唯一索引（已在本地成功应用） |
+| `src/room-api.ts` | ⬜ **待写** | 无状态房间 API：载入 → catch-up → 动作 → flush → 返回事件 |
 
-## 复用关系（不重复实现规则）
+## 待办（按顺序，我下一步就做这些）
 
-```
-@ht/core                    ← 规则：零依赖纯函数，两个运行时逐字复用
-packages/server/src/rooms.ts ← 房间编排（RoomRuntime / RoomRegistry），只依赖 ports.ts 的结构化端口
-packages/server/src/ai.ts    ← AI 代理（判定 + 连接测试 + 错误分类），已移除 node:crypto 依赖
-packages/server/src/{ports,protocol,data/seed-puzzles}.ts ← 端口、协议文案、题库种子
-──────────────────────────────────────────────
-Node 适配器（备份）   packages/server/src/{store,vault,log,config,server,index}.ts
-CF  适配器（生产）   packages/worker/src/{store-do,vault,log,index,room-do,library-do}.ts
-```
-
-## 待办（按顺序）
-
-1. `library-do.ts`：`POST /api/rooms`（分配房间码 + 房间 id + 成员 + 令牌）、`POST /api/rooms/:code/join`、
-   `GET /api/session`、`GET /api/config`、`GET /api/health`、`POST /session/lookup`
-2. 收口 `index.ts` 路由：`/api/credentials` 与 `/api/recap` 走鉴权后转发 Room DO
-3. `pnpm cf:dev` 端到端跑通：建房 → 加入 → 开局 → 提问 → 判定 → 提示 → 揭秘 → 复盘
-4. **同一组集成测试跑两个运行时**（差分验证：规则不得因运行时不同而改变）
-5. GitHub Actions：PR 跑测试/类型检查/自检；main 自动 `wrangler deploy`
-6. 用真实账号 `wrangler deploy` + `wrangler tail` 验证（免费计划，SQLite 后端 DO）
+1. `src/room-api.ts`
+   - `withRoom(db, roomId, fn)`：预读 → `new RoomRuntime(room, deps)` → `await runtime.tickOnce()`（补算）→ `fn(runtime)` → `flushRoomStore()`；CAS 失败则重放
+   - 动作分发（与 Node 版 `handleFrame` 同一套语义）：`submit / hint / guess / vote / config / start / skip_turn / end_match / resume_transfer / return_host / decline_return / reenable_key / revoke_key / heartbeat / activity`
+   - `RoomRuntime.broadcast` → 改写为「写入 `room_events` + 记录本次事件」，由 `GET /events?since=` 拉取
+   - 会话/房间码（`sessions` / `room_codes` 表）+ 建房、加入、鉴权
+   - 复盘：`recap()`（三道门禁：settled + 非 aborted + 参与者）+ 汤底由服务端注入
+   - 凭据：连接测试 + WebCrypto 加密入库 + 撤销销毁（逻辑可从 Node 版 `server.ts` 直接搬）
+2. `src/index.ts` 路由收口（把 501 换成真实实现）
+3. 前端 `packages/web/public/index.html`：WebSocket → 轮询（约 30 行：`send()` → `POST actions`；`onmessage` → 轮询回调 + `since=seq` 增量）
+4. `src/cron.ts`：每小时清理（等待开局超时 / 长时间空闲 / 结算后过期 / 密钥 TTL）
+5. 测试：核心 50 项不动；集成测试从「WS 客户端」改为「HTTP 客户端 + 假时钟手动驱动 catch-up」
+6. 部署：`wrangler d1 migrations apply haiguitang --remote` → `pnpm cf:deploy` → 两台设备试玩验收
 
 ## 本地开发
 
 ```bash
 pnpm install
-cp .dev.vars.example .dev.vars      # 填 MASTER_KEY / AI_KEY（.dev.vars 已被 gitignore）
-pnpm cf:dev                          # 本地 workerd，无需 CF 账号
+pnpm cf:preflight                                   # 环境自检
+npx wrangler d1 migrations apply haiguitang --local # 建本地表（已执行过一次）
+pnpm cf:dev                                         # http://localhost:8787
+curl http://localhost:8787/api/health               # 应返回 storage:"d1", db.ok:true
 ```
 
-`.dev.vars` 与 `.env` 都不得提交；生产密钥用 `wrangler secret put MASTER_KEY` / `wrangler secret put AI_KEY`。
+线上迁移与密钥（部署时执行）：
+
+```bash
+npx wrangler d1 migrations apply haiguitang --remote
+npx wrangler secret put MASTER_KEY
+npx wrangler secret put AI_KEY        # 可选
+pnpm cf:deploy
+```
+
+## 安全红线（与运行时无关，全部保留）
+
+- 汤底唯一出口是 `/api/recap`（settled + 非 aborted + 参与者三者齐备），DTO 白名单投影 + `assertNoLeak` 兜底
+- Key 明文只在「入站提交」与「出站调用前一刻」存在；`MASTER_KEY` 是 Worker secret，不入仓库
+- 提交权限由服务端（房间 API）校验；前端按钮只是 UX
+- 预输入草稿只存在浏览器 `localStorage`，服务端无对应字段

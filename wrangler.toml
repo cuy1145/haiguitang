@@ -2,11 +2,13 @@
 # ============================================================================
 # Cloudflare Workers 部署配置（生产运行时）
 #
-# 关键点：
-#  · Durable Objects 一律使用 **SQLite 存储后端**（`new_sqlite_classes`）——
-#    这是免费计划可用的形态；KV 后端的新命名空间已被 Cloudflare 停止支持。
-#  · 密钥（MASTER_KEY / AI_KEY）不进本文件，用 `wrangler secret put` 写入。
-#  · 静态资源（前端）由 Workers Static Assets 托管。
+# ⚠️ 方案修订（《产出/阶段6》+《haiguitang/docs/CF-WITHOUT-DO.md》）
+#   你的账号上 Durable Objects 需要付费、当前不可用，因此改为：
+#     · 状态存储：**D1**（云端 SQLite，免费额度 5GB / 500 万行读/天 / 10 万行写/天）
+#     · 定时器：**惰性推进**（每个请求先补算过期事件）+ Cron 做生命周期清理
+#     · 广播：**客户端增量轮询**（rooms/events?since=seq），协议语义不变（seq + 增量 + 快照）
+#     · 并发：**乐观锁 CAS**（UPDATE ... WHERE state_version = ?）+ 唯一索引
+#   规则与编排（@ht/core、packages/server 的 rooms.ts / ai.ts）**逐字复用**，没有第二套实现。
 # ============================================================================
 name = "haiguitang"
 main = "packages/worker/src/index.ts"
@@ -19,34 +21,30 @@ directory = "packages/web/public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
-# 每局/每房一个 Durable Object（房间状态 + 该房间的 SQLite）
-[[durable_objects.bindings]]
-name = "ROOMS"
-class_name = "RoomDurableObject"
+# 状态存储：单个 D1 数据库，所有房间共用（room_id 作为分区键）
+[[d1_databases]]
+binding = "DB"
+database_name = "haiguitang"
+database_id = "201c8906-63dd-4b55-9678-0f568c76fb57"
+migrations_dir = "packages/worker/migrations"
 
-# 全局单例：房间码索引、会话令牌索引、题库、站点额度计数
-[[durable_objects.bindings]]
-name = "LIBRARY"
-class_name = "LibraryDurableObject"
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["RoomDurableObject", "LibraryDurableObject"]
+# 生命周期清理（免费计划可用，最小粒度 1 分钟）。
+# 注意：Cron **不承担对局计时**——对局计时由"惰性推进"完成（见 docs/CF-WITHOUT-DO.md §2.1），
+# Cron 只负责清理长时间无人访问的房间与过期密钥。
+[triggers]
+crons = ["17 * * * *"]
 
 [vars]
-# 未配置 AI_KEY 时使用内置模拟主持人（离线可判定）
 AI_PROVIDER = "openai-compatible"
 DEV_TOOLS = "0"
 SITE_MONTHLY_CALL_CAP = "2000"
 SITE_GRANT_BUDGET_CALLS = "200"
 SITE_GRANT_MAX_PER_MATCH = "2"
 SITE_GRANT_COOLDOWN_SEC = "600"
-# MASTER_KEY / AI_KEY / AI_BASE_URL / AI_MODEL 通过 secret 或 [env.production.vars] 提供
+# 长轮询等待上限（毫秒，0=关闭）；开着可以把别人动作的传播延迟压到 1 秒内，代价是占用请求配额
+POLL_WAIT_MS = "0"
+# MASTER_KEY / AI_KEY / AI_BASE_URL / AI_MODEL 通过 secret 或 [env.production.vars] 提供：
+#   npx wrangler secret put MASTER_KEY
+#   npx wrangler secret put AI_KEY
 
 # 本地开发：`wrangler dev` 读取 .dev.vars（已被 .gitignore 排除）
-# 示例内容：
-#   MASTER_KEY=<base64 32 字节>
-#   AI_KEY=<你的 Key>
-#   AI_BASE_URL=https://api.example.com/v1
-#   AI_MODEL=your-model
-#   DEV_TOOLS=1
