@@ -82,6 +82,7 @@ export type SubmitReject =
 
 export type ActionReject =
   | SubmitReject
+  | 'HINTS_DISABLED'
   | 'HINT_COOLDOWN'
   | 'HINT_QUOTA_EXHAUSTED'
   | 'HINT_TIER3_EXHAUSTED'
@@ -145,6 +146,8 @@ export interface GameConfig {
   timeoutSkip: boolean;
   guessEveryRounds: number;
   guessMaxPerMember: number;
+  /** 提示系统总开关：默认关闭（房主可在对局参数里打开）。关闭时 requestHint 一律被拒。 */
+  hintsEnabled: boolean;
   hintQuotaPerMember: number;
   hintTier3Max: number;
   hintCooldownSec: number;

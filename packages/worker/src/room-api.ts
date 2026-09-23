@@ -33,9 +33,9 @@ const logger = new ConsoleLogger('info');
 
 /**
  * 房主自备 Key 的默认提供方（DeepSeek 官方 OpenAI 兼容端点）。
- * 仅用于**预填**表单，房主可以在弹窗里改成任意 OpenAI 兼容端点。
- * 注意：凭据只持久化 host（见 store 的 base_url_host），所以这里不带路径前缀，
- * 与 resolveCredential() 重建出的 `https://host` 保持一致。
+ * 仅用于**预填**表单，房主可以在弹窗里改成 DeepSeek / OpenAI / 任意兼容端点。
+ * 凭据现在保存**完整 Base URL**（含路径，如 https://api.openai.com/v1），
+ * 所以这里带不带路径都可以，前端预设会写全。
  */
 export const DEFAULT_HOST_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_HOST_MODEL = 'deepseek-flash';
@@ -92,7 +92,7 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
   if (request.method === 'GET' && path === '/api/recap') {
     return withRoom(env, roomId, async (runtime) => {
       const recap = runtime.recap(memberId);
-      if (!recap.ok) return json({ error: recap.code }, recap.code === 'UNAUTHORIZED' ? 403 : 409);
+      if (!recap.ok) return json({ error: recap.code }, recap.code === 'UNAUTHORIZED' || recap.code === 'NOT_HOST' ? 403 : 409);
       return json(recap.view);
     }, { withQuestions: true });
   }
@@ -477,7 +477,10 @@ async function submitCredential(request: Request, env: Env, roomId: string, memb
     const blob = await vault.encrypt(apiKey, credId, member.playerId, roomId);
     const now = Date.now();
     store.insertCredential({
-      id: credId, ownerPlayerId: member.playerId, roomId, provider, model, baseUrlHost: baseUrl.host,
+      id: credId, ownerPlayerId: member.playerId, roomId, provider, model,
+      // 存**完整 Base URL**（含路径，如 https://api.openai.com/v1）：OpenAI 等兼容端点必须带 /v1。
+      // 该值在提交时已过 SSRF 校验（仅 https、无 query/fragment、非内网）。
+      baseUrlHost: baseUrl.url,
       state: 'active', mask: vault.maskOf(apiKey), fingerprint: await vault.fingerprintOf(apiKey),
       blob: { cipher: blob.cipher as never, iv: blob.iv as never, tag: blob.tag as never, keyId: blob.keyId },
       ttlExpiresAt: now + 24 * 3600 * 1000, suspendReason: null, destroyedReason: null, createdAt: now, lastUsedAt: null,
@@ -499,7 +502,7 @@ async function submitCredential(request: Request, env: Env, roomId: string, memb
     });
     return json({
       ok: true,
-      credential: { id: credId, provider, model, baseUrlHost: baseUrl.host, mask: vault.maskOf(apiKey), state: 'active', rateLimitedAtSubmit: test.reasonCode === 'RATE_LIMITED_AT_SUBMIT' },
+      credential: { id: credId, provider, model, baseUrl: baseUrl.url, baseUrlHost: baseUrl.host, mask: vault.maskOf(apiKey), state: 'active', rateLimitedAtSubmit: test.reasonCode === 'RATE_LIMITED_AT_SUBMIT' },
       resumedBlockedMatch: restored.ok ? (restored.data?.resumed ?? false) : false,
       message: test.message,
     });

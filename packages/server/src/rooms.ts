@@ -16,6 +16,7 @@ import type {
   ActionReject, CoreMember, CoreRoom, DomainEvent, GameConfig, Puzzle, ReduceCtx, SubmitReject,
 } from '@ht/core';
 import type { CredentialRecord } from './vault.ts';
+import { credentialBaseUrl } from './vault.ts';
 import type { QuestionRecord } from './store.ts';
 import type { HostPort, LoggerPort, RoomStorePort } from './ports.ts';
 import { CODE_LENGTH, TEXT, generateCode } from './protocol.ts';
@@ -533,7 +534,7 @@ export class RoomRuntime {
     if (cred.ttlExpiresAt !== null && this.now >= cred.ttlExpiresAt) return null;
     try {
       const apiKey = await this.deps.decrypt(cred);
-      return { apiKey, baseUrl: `https://${cred.baseUrlHost}`, model: cred.model, provider: cred.provider };
+      return { apiKey, baseUrl: credentialBaseUrl(cred), model: cred.model, provider: cred.provider };
     } catch (e) {
       this.deps.logger.error('credential_decrypt_failed', { room_id: this.room.id, code: (e as Error).message });
       return null;
@@ -542,6 +543,8 @@ export class RoomRuntime {
 
   // ---------------------------------------------------------------- 提示 / 揭秘
   async requestHint(memberId: string, tier: 1 | 2 | 3): Promise<Result<{ text: string }>> {
+    // 提示是可选玩法：默认关闭（config.hintsEnabled=false），关闭时一律拒绝
+    if (!this.room.config.hintsEnabled) return { ok: false, code: 'HINTS_DISABLED' };
     const puzzle = this.currentPuzzle();
     const member = getMember(this.room, memberId);
     if (!puzzle || !member) return { ok: false, code: 'NOT_ALLOWED' };
@@ -685,7 +688,7 @@ export class RoomRuntime {
     } catch {
       return { ok: false, code: 'NOT_ALLOWED' };
     }
-    const test = await this.deps.host.connectionTest({ apiKey, baseUrl: `https://${cred.baseUrlHost}`, model: cred.model });
+    const test = await this.deps.host.connectionTest({ apiKey, baseUrl: credentialBaseUrl(cred), model: cred.model });
     if (!test.ok) {
       this.deps.store.audit({ action: 'credential_revalidate_failed', roomId: this.room.id, subject: cred.id, result: test.reasonCode });
       return { ok: true, data: { reason: `REVALIDATE_FAILED:${test.reasonCode}` } };
@@ -890,10 +893,14 @@ export class RoomRuntime {
     else this.persist();
   }
 
-  /** 复盘（汤底只在 settled 且非 aborted 时由服务端注入）。 */
+  /**
+   * 复盘（汤底只在 settled 且非 aborted 时由服务端注入）。
+   * **仅房主可看**：汤底揭晓属于主持人视角，其他玩家只知道自己这局的结果。
+   */
   recap(viewerId: string): { ok: true; view: Record<string, unknown> } | { ok: false; code: string } {
     const member = getMember(this.room, viewerId);
     if (!member || member.role === 'spectator') return { ok: false, code: 'UNAUTHORIZED' };
+    if (this.room.hostId !== viewerId) return { ok: false, code: 'NOT_HOST' };
     const match = this.deps.store.currentMatch(this.room.id);
     const puzzle = this.currentPuzzle();
     if (!match || !puzzle) return { ok: false, code: 'NOT_FOUND' };

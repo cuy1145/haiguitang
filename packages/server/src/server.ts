@@ -236,7 +236,7 @@ export class App {
 
     if (req.method === 'GET' && url.pathname === '/api/recap') {
       const recap = runtime.recap(auth.memberId);
-      if (!recap.ok) { json(res, recap.code === 'UNAUTHORIZED' ? 403 : 409, { error: recap.code }); return; }
+      if (!recap.ok) { json(res, recap.code === 'UNAUTHORIZED' || recap.code === 'NOT_HOST' ? 403 : 409, { error: recap.code }); return; }
       // 复盘含汤底：单独再断言一次"响应里除 truth 字段外不含汤底片段"
       json(res, 200, recap.view);
       return;
@@ -290,7 +290,8 @@ export class App {
       roomId: runtime.room.id,
       provider,
       model,
-      baseUrlHost: baseUrl.host,
+      // 存完整 Base URL（含路径）：OpenAI 等兼容端点必须带 /v1；提交时已过 SSRF 校验
+      baseUrlHost: baseUrl.url,
       state: 'active',
       mask: this.deps.vault.maskOf(apiKey),
       fingerprint: this.deps.vault.fingerprintOf(apiKey),
@@ -316,7 +317,7 @@ export class App {
     });
     json(res, 200, {
       ok: true,
-      credential: { id: credId, provider, model, baseUrlHost: baseUrl.host, mask: this.deps.vault.maskOf(apiKey), state: 'active', rateLimitedAtSubmit: test.reasonCode === 'RATE_LIMITED_AT_SUBMIT' },
+      credential: { id: credId, provider, model, baseUrl: baseUrl.url, baseUrlHost: baseUrl.host, mask: this.deps.vault.maskOf(apiKey), state: 'active', rateLimitedAtSubmit: test.reasonCode === 'RATE_LIMITED_AT_SUBMIT' },
       resumedBlockedMatch: restored.ok ? (restored.data?.resumed ?? false) : false,
       message: test.message,
     });

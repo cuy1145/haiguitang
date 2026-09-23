@@ -12,85 +12,297 @@
   页面拿到的只有掩码；所有判定与汤底都在服务端。
 -->
 <style>
+  /* ==========================================================================
+   * 设计令牌
+   * ========================================================================*/
   :root{
-    --bg:#12141a;--bg2:#191c24;--bg3:#212532;--line:#2c3242;--fg:#e6e8ee;--fg2:#a3aab9;--fg3:#6f7788;
-    --ok:#3ecf8e;--warn:#f2c14e;--bad:#ef5f6b;--info:#5aa9f8;--radius:10px;
+    --bg:#0b0d14;
+    --panel:rgba(26,30,45,.78);
+    --panel-2:rgba(20,23,35,.9);
+    --line:rgba(255,255,255,.075);
+    --line-2:rgba(255,255,255,.14);
+    --fg:#e9ecf5;--fg2:#a7aec4;--fg3:#6d7690;
+    --ok:#41d69b;--warn:#f3b95f;--bad:#f2606b;--info:#5aa9f8;
+    --accent:#7c6cf5;--accent-2:#5a49d8;--cyan:#48c9e8;
+    --radius:16px;--radius-sm:10px;
+    --shadow:0 18px 40px -24px rgba(0,0,0,.9);
+    --ring:0 0 0 3px rgba(124,108,245,.28);
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
-  button{font:inherit;color:inherit;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
-  button:hover:not(:disabled){border-color:#3a4256;background:#262b3a}
-  button:disabled{opacity:.45;cursor:not-allowed}
-  button.primary{background:linear-gradient(180deg,#6f5df0,#5a49d8);border-color:#6f5df0;color:#fff;font-weight:600}
-  button.danger{border-color:#5a2b31;color:#ffb3ba}
-  input,textarea,select{font:inherit;color:inherit;background:#141721;border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
-  textarea{resize:vertical;min-height:70px}
-  .wrap{max-width:1120px;margin:0 auto;padding:14px 16px 90px}
-  .card{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
-  .card h3{margin:0 0 10px;font-size:14px;color:#cdd3e0}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:
+      radial-gradient(1100px 620px at 12% -10%, rgba(124,108,245,.20), transparent 60%),
+      radial-gradient(900px 520px at 105% 0%, rgba(72,201,232,.14), transparent 62%),
+      radial-gradient(700px 500px at 50% 120%, rgba(65,214,155,.10), transparent 60%),
+      var(--bg);
+    background-attachment:fixed;
+    color:var(--fg);
+    font:15px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  ::selection{background:rgba(124,108,245,.35)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.10);border-radius:99px;border:3px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.18);background-clip:content-box}
+
+  /* ==========================================================================
+   * 基础控件
+   * ========================================================================*/
+  button{
+    font:inherit;font-weight:500;color:var(--fg);
+    background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03));
+    border:1px solid var(--line-2);border-radius:var(--radius-sm);
+    padding:9px 14px;cursor:pointer;
+    transition:transform .12s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease;
+  }
+  button:hover:not(:disabled){border-color:rgba(124,108,245,.55);box-shadow:0 6px 18px -12px rgba(124,108,245,.9);transform:translateY(-1px)}
+  button:active:not(:disabled){transform:translateY(0)}
+  button:focus-visible{outline:none;box-shadow:var(--ring)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:linear-gradient(180deg,var(--accent),var(--accent-2));border-color:transparent;color:#fff;font-weight:650;box-shadow:0 12px 28px -16px rgba(124,108,245,1)}
+  button.primary:hover:not(:disabled){filter:brightness(1.08)}
+  button.danger{border-color:rgba(242,96,107,.42);color:#ffc2c7}
+  button.danger:hover:not(:disabled){border-color:rgba(242,96,107,.8);box-shadow:0 6px 18px -12px rgba(242,96,107,.9)}
+  button.ghost{background:transparent}
+  input,textarea,select{
+    font:inherit;color:var(--fg);background:rgba(9,11,18,.72);
+    border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:10px 12px;width:100%;
+    transition:border-color .18s ease,box-shadow .18s ease;
+  }
+  input:focus,textarea:focus,select:focus{outline:none;border-color:rgba(124,108,245,.7);box-shadow:var(--ring)}
+  textarea{resize:vertical;min-height:74px;line-height:1.7}
+  code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;background:rgba(255,255,255,.06);padding:1px 5px;border-radius:6px}
+
+  /* ==========================================================================
+   * 布局
+   * ========================================================================*/
+  .wrap{max-width:1180px;margin:0 auto;padding:18px 18px 96px}
+  .grid{display:grid;grid-template-columns:308px minmax(0,1fr);gap:16px;align-items:start}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .spread{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
-  .grid{display:grid;grid-template-columns:290px 1fr;gap:12px;align-items:start}
-  @media(max-width:860px){.grid{grid-template-columns:1fr}}
-  .pill{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:999px;font-size:11.5px;border:1px solid var(--line);background:#1b1f2a;color:var(--fg2)}
-  .pill.l1{color:#9fe3c0;border-color:#2c5c45}.pill.l2{color:#f2d08a;border-color:#5c4a25}.pill.l3{color:#ff9fa8;border-color:#5c2b31}
-  .dim{color:var(--fg3);font-size:12px}.muted{color:var(--fg2)}
-  .notice{font-size:12.5px;color:#ffd894;background:#3a2a12;border:1px solid #6a5121;border-radius:8px;padding:8px 10px;margin-bottom:10px}
-  .err{font-size:12.5px;color:#ffb3ba;background:#241618;border:1px solid #5a2b31;border-radius:8px;padding:8px 10px;margin-bottom:10px}
-  .mem{display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-radius:8px}
-  .mem.turn{background:#1d2436;outline:1px solid #38427a}
-  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
-  .dot.active{background:var(--ok)}.dot.idle{background:var(--warn)}.dot.off{background:#5a6070}
-  .timeline{display:flex;flex-direction:column;gap:8px;max-height:48vh;overflow:auto}
-  .tl{background:#161a23;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-  .tl.sys{border-style:dashed;color:var(--fg2)}.tl.err{border-color:#5a2b31;background:#1e1518}.tl.vote{border-color:#3a4470}
-  .tl .meta{color:var(--fg3);font-size:11.5px}
-  .turnbar{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:12px}
-  .bar{height:8px;background:#0e1117;border-radius:99px;overflow:hidden;margin-top:8px}
-  .bar>i{display:block;height:100%;background:var(--ok);transition:width .15s linear}
-  .bar.grace>i{background:var(--warn)}.bar.paused>i{background:var(--fg3)}
-  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
-  .kv .k{color:var(--fg2)}
-  .cands{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
-  .cand{background:#161a23;border:1px solid var(--line);border-radius:8px;padding:10px}
-  .cand.win{border-color:var(--ok)}
-  .mask{background:#141721;border:1px dashed var(--line);border-radius:8px;padding:3px 8px;font-family:ui-monospace,monospace}
-  .overlay{position:fixed;inset:0;background:rgba(8,10,14,.72);display:flex;align-items:center;justify-content:center;padding:18px;z-index:50}
-  .modal{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px;max-width:720px;width:100%;max-height:86vh;overflow:auto}
-  .field{display:grid;grid-template-columns:1fr 130px;gap:8px;align-items:center;margin-bottom:7px}
+  .stack{display:flex;flex-direction:column;gap:14px}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px;margin-bottom:14px;box-shadow:var(--shadow);backdrop-filter:blur(10px);
+  }
+  .card>h3{margin:0 0 12px;font-size:13px;font-weight:650;letter-spacing:.06em;color:var(--fg2);text-transform:none}
+  .dim{color:var(--fg3);font-size:12px;line-height:1.6}
+  .muted{color:var(--fg2)}
+  .hr{height:1px;background:var(--line);margin:12px 0}
+  .empty{padding:18px 8px;text-align:center;color:var(--fg3);font-size:13px}
+
+  /* 顶部品牌条 */
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:2px 0 18px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:11px}
+  .brand .logo{
+    width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-size:20px;
+    background:linear-gradient(140deg,var(--accent),var(--cyan));box-shadow:0 12px 26px -14px rgba(124,108,245,1);
+  }
+  .brand .name{font-size:16.5px;font-weight:700;letter-spacing:.01em}
+  .brand .sub{font-size:11.5px;color:var(--fg3)}
+  .topchips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{
+    font-size:11.5px;color:var(--fg2);border:1px solid var(--line);border-radius:999px;
+    padding:4px 10px;background:rgba(255,255,255,.035);display:inline-flex;align-items:center;gap:6px;
+  }
+  .chip b{color:var(--fg);font-weight:650}
+
+  .pill{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-size:11.5px;
+    border:1px solid var(--line-2);background:rgba(255,255,255,.05);color:var(--fg2);white-space:nowrap}
+  .pill.l1{color:#9fe3c0;border-color:rgba(65,214,155,.4);background:rgba(65,214,155,.10)}
+  .pill.l2{color:#f3d69a;border-color:rgba(243,185,95,.4);background:rgba(243,185,95,.10)}
+  .pill.l3{color:#ffb0b7;border-color:rgba(242,96,107,.4);background:rgba(242,96,107,.10)}
+  .pill.accent{color:#d9d3ff;border-color:rgba(124,108,245,.5);background:rgba(124,108,245,.16)}
+  .pill.live{color:#c9f7e4;border-color:rgba(65,214,155,.5);background:rgba(65,214,155,.16)}
+
+  .notice{
+    font-size:12.5px;color:#ffe0ab;background:linear-gradient(180deg,rgba(243,185,95,.14),rgba(243,185,95,.07));
+    border:1px solid rgba(243,185,95,.32);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:12px;
+  }
+  .err{
+    font-size:12.5px;color:#ffc2c7;background:linear-gradient(180deg,rgba(242,96,107,.14),rgba(242,96,107,.06));
+    border:1px solid rgba(242,96,107,.34);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:12px;
+  }
+
+  /* ==========================================================================
+   * 玩家列表（与"谁在发言"合并展示）
+   * ========================================================================*/
+  .speaker{
+    display:flex;align-items:center;gap:12px;padding:12px;border-radius:var(--radius-sm);
+    background:linear-gradient(140deg,rgba(124,108,245,.22),rgba(72,201,232,.10));
+    border:1px solid rgba(124,108,245,.42);box-shadow:0 14px 30px -22px rgba(124,108,245,1);
+  }
+  .speaker.idle{background:rgba(255,255,255,.035);border-color:var(--line);box-shadow:none}
+  .speaker .who{font-size:14.5px;font-weight:700}
+  .speaker .what{font-size:11.5px;color:var(--fg2)}
+  .speaker .time{margin-left:auto;text-align:right}
+  .speaker .time .t{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+  .speaker .time .l{font-size:10.5px;color:var(--fg3);letter-spacing:.08em}
+
+  .mem{
+    display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:var(--radius-sm);
+    border:1px solid transparent;transition:background .18s ease,border-color .18s ease;
+  }
+  .mem+.mem{margin-top:2px}
+  .mem:hover{background:rgba(255,255,255,.04)}
+  .mem.turn{background:rgba(124,108,245,.14);border-color:rgba(124,108,245,.42)}
+  .mem.turn .nm{font-weight:700}
+  .mem.away{opacity:.55}
+  .avatar{
+    width:34px;height:34px;flex:0 0 34px;border-radius:11px;display:grid;place-items:center;
+    font-size:13.5px;font-weight:700;color:#fff;position:relative;
+    background:linear-gradient(140deg,hsl(var(--h,255) 68% 58%),hsl(calc(var(--h,255) + 42) 64% 46%));
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.25);
+  }
+  .mem.turn .avatar{box-shadow:0 0 0 2px rgba(124,108,245,.55),inset 0 1px 0 rgba(255,255,255,.3);animation:breathe 2.4s ease-in-out infinite}
+  @keyframes breathe{0%,100%{box-shadow:0 0 0 2px rgba(124,108,245,.5)}50%{box-shadow:0 0 0 6px rgba(124,108,245,.12)}}
+  .mem .nm{font-size:13.5px;font-weight:550;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .mem .meta{margin-left:auto;text-align:right;font-size:11.5px;color:var(--fg3);white-space:nowrap}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 8px}
+  .dot.active{background:var(--ok);box-shadow:0 0 8px rgba(65,214,155,.8)}
+  .dot.idle{background:var(--warn)}
+  .dot.off{background:#59607a}
+
+  /* ==========================================================================
+   * 回合条 / 计时
+   * ========================================================================*/
+  .turnbar{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:14px 16px;margin-bottom:14px;box-shadow:var(--shadow);backdrop-filter:blur(10px);
+  }
+  .turnbar .head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .turnbar .round{font-size:15px;font-weight:700}
+  .turnbar .timer{font-size:22px;font-weight:750;font-variant-numeric:tabular-nums;margin-left:auto;letter-spacing:.02em}
+  .bar{height:9px;background:rgba(0,0,0,.45);border-radius:99px;overflow:hidden;margin-top:11px;border:1px solid var(--line)}
+  .bar>i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--ok),#7ee0b8);transition:width .2s linear}
+  .bar.grace>i{background:linear-gradient(90deg,var(--warn),#ffd79a)}
+  .bar.paused>i{background:linear-gradient(90deg,#5a6070,#7b8296)}
+  .bar.urgent>i{background:linear-gradient(90deg,var(--bad),#ff9aa3);animation:pulseBar 1s ease-in-out infinite}
+  @keyframes pulseBar{0%,100%{opacity:1}50%{opacity:.6}}
+
+  /* ==========================================================================
+   * 汤面
+   * ========================================================================*/
+  .puzzle{
+    position:relative;border-radius:var(--radius-sm);padding:16px;
+    background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.02));
+    border:1px solid var(--line-2);overflow:hidden;
+  }
+  .puzzle::before{content:'';position:absolute;inset:0 auto 0 0;width:3px;background:linear-gradient(180deg,var(--accent),var(--cyan))}
+  .puzzle .ptitle{font-size:18px;font-weight:750;letter-spacing:.01em}
+  .puzzle .surface{font-size:15.5px;line-height:1.85;white-space:pre-wrap;margin-top:10px;color:#eef1f9}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+  /* ==========================================================================
+   * 公共记录（只放记录）
+   * ========================================================================*/
+  .log{display:flex;flex-direction:column;gap:9px;max-height:52vh;overflow:auto;padding:2px 4px 2px 0}
+  .log .qa{
+    background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));
+    border:1px solid var(--line);border-left:3px solid var(--line-2);
+    border-radius:var(--radius-sm);padding:10px 12px;
+  }
+  .log .qa.mine{border-left-color:var(--accent);background:linear-gradient(180deg,rgba(124,108,245,.14),rgba(124,108,245,.04))}
+  .log .qa.yes{border-left-color:rgba(65,214,155,.75)}
+  .log .qa.no{border-left-color:rgba(242,96,107,.75)}
+  .log .qa.irrelevant{border-left-color:rgba(255,255,255,.16)}
+  .log .qa.unanswerable{border-left-color:rgba(243,185,95,.7)}
+  .log .qa .head{display:flex;justify-content:space-between;gap:10px;font-size:11.5px;color:var(--fg2)}
+  .log .qa .head .who{font-weight:650;color:var(--fg)}
+  .log .qa .q{margin-top:5px;white-space:pre-wrap;font-size:14.5px}
+  .log .qa .a{margin-top:7px;font-size:12.5px;color:var(--fg2);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+  .log .qa .a .verdict{font-weight:750;font-size:13px}
+  .log .qa .a .verdict.yes{color:var(--ok)}
+  .log .qa .a .verdict.no{color:var(--bad)}
+  .log .qa .a .verdict.irrelevant{color:var(--fg2)}
+  .log .qa .a .verdict.unanswerable{color:var(--warn)}
+  .log .qa .explain{color:#cfd5e6;font-style:italic;border-left:2px solid var(--line-2);padding-left:8px;margin-top:6px;display:block}
+  .log .qa .late{color:var(--warn)}
+  .tl{background:rgba(255,255,255,.028);border:1px solid var(--line);border-radius:var(--radius-sm);padding:7px 11px;font-size:12.5px;color:var(--fg2);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+  .tl.sys{border-style:dashed}
+  .tl.err{border-color:rgba(242,96,107,.35);background:rgba(242,96,107,.07);color:#ffc2c7}
+  .tl.vote{border-color:rgba(124,108,245,.4);background:rgba(124,108,245,.08)}
+  .tl .meta{color:var(--fg3);font-size:11px;margin-left:auto;white-space:nowrap}
+
+  /* ==========================================================================
+   * 题目候选 / 表格 / 掩码
+   * ========================================================================*/
+  .cands{display:grid;grid-template-columns:repeat(auto-fit,minmax(248px,1fr));gap:12px}
+  .cand{
+    background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+    border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:13px;
+    display:flex;flex-direction:column;gap:9px;transition:transform .14s ease,border-color .2s ease,box-shadow .2s ease;
+  }
+  .cand:hover{transform:translateY(-2px);border-color:rgba(124,108,245,.55);box-shadow:0 18px 34px -26px rgba(124,108,245,1)}
+  .cand.win{border-color:rgba(65,214,155,.6)}
+  .cand .cbody{font-size:13.5px;line-height:1.7;color:#e6eaf5}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;align-items:baseline}
+  .kv .k{color:var(--fg3);font-size:12px;white-space:nowrap}
+  .mask{background:rgba(0,0,0,.4);border:1px dashed var(--line-2);border-radius:8px;padding:3px 9px;font-family:ui-monospace,monospace;font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--fg3);font-size:11.5px;font-weight:600;letter-spacing:.04em}
+  tbody tr:hover{background:rgba(255,255,255,.03)}
+
+  /* ==========================================================================
+   * 弹窗
+   * ========================================================================*/
+  .overlay{position:fixed;inset:0;background:rgba(5,7,12,.74);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:18px;z-index:50;animation:fade .16s ease}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .modal{
+    background:linear-gradient(180deg,rgba(30,34,50,.99),rgba(21,24,36,.99));
+    border:1px solid var(--line-2);border-radius:18px;padding:20px;max-width:760px;width:100%;max-height:88vh;overflow:auto;
+    box-shadow:0 40px 90px -40px rgba(0,0,0,1);animation:rise .18s ease;
+  }
+  @keyframes rise{from{transform:translateY(10px) scale(.99);opacity:.6}to{transform:none;opacity:1}}
+  .modal h3{font-size:16px}
+  .field{display:grid;grid-template-columns:1fr 140px;gap:10px;align-items:center;margin-bottom:9px}
   .field label{color:var(--fg2);font-size:12.5px}
   /* 弹窗里的表单一律「标签在上、输入框整行」：输入长 Key / URL 时需要足够宽度 */
-  .modal .field{grid-template-columns:1fr;gap:4px;align-items:start}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
-  th{color:var(--fg2);font-size:12px}
-  .banner{background:#3a2a12;border:1px solid #6a5121;color:#ffd894;padding:8px 12px;border-radius:var(--radius);font-size:12.5px;margin-bottom:12px}
-  /* 汤面单独成块：题目信息 + 汤面全文（汤底永不下发，只在复盘揭晓） */
-  .puzzle{background:#161a23;border:1px solid var(--line);border-radius:8px;padding:12px}
-  .puzzle .ptitle{font-size:16px;font-weight:600}
-  .puzzle .surface{font-size:15.5px;line-height:1.75;white-space:pre-wrap;margin-top:8px}
-  /* 公共提问 / 对话记录（所有人共享的问答流水） */
-  .log{display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto;padding-right:2px}
-  .log .qa{background:#161a23;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-  .log .qa .head{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--fg2)}
-  .log .qa .q{margin-top:3px;white-space:pre-wrap}
-  .log .qa .a{margin-top:5px;font-size:12.5px;color:var(--fg2)}
-  .log .qa .a.yes{color:#9fe3c0}.log .qa .a.no{color:#ff9fa8}
-  .log .qa .a.unanswerable{color:#f2d08a}
-  .log .qa .explain{color:var(--fg2);font-style:italic}
-  .log .qa.mine{border-color:#38427a}
-  .log .qa .late{color:var(--warn)}
-  /* Key 输入框：不用 type=password，避免浏览器/密码管理器介入（自动填充弹窗会打断输入） */
-  .secret{-webkit-text-security:disc;font-family:ui-monospace,monospace}
-  .timer{font-variant-numeric:tabular-nums;font-weight:600}
+  .modal .field{grid-template-columns:1fr;gap:5px;align-items:start}
+  .modal .row{margin-top:10px}
+
+  /* Key 输入框：不用 type=password，避免浏览器/密码管理器介入 */
+  .secret{-webkit-text-security:disc;font-family:ui-monospace,monospace;letter-spacing:.08em}
+
+  /* ==========================================================================
+   * 入口页
+   * ========================================================================*/
+  .hero{
+    border-radius:22px;padding:30px 26px;margin-bottom:18px;position:relative;overflow:hidden;
+    background:linear-gradient(135deg,rgba(124,108,245,.28),rgba(72,201,232,.12) 55%,rgba(65,214,155,.10));
+    border:1px solid var(--line-2);box-shadow:var(--shadow);
+  }
+  .hero h1{margin:0 0 6px;font-size:26px;font-weight:800;letter-spacing:.01em}
+  .hero p{margin:0;color:#d5daea;font-size:13.5px;max-width:640px}
+  .entry{max-width:560px;margin:0 auto}
+  .entry .card{padding:20px}
+  .modes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:4px 0 14px}
+  @media(max-width:560px){.modes{grid-template-columns:1fr}}
+  .mode{border:1px solid var(--line-2);border-radius:12px;padding:11px;cursor:pointer;background:rgba(255,255,255,.035);transition:all .16s ease;text-align:center}
+  .mode:hover{border-color:rgba(124,108,245,.6);transform:translateY(-2px)}
+  .mode.on{border-color:var(--accent);background:rgba(124,108,245,.18);box-shadow:0 14px 30px -22px rgba(124,108,245,1)}
+  .mode .t{font-size:13px;font-weight:650}
+  .mode .d{font-size:11px;color:var(--fg3);margin-top:3px}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="banner">
-    M1 本地服务器版：真实多客户端联机 · 密钥只在服务端 · 汤底不下发（复盘门禁）。
-    <span class="dim">本页为阶段性前端；正式客户端将替换为 React + Vite。</span>
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo">🐢</div>
+      <div>
+        <div class="name">AI 海龟汤</div>
+        <div class="sub">情境推理 · 只能问「是 / 否」</div>
+      </div>
+    </div>
+    <div class="topchips">
+      <span class="chip">🔒 密钥只在服务端加密存储</span>
+      <span class="chip">🥣 汤底不下发（仅房主可揭晓）</span>
+      <span class="chip" id="connChip">⚡ Cloudflare Workers + D1</span>
+    </div>
   </div>
   <div id="app"></div>
 </div>
@@ -118,6 +330,8 @@ const S = {
   log: [],                              // 合并后的公共对话记录（提问 + 系统事件，按时间排序）
   logPinned: true,                      // 用户是否停在记录底部（是则新消息自动滚到底）
   renderPending: false,                 // 输入期间被推迟的渲染（输入结束后补一次）
+  preset: 'standard',                   // 入口页选中的对局预设
+  keyProvider: 'deepseek',              // 自备 Key 的提供方预设
   drafts: {},                            // 弹窗输入的临时值：只在本页内存里，重渲染不丢；关闭即清
   serverOffset: 0,                      // 服务端时钟 - 本机时钟（计时用服务端时间为准）
   hint: '',
@@ -473,28 +687,51 @@ function render(force = false) {
   }
   const log = $('#log');
   if (log) { log.scrollTop = pinned ? log.scrollHeight : Math.min(log.scrollTop, log.scrollHeight); S.logPinned = pinned; }
+
+  // 顶部连接状态（不在房间时不显示连接问题）
+  const chip = document.getElementById('connChip');
+  if (chip) {
+    const inRoom = Boolean(S.view && S.screen === 'room');
+    chip.innerHTML = inRoom && !S.connected ? '⚠ 连接中断，正在重试…' : '⚡ Cloudflare Workers + D1';
+  }
 }
+
+const PRESET_INFO = [
+  { key: 'quick', title: '快速', desc: '30 秒/人 · 10 轮' },
+  { key: 'standard', title: '标准', desc: '60 秒/人 · 15 轮' },
+  { key: 'casual', title: '休闲', desc: '120 秒/人 · 25 轮' },
+];
 
 function viewEntry() {
   const nickname = S.drafts.nick ?? (localStorage.getItem(LS_NICK) || '');
+  const preset = S.preset || 'standard';
   return `
-  <div class="card">
-    <h3>加入或创建房间</h3>
-    <p class="dim">身份是轻量的：填个昵称即可，无需注册。房主自备 API Key 时，Key 只提交给服务端并加密存储，
-      页面任何位置都拿不到明文（只显示掩码）。</p>
-    <div class="field"><label>你的昵称</label><input id="nick" autocomplete="off" spellcheck="false" value="${esc(nickname)}" maxlength="12" placeholder="例如：阿伟"></div>
-    <div class="field"><label>房间码（加入已有房间）</label><input id="code" autocomplete="off" spellcheck="false" value="${esc(S.drafts.code ?? '')}" placeholder="6 位房间码，留空则创建新房间" maxlength="8"></div>
-    <div class="field"><label>对局预设</label>
-      <select id="preset">
-        <option value="standard">标准</option><option value="quick">快速</option><option value="casual">休闲</option>
-      </select></div>
-    <div class="row">
-      <button class="primary" id="btnGo">创建 / 加入</button>
-      <button id="btnResume" ${token() ? '' : 'disabled'}>回到我的房间</button>
+  <div class="entry">
+    <div class="hero">
+      <h1>AI 海龟汤</h1>
+      <p>出题人给出一个古怪的结局（汤面），你们只能问「是不是……」，主持人回答 是 / 否 / 无关 / 无法回答。
+        靠这些问题把真相拼出来 —— 汤底在结束前对所有人保密，只有房主能揭晓。</p>
     </div>
-    ${S.error ? `<div class="err" style="margin-top:10px">${esc(S.error)}</div>` : ''}
-    <div class="dim" style="margin-top:10px">
-      ${S.config ? `服务端模型：${S.config.realModelEnabled ? '已配置平台额度' : '未配置（可由房主自备 API Key）'} · 密钥保险箱：${S.config.vaultEnabled ? '已启用' : '未启用'}` : ''}
+    <div class="card">
+      <h3>加入或创建房间</h3>
+      <div class="field"><label>你的昵称</label><input id="nick" autocomplete="off" spellcheck="false" value="${esc(nickname)}" maxlength="12" placeholder="例如：阿伟"></div>
+      <div class="field"><label>房间码（加入已有房间，留空则新建）</label><input id="code" autocomplete="off" spellcheck="false" value="${esc(S.drafts.code ?? '')}" placeholder="6 位房间码" maxlength="8"></div>
+      <input type="hidden" id="preset" value="${esc(preset)}">
+      <div style="margin-top:12px"><span class="dim">新房间的对局预设</span></div>
+      <div class="modes">
+        ${PRESET_INFO.map((p) => `
+          <div class="mode${preset === p.key ? ' on' : ''}" data-preset="${p.key}">
+            <div class="t">${p.title}</div><div class="d">${p.desc}</div>
+          </div>`).join('')}
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="btnGo">创建 / 加入</button>
+        <button id="btnResume" ${token() ? '' : 'disabled'}>回到我的房间</button>
+      </div>
+      ${S.error ? `<div class="err" style="margin-top:12px">${esc(S.error)}</div>` : ''}
+      <div class="dim" style="margin-top:12px">
+        ${S.config ? `服务端模型：${S.config.realModelEnabled ? '已配置平台额度' : '未配置（可由房主自备 API Key）'} · 密钥保险箱：${S.config.vaultEnabled ? '已启用' : '未启用'}` : ''}
+      </div>
     </div>
   </div>`;
 }
@@ -551,62 +788,42 @@ function viewRoom() {
     <div>
       <div class="card"><h3>房间</h3>
         <div class="kv">
-          <div class="k">房间码</div><div><b>${esc(room.code)}</b></div>
+          <div class="k">房间码</div><div><b style="font-size:17px;letter-spacing:.12em">${esc(room.code)}</b></div>
           <div class="k">状态</div><div>${esc(room.status)}${room.pauseReason ? ' · ' + esc(room.pauseReason) : ''}</div>
           <div class="k">轮次</div><div>第 ${room.roundNo} 轮 · turn_seq ${turn.seq}</div>
-          <div class="k">连接</div><div>${S.connected ? '已连接' : '<span style="color:#ffb3ba">断开，正在重连…</span>'}</div>
+          <div class="k">连接</div><div>${S.connected ? '<span class="pill live">已连接</span>' : '<span class="pill l3">断开，正在重连…</span>'}</div>
         </div>
-        <div class="row" style="margin-top:8px">
-          ${you.isHost ? `<button id="btnStart">开局（房主指定）</button><button id="btnStartVote">开局（投票选汤）</button>` : ''}
+        <div class="hr"></div>
+        <div class="row">
+          ${you.isHost ? `<button class="primary" id="btnStart">开局（房主指定）</button><button id="btnStartVote">开局（投票选汤）</button>` : ''}
           ${you.isHost ? `<button id="btnCfg">对局参数</button><button id="btnSkip">跳过本轮</button>` : ''}
           ${you.isHost ? `<button id="btnKey">我的 API Key</button>` : ''}
-          <button id="btnLeave" class="danger">离开</button>
+          <button id="btnLeave" class="danger ghost">离开</button>
         </div>
       </div>
 
-      <div class="card"><h3>成员</h3>
-        ${room.members.map((m) => `
-          <div class="mem${turn.memberId === m.id ? ' turn' : ''}">
-            <div><span class="dot ${m.conn === 'disconnected' ? 'off' : m.activity === 'idle' ? 'idle' : 'active'}"></span>
-              ${esc(m.name)} ${m.isHost ? '<span class="pill">房主</span>' : ''}${m.formerHost ? '<span class="pill">原房主</span>' : ''}
-              ${m.keyState === 'suspended' ? '<span class="pill l2">Key 挂起</span>' : ''}
-            </div>
-            <div class="dim">${m.stateLabel} · 分 ${m.score}</div>
-          </div>`).join('')}
-        <div class="dim" style="margin-top:6px">挂机只跳过其回合、不移交房主；断连才触发移交。挂机与离线不计入投票分母。</div>
-      </div>
+      ${speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel)}
 
-      <div class="card"><h3>额度来源</h3>
+      <div class="card">
+        <div class="spread"><h3 style="margin:0">额度来源</h3>
+          <span class="pill ${room.credit.mode === 'host_key' ? 'accent' : ''}">${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'}</span></div>
         <div class="kv">
-          <div class="k">当前</div><div>${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'}</div>
           <div class="k">原因码</div><div>${esc(room.credit.reason)}</div>
           ${room.credit.grantLeft ? `<div class="k">临时授权</div><div>${room.credit.grantLeft} 次</div>` : ''}
-          <div class="k">房主 Key</div><div>${room.members.find((m) => m.isHost) && room.members.find((m) => m.isHost).keyMask ? `<span class="mask">${esc(room.members.find((m) => m.isHost).keyMask)}</span>` : '未配置'}</div>
+          <div class="k">房主 Key</div><div>${hostKeyMask(room) ? `<span class="mask">${esc(hostKeyMask(room))}</span>` : '<span class="dim">未配置</span>'}</div>
         </div>
-        <div class="dim" style="margin-top:6px">原文不可回读：任何角色（含房主本人）都取不回明文。调用失败时系统不会自动改用平台额度。</div>
+        <div class="dim" style="margin-top:8px">原文不可回读：任何角色（含房主本人）都取不回明文。调用失败时系统不会自动改用平台额度。</div>
       </div>
     </div>
 
     <div>
-      <div class="turnbar">
-        <div class="spread">
-          <div><b>第 ${room.roundNo} 轮</b> · ${turn.memberId ? '轮到 ' + esc(nameOf(room, turn.memberId)) : '—'} <span class="pill">${esc(phaseLabel)}</span></div>
-          <div>${counting
-            ? `<span class="timer" id="tickLeft" data-deadline="${deadline}">${fmt(left)}</span>`
-            : '<span class="dim">—</span>'}</div>
-        </div>
-        <div class="bar${turn.phase === 'GRACE' ? ' grace' : room.status === 'suspended' ? ' paused' : ''}"><i
-          ${counting ? `data-bar data-deadline="${deadline}" data-total="${total}"` : ''} style="width:${pct}%"></i></div>
-        <div class="dim">倒计时按秒走，以服务端时间为准${counting ? `（本轮共 ${Math.round(total / 1000)} 秒）` : ''}。</div>
-      </div>
-
       ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
       ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
 
-      ${puzzle ? puzzleCard(puzzle) : ''}
+      ${puzzle ? puzzleCard(puzzle, room, you) : ''}
 
       ${(room.status === 'waiting' && !you.isHost) ? `
-      <div class="card"><div class="spread"><h3 style="margin:0">选题</h3><span class="dim">等待房主选题…</span></div>
+      <div class="card"><div class="spread"><h3 style="margin:0">选题</h3><span class="pill">等待房主选题…</span></div>
         <div class="dim">房主会从题库里挑一道题，或发起「投票选汤」让所有人一起选。</div></div>` : ''}
 
       ${(you.isHost && v.candidates && v.candidates.length > 0 && room.status === 'waiting') ? `
@@ -617,47 +834,36 @@ function viewRoom() {
             <div class="cand">
               <div class="row"><span class="pill ${String(c.rating).toLowerCase()}">${esc(c.rating)}</span>
                 <span class="pill">难度 ${c.difficulty}</span><span class="pill">约 ${c.estMinutes} 分钟</span></div>
-              <div>${esc(c.surface)}</div>
+              <div class="cbody">${esc(c.surface)}</div>
               <div class="row">${(c.tags || []).map((t) => `<span class="pill">${esc(t)}</span>`).join('')}
                 ${(c.sensitiveTags || []).map((t) => `<span class="pill l3">含：${esc(t)}</span>`).join('')}</div>
-              ${you.isHost ? `<button data-pick="${esc(c.id)}">选这道</button>` : ''}
+              ${you.isHost ? `<button class="primary" data-pick="${esc(c.id)}">选这道</button>` : ''}
             </div>`).join('')}
         </div>
       </div>` : ''}
 
       ${banners(room, you)}
 
-      <div class="card">
-        <div class="spread"><h3 style="margin:0">公共提问 · 对话记录 <span class="dim">（${S.log.length} 条 · 所有人共享）</span></h3>
-          <div class="row">
-            <button data-hint="1" ${you.canHintT12 ? '' : 'disabled'}>提示 T1</button>
-            <button data-hint="2" ${you.canHintT12 ? '' : 'disabled'}>提示 T2</button>
-            <button data-hint="3" ${you.canHintT3 ? '' : 'disabled'}>提示 T3</button>
-            <button id="btnGuess" ${you.guessLeft && room.status === 'playing' ? '' : 'disabled'}>揭秘（剩 ${you.guessLeft}）</button>
-          </div>
-        </div>
-        <div class="log" id="log">
-          ${S.log.map((t) => logEntry(t, room, you)).join('') || '<div class="dim">还没有记录。轮到你时提第一个问题吧。</div>'}
-        </div>
-        <div class="dim" style="margin-top:8px">所有人的提问与主持人判定都在这里，按时间排列，全员可见（自己的提问高亮）。
-          提问一旦发出即公开，无法撤回；草稿框里的内容在发送前只有你自己能看到。</div>
-      </div>
+      ${recordsCard(room, you)}
 
       <div class="card">
-        <div class="spread"><h3 style="margin:0">提问 / 预输入草稿</h3>
+        <div class="spread"><h3 style="margin:0">提问</h3>
           <span class="dim">草稿只存在本机浏览器，不上传、不广播</span></div>
         <textarea id="ask" placeholder="随时可以打字（预输入）。轮到你时才能发送。">${esc(draft)}</textarea>
-        <div class="row" style="margin-top:8px">
+        <div class="row" style="margin-top:10px">
           <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${turn.phase === 'GRACE' && myTurn ? '发送（宽限期内仍有效）' : '发送'}</button>
-          <span class="dim">${myTurn ? '轮到你了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}</span>
+          <span class="dim">${myTurn ? '轮到你发言了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}</span>
           ${turn.lateSubmit ? '<span class="pill l2">上一轮为临界提交</span>' : ''}
         </div>
-        ${S.hint ? `<div class="notice" style="margin-top:10px">${esc(S.hint)}</div>` : ''}
+        ${S.hint ? `<div class="notice" style="margin-top:12px">${esc(S.hint)}</div>` : ''}
       </div>
 
       ${room.status === 'settled' ? `
-      <div class="card"><div class="spread"><h3 style="margin:0">对局结束</h3><button class="primary" id="btnRecap">查看复盘</button></div>
-        <div class="dim">复盘含汤底揭晓；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。</div></div>` : ''}
+      <div class="card"><div class="spread"><h3 style="margin:0">对局结束</h3>
+        ${you.isHost ? '<button class="primary" id="btnRecap">查看复盘 · 揭晓汤底</button>' : '<span class="pill">汤底仅房主可见</span>'}</div>
+        <div class="dim">${you.isHost
+          ? '复盘含汤底揭晓，只有你能看到；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。'
+          : '本局已结束。汤底揭晓只有房主能看到，结束前不会下发到任何其他客户端。'}</div></div>` : ''}
     </div>
   </div>
 
@@ -667,11 +873,19 @@ function viewRoom() {
   ${S.recap ? recapModal(S.recap) : ''}`;
 }
 
-/** 题目块：汤面单独成块（汤底只在复盘揭晓，服务端根本不下发） */
-function puzzleCard(puzzle) {
+/**
+ * 题目块：汤面 + 所有**操作按钮**（提示 / 揭秘）都放这里。
+ * 提示由 config.hintsEnabled 控制，默认关闭 —— 关闭时连按钮都不显示，只留一句说明。
+ */
+function puzzleCard(puzzle, room, you) {
+  const hintsOn = Boolean(room.config && room.config.hintsEnabled);
+  const playing = room.status === 'playing';
   return `
-  <div class="card"><div class="spread"><h3 style="margin:0">题目 · 汤面</h3>
-    <span class="dim">汤底不在这里，对局结束后用「查看复盘」揭晓</span></div>
+  <div class="card">
+    <div class="spread" style="margin-bottom:12px">
+      <h3 style="margin:0">题目 · 汤面</h3>
+      ${you.isHost && playing ? `<button id="btnCfgQuick" class="ghost">对局参数</button>` : ''}
+    </div>
     <div class="puzzle">
       <div class="spread">
         <div class="ptitle">《${esc(puzzle.title)}》</div>
@@ -682,23 +896,36 @@ function puzzleCard(puzzle) {
         </div>
       </div>
       <div class="surface">${esc(puzzle.surface)}</div>
-      <div class="row" style="margin-top:8px">
+      <div class="row" style="margin-top:10px">
         ${(puzzle.tags || []).map((t) => `<span class="pill">${esc(t)}</span>`).join('')}
         ${(puzzle.sensitiveTags || []).map((t) => `<span class="pill l3">含：${esc(t)}</span>`).join('')}
       </div>
     </div>
+    <div class="hr"></div>
+    <div class="actions">
+      ${hintsOn ? `
+        <span class="dim" style="margin-right:2px">提示：</span>
+        <button data-hint="1" ${you.canHintT12 ? '' : 'disabled'}>T1</button>
+        <button data-hint="2" ${you.canHintT12 ? '' : 'disabled'}>T2</button>
+        <button data-hint="3" ${you.canHintT3 ? '' : 'disabled'}>T3</button>`
+      : '<span class="dim">本局未开启提示（房主可在「对局参数」里打开）</span>'}
+      <span style="flex:1"></span>
+      <button class="primary" id="btnGuess" ${you.guessLeft && playing ? '' : 'disabled'}>提交推理 · 揭秘（剩 ${you.guessLeft}）</button>
+    </div>
   </div>`;
 }
 
-/** 公共对话记录里的一条：提问（含判定）或系统事件 */
+/** 公共记录里的一条：提问（含判定）或系统事件 */
 function logEntry(t, room, you) {
   if (t.kind === 'question') {
     const who = t.memberName || nameOf(room, t.memberId || '');
-    const mine = t.memberId && you && t.memberId === you.memberId;
-    return `<div class="qa${mine ? ' mine' : ''}">
-      <div class="head"><b>${esc(who)}${mine ? '（你）' : ''}</b><span>第 ${t.turnSeq} 轮 · ${fmtClock(t.at)}</span></div>
+    const mine = Boolean(t.memberId && you && t.memberId === you.memberId);
+    const ans = String(t.answer || '');
+    return `<div class="qa${mine ? ' mine' : ''} ${esc(ans)}">
+      <div class="head"><span class="who">${esc(who)}${mine ? '（你）' : ''}</span><span>第 ${t.turnSeq} 轮 · ${fmtClock(t.at)}</span></div>
       <div class="q">${esc(t.text)}</div>
-      <div class="a ${esc(t.answer || '')}">主持人：<b>${answerLabel(t.answer)}</b>${t.reasonCode && t.reasonCode !== 'NONE' ? ` <span class="dim">（${esc(t.reasonCode)}）</span>` : ''}${t.late ? ' <span class="late">· 临界提交</span>' : ''}${t.explain ? `<br><span class="explain">${esc(t.explain)}</span>` : ''}</div>
+      <div class="a">主持人：<span class="verdict ${esc(ans)}">${answerLabel(t.answer)}</span>${t.reasonCode && t.reasonCode !== 'NONE' ? `<span class="dim">（${esc(t.reasonCode)}）</span>` : ''}${t.late ? '<span class="late">· 临界提交</span>' : ''}</div>
+      ${t.explain ? `<span class="explain">${esc(t.explain)}</span>` : ''}
     </div>`;
   }
   const cls = t.kind === 'rejected' ? 'err' : t.kind === 'vote' ? 'vote' : 'sys';
@@ -720,6 +947,97 @@ function aiBlockHint(code) {
     case 'PROVIDER_REFUSAL': return '上游因内容策略拒绝了这次判定。换一个模型名试试。';
     default: return '点「更新 API Key 并继续对局」重新做一次连接测试并提交，通过后会自动解除暂停。';
   }
+}
+
+/** 房主 Key 掩码（没有则返回 null） */
+function hostKeyMask(room) {
+  const h = room.members.find((m) => m.isHost);
+  return h && h.keyMask ? h.keyMask : null;
+}
+
+/** 成员名字首字（中文取第一个字，英文取首字母大写） */
+function initialOf(name) {
+  const s = String(name ?? '?').trim();
+  return s ? s.slice(0, 1).toUpperCase() : '?';
+}
+
+/** 按名字生成稳定的头像色相，让同一个人在任何设备上颜色一致 */
+function hueOf(name) {
+  let h = 0;
+  for (const ch of String(name ?? '')) h = (h * 31 + ch.codePointAt(0)) % 360;
+  return h;
+}
+
+/**
+ * 「谁在发言」+ 玩家列表**合并**成一块：
+ *   · 顶部是当前发言者的醒目卡片（头像 + 名字 + 剩余时间 + 进度条）
+ *   · 下面就是完整玩家列表，当前发言者那一行整体高亮
+ */
+function speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel) {
+  const current = turn.memberId ? room.members.find((m) => m.id === turn.memberId) : null;
+  const isMe = Boolean(current && current.id === you.memberId);
+  const urgent = counting && left <= 5000;
+  const barCls = turn.phase === 'GRACE' ? ' grace' : room.status === 'suspended' ? ' paused' : urgent ? ' urgent' : '';
+
+  return `
+  <div class="card">
+    <div class="spread" style="margin-bottom:12px">
+      <h3 style="margin:0">玩家 <span class="dim">${room.members.length} 人</span></h3>
+      <span class="pill">第 ${room.roundNo} 轮</span>
+    </div>
+
+    <div class="speaker${current ? '' : ' idle'}">
+      <div class="avatar" style="--h:${hueOf(current ? current.name : '空')}">${current ? esc(initialOf(current.name)) : '·'}</div>
+      <div>
+        <div class="who">${current ? esc(current.name) + (isMe ? '（你）' : '') : '等待开局'}</div>
+        <div class="what">${current ? esc(phaseLabel) + (isMe ? ' · 该你问了' : ' · 正在提问') : '房主选好题目后开始'}</div>
+      </div>
+      <div class="time">
+        ${counting
+          ? `<div class="t timer" id="tickLeft" data-deadline="${deadline}">${fmt(left)}</div><div class="l">剩余</div>`
+          : '<div class="t">—</div><div class="l">未计时</div>'}
+      </div>
+    </div>
+    ${counting ? `<div class="bar${barCls}"><i data-bar data-deadline="${deadline}" data-total="${total}" style="width:${pct}%"></i></div>` : ''}
+
+    <div class="hr"></div>
+
+    ${room.members.map((m) => {
+      const active = turn.memberId === m.id;
+      const away = m.conn === 'disconnected' || m.activity === 'idle';
+      return `
+      <div class="mem${active ? ' turn' : ''}${away && !active ? ' away' : ''}">
+        <div class="avatar" style="--h:${hueOf(m.name)}">${esc(initialOf(m.name))}</div>
+        <div class="nm">
+          <span class="dot ${m.conn === 'disconnected' ? 'off' : m.activity === 'idle' ? 'idle' : 'active'}"></span>
+          ${esc(m.name)}${m.id === you.memberId ? '<span class="dim">（你）</span>' : ''}
+          ${m.isHost ? '<span class="pill accent">房主</span>' : ''}
+          ${m.formerHost ? '<span class="pill">原房主</span>' : ''}
+          ${m.keyState === 'suspended' ? '<span class="pill l2">Key 挂起</span>' : ''}
+          ${active ? '<span class="pill live">发言中</span>' : ''}
+        </div>
+        <div class="meta">${esc(m.stateLabel)} · ${m.score} 分</div>
+      </div>`;
+    }).join('')}
+
+    <div class="dim" style="margin-top:10px">挂机只跳过其回合、不移交房主；断连才触发移交。挂机与离线不计入投票分母。</div>
+  </div>`;
+}
+
+/** 公共记录：**只放记录**（操作按钮都在题目卡片里） */
+function recordsCard(room, you) {
+  return `
+  <div class="card">
+    <div class="spread" style="margin-bottom:12px">
+      <h3 style="margin:0">公共记录 <span class="dim">${S.log.length} 条 · 全员共享</span></h3>
+      <span class="pill">按时间排列</span>
+    </div>
+    <div class="log" id="log">
+      ${S.log.map((t) => logEntry(t, room, you)).join('') || '<div class="empty">还没有记录 —— 轮到你时提第一个问题吧。</div>'}
+    </div>
+    <div class="dim" style="margin-top:10px">所有人的提问与主持人判定都在这里；自己的提问左侧有紫色标记。
+      提问一发出即公开、无法撤回；草稿框里的内容在发送前只有你自己能看到。</div>
+  </div>`;
 }
 
 function banners(room, you) {
@@ -784,6 +1102,9 @@ function cfgModal(room) {
   return `<div class="overlay"><div class="modal">
     <div class="spread"><h3 style="margin:0">对局参数（config_version ${room.configVersion}）</h3><button id="btnCfgClose">关闭</button></div>
     <p class="dim">开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。</p>
+    <div class="field"><label>提示系统（默认关闭 · 关闭时任何人都拿不到提示）</label>
+      <div class="row"><input type="checkbox" data-cfg="hintsEnabled" style="width:auto" ${cur('hintsEnabled') ? 'checked' : ''}>
+        <span class="dim">打开后下面几项提示配额才会生效</span></div></div>
     ${num('perTurnSec', '每人提问时长（秒）', 15, 600)}
     ${num('graceSec', '超时宽限（秒）', 0, 30)}
     ${num('guessEveryRounds', '揭秘间隔（每 N 轮）', 1, 10)}
@@ -815,6 +1136,18 @@ function defaultBaseUrl() { return (S.config && S.config.defaultBaseUrl) || 'htt
 function defaultModel() { return (S.config && S.config.defaultModel) || 'deepseek-flash'; }
 
 /**
+ * 提供方预设：选了就把 Base URL / 模型名填成对应值，之后仍可手动改。
+ * 「通用 OpenAI 兼容」用于自建代理、OpenRouter、月之暗面、硅基流动等任意兼容端点。
+ * 注意 Base URL 的**路径会被保留**（OpenAI 必须带 /v1），服务端只在其后拼 /chat/completions。
+ */
+const PROVIDERS = {
+  deepseek: { label: 'DeepSeek（推荐）', base: 'https://api.deepseek.com', model: 'deepseek-flash', note: '官方端点，判定用 flash 模型即可' },
+  openai: { label: 'OpenAI', base: 'https://api.openai.com/v1', model: 'gpt-4o-mini', note: '注意 /v1 会保留，最终请求 …/v1/chat/completions' },
+  custom: { label: '通用 OpenAI 兼容端点', base: '', model: '', note: '自建代理 / OpenRouter / 其他兼容服务，填完整 Base URL' },
+};
+function providerOf() { return PROVIDERS[S.keyProvider] ? S.keyProvider : 'deepseek'; }
+
+/**
  * 房主自备 API Key。
  *
  * ⚠️ 这个弹窗踩过两个坑，改法就写在控件属性里：
@@ -839,11 +1172,16 @@ function keyModal() {
       现在你仍然可以点下面的「测试连接（不入库）」验证 Key 是否有效。</div>` : ''}
     <p class="dim">提交后服务端会先做一次连接测试：通过才加密入库并锁定生效（此后调用失败**不会**自动改用平台额度）；
       页面只显示掩码，任何人都无法回读原文。</p>
+    <div class="field"><label>提供方</label>
+      <select id="keyProvider">
+        ${Object.entries(PROVIDERS).map(([k, p]) => `<option value="${k}" ${providerOf() === k ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
+      </select></div>
+    <div class="dim" id="keyProviderNote">${esc(PROVIDERS[providerOf()].note)}</div>
     <div class="field"><label>Base URL</label>
       <input id="keyBase" name="ht-host-endpoint" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
         spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
         value="${esc(base)}" placeholder="https://api.deepseek.com"></div>
-    <div class="dim">实际请求地址（自动补 <code>/chat/completions</code>）：<code id="keyUrl">${esc(completionsUrl(base))}</code></div>
+    <div class="dim">实际请求地址（自动补 <code>/chat/completions</code>，路径会保留）：<code id="keyUrl">${esc(completionsUrl(base))}</code></div>
     <div class="field"><label>模型名</label>
       <input id="keyModel" name="ht-host-model" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
         spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
@@ -854,8 +1192,7 @@ function keyModal() {
         data-lpignore="true" data-1p-ignore="true" value="${esc(key)}" placeholder="sk-..."></div>
     <div class="row">
       <button id="btnKeyToggle">显示 / 隐藏</button>
-      <span class="dim">默认已填好 DeepSeek：Base URL <code>https://api.deepseek.com</code> · 模型 <code>deepseek-flash</code>。
-        用别家兼容服务时改成对应地址与模型名（已经带 /chat/completions 的地址不会重复追加）。</span>
+      <span class="dim">换提供方会自动填好 Base URL 与模型名，之后仍可手动修改。</span>
     </div>
     ${S.keyMask ? `<div class="dim" style="margin-top:8px">当前掩码：<span class="mask">${esc(S.keyMask)}</span></div>` : ''}
     <div id="keyTestBox">${keyTestBox()}</div>
@@ -943,7 +1280,7 @@ function recapModal(recap) {
  * 交互绑定
  * ==========================================================================*/
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[id],[data-pick],[data-hint],[data-vote],[data-votepuzzle],[data-reenable],[data-cfg]');
+  const el = e.target.closest('[id],[data-pick],[data-hint],[data-vote],[data-votepuzzle],[data-reenable],[data-cfg],[data-preset]');
   if (!el) return;
   const id = el.id;
   const hintTier = el.getAttribute('data-hint');
@@ -951,9 +1288,16 @@ document.addEventListener('click', async (e) => {
   const votePuzzle = el.getAttribute('data-votepuzzle');
   const reenable = el.getAttribute('data-reenable');
   const pickPuzzle = el.getAttribute && el.getAttribute('data-pick');
+  const presetPick = el.getAttribute && el.getAttribute('data-preset');
   const room = S.view ? S.view.room : null;
 
   try {
+    if (presetPick) {
+      S.preset = presetPick;
+      const hidden = $('#preset'); if (hidden) hidden.value = presetPick;
+      render();               // 焦点在 div 上，不是输入框，可以安全重渲染
+      return;
+    }
     if (hintTier) { S.error = ''; request({ t: 'hint', tier: Number(hintTier) }); return; }
     if (vote) { S.error = ''; request({ t: 'vote', choice: vote }); return; }
     if (votePuzzle) { S.error = ''; request({ t: 'vote', choice: votePuzzle }); return; }
@@ -964,6 +1308,7 @@ document.addEventListener('click', async (e) => {
       case 'pickPuzzle': request({ t: 'start', mode: 'pick', puzzleId: el.getAttribute('data-pick') }); break;
       case 'btnStartVote': request({ t: 'start', mode: 'vote' }); break;
       case 'btnCfg': S.configModal = true; render(); break;
+      case 'btnCfgQuick': S.configModal = true; render(); break;
       case 'btnCfgClose':
         Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
         S.configModal = false; render(); break;
@@ -994,10 +1339,11 @@ document.addEventListener('click', async (e) => {
         const baseUrl = ($('#keyBase').value || '').trim() || defaultBaseUrl();
         const model = ($('#keyModel').value || '').trim() || defaultModel();
         const apiKey = $('#keyValue').value;
+        const provider = providerOf();
         S.keyTest = { pending: true, url: completionsUrl(baseUrl), model };
         render();
         try {
-          const res = await api('/api/credentials/test', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model }) });
+          const res = await api('/api/credentials/test', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model, provider }) });
           S.keyTest = { ...res, url: res.url || completionsUrl(baseUrl), model: res.model || model };
         } catch (err) {
           const b = err.body || {};
@@ -1013,9 +1359,10 @@ document.addEventListener('click', async (e) => {
         const baseUrl = ($('#keyBase').value || '').trim() || defaultBaseUrl();
         const model = ($('#keyModel').value || '').trim() || defaultModel();
         const apiKey = $('#keyValue').value;                 // 只在内存中，提交后立即清空
+        const provider = providerOf();
         S.error = '';
         try {
-          const res = await api('/api/credentials', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model }) });
+          const res = await api('/api/credentials', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model, provider }) });
           S.keyMask = res.credential.mask;
           S.notice = res.resumedBlockedMatch
             ? '已启用自备额度，且已解除 AI 中断 —— 对局继续'
@@ -1116,6 +1463,23 @@ document.addEventListener('scroll', (e) => {
 document.addEventListener('focusout', (e) => {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) flushDeferredRender();
+});
+
+// 提供方下拉：选了就把 Base URL / 模型名填成预设值（直接改 DOM，不整页重渲染，
+// 否则正在编辑的 Key 输入框会被替换掉）
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!t || t.id !== 'keyProvider') return;
+  const p = PROVIDERS[t.value] ?? PROVIDERS.deepseek;
+  S.keyProvider = t.value;
+  S.keyTest = null;
+  S.drafts.keyBase = p.base;
+  S.drafts.keyModel = p.model;
+  const b = $('#keyBase'); if (b) b.value = p.base;
+  const m = $('#keyModel'); if (m) m.value = p.model;
+  const u = $('#keyUrl'); if (u) u.textContent = completionsUrl(p.base);
+  const n = $('#keyProviderNote'); if (n) n.textContent = p.note;
+  const box = $('#keyTestBox'); if (box) box.innerHTML = keyTestBox();
 });
 
 document.addEventListener('keydown', (e) => {

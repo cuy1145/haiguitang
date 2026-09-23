@@ -58,6 +58,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
   quick: {
     perTurnSec: 30, graceSec: 3, timeoutSkip: true,
     guessEveryRounds: 2, guessMaxPerMember: 3,
+    hintsEnabled: false,
     hintQuotaPerMember: 3, hintTier3Max: 1, hintCooldownSec: 60,
     maxRounds: 10, turnOrderMode: 'join', idleSkip: true,
     ratingMax: 'L3', difficultyMin: 1, difficultyMax: 5,
@@ -67,6 +68,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
   standard: {
     perTurnSec: 60, graceSec: 5, timeoutSkip: true,
     guessEveryRounds: 3, guessMaxPerMember: 2,
+    hintsEnabled: false,
     hintQuotaPerMember: 3, hintTier3Max: 1, hintCooldownSec: 120,
     maxRounds: 15, turnOrderMode: 'join', idleSkip: true,
     ratingMax: 'L3', difficultyMin: 1, difficultyMax: 5,
@@ -76,6 +78,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
   casual: {
     perTurnSec: 120, graceSec: 10, timeoutSkip: true,
     guessEveryRounds: 5, guessMaxPerMember: 2,
+    hintsEnabled: false,
     hintQuotaPerMember: 5, hintTier3Max: 2, hintCooldownSec: 240,
     maxRounds: 25, turnOrderMode: 'join', idleSkip: false,
     ratingMax: 'L3', difficultyMin: 1, difficultyMax: 5,
@@ -104,6 +107,7 @@ export const CONFIG_SCHEMA: readonly ConfigFieldSpec[] = [
   { key: 'timeoutSkip', label: '超时自动跳过', type: 'bool', afterStart: 'free', effective: 'next-turn' },
   { key: 'guessEveryRounds', label: '揭秘间隔（每 N 轮）', type: 'int', min: 1, max: 10, afterStart: 'free', effective: 'next-round' },
   { key: 'guessMaxPerMember', label: '每人揭秘次数上限', type: 'int', min: 1, max: 10, afterStart: 'increase-only', effective: 'immediate' },
+  { key: 'hintsEnabled', label: '启用提示（默认关闭）', type: 'bool', afterStart: 'free', effective: 'immediate' },
   { key: 'hintQuotaPerMember', label: '每人提示次数（T1+T2）', type: 'int', min: 0, max: 10, afterStart: 'increase-only', effective: 'immediate' },
   { key: 'hintTier3Max', label: 'T3 关键提示（每局共享）', type: 'int', min: 0, max: 3, afterStart: 'increase-only', effective: 'immediate' },
   { key: 'hintCooldownSec', label: '提示冷却（秒）', type: 'int', min: 0, max: 600, afterStart: 'free', effective: 'immediate' },

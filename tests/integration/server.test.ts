@@ -493,6 +493,51 @@ test('I-08: 挂机成员的表决不被受理（VOTE_NOT_ELIGIBLE）', async () 
   host.close(); c2.close();
 });
 
+test('I-21: 提示默认关闭；房主在对局参数里打开后才可用', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const guest = await Client.open(booted.url, p2.token, '阿伟');
+  await startMatch(host, room.roomId);
+
+  assert.equal(roomState(room.roomId).config.hintsEnabled, false, '预设默认关闭提示');
+  const denied = await host.request({ t: 'hint', tier: 1 });
+  assert.equal(denied.t, 'error', '关闭状态下请求提示必须被拒');
+  assert.equal((denied as unknown as { code: string }).code, 'HINTS_DISABLED');
+
+  // 房主打开开关（提示开关属于 free，可随时改）
+  await configure(host, room.roomId, { hintsEnabled: true });
+  const allowed = await host.request({ t: 'hint', tier: 1 });
+  assert.equal(allowed.t, 'ack', `打开后应能用提示：${JSON.stringify(allowed)}`);
+  await settle();
+  assert.ok(roomState(room.roomId).hint.tier3Used >= 0);
+
+  host.close();
+  guest.close();
+});
+
+test('I-22: 复盘（汤底揭晓）仅房主可见，其他成员一律 403', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  await startMatch(host, room.roomId);
+
+  const guestRecap = await fetch(`${booted.url}/api/recap`, { headers: { authorization: `Bearer ${p2.token}` } });
+  assert.equal(guestRecap.status, 403, '非房主不能看复盘/汤底');
+  assert.equal((await guestRecap.json() as { error: string }).error, 'NOT_HOST');
+
+  // 中止对局（不揭晓汤底），房主仍能拿到自己的复盘视图
+  const ack = await host.request({ t: 'end_match' });
+  assert.equal(ack.t, 'ack');
+  await settle();
+
+  const hostRecap = await fetch(`${booted.url}/api/recap`, { headers: { authorization: `Bearer ${room.token}` } });
+  assert.equal(hostRecap.status, 200, '房主可以看复盘');
+  const body = await hostRecap.json() as { canRevealTruth: boolean };
+  assert.equal(body.canRevealTruth, false, '中止对局依旧不揭晓汤底');
+  host.close();
+});
+
 test('I-12: 进行中的对局不得提前拿到汤底；aborted 也不揭晓', async () => {
   const room = await createRoom('房主');
   const host = await Client.open(booted.url, room.token, '房主');

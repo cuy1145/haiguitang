@@ -65,6 +65,7 @@ export function messageOf(code: string): string {
     case 'NOT_HOST': return '只有房主可以做这个操作。';
     case 'VOTE_NOT_ELIGIBLE': return '挂机或离线的成员不能表决。';
     case 'VOTE_NOT_OPEN': return '当前没有进行中的投票。';
+    case 'HINTS_DISABLED': return '本局未开启提示（房主可在「对局参数」里打开）。';
     case 'HINT_COOLDOWN': return '提示冷却中。';
     case 'HINT_QUOTA_EXHAUSTED': return '你的提示次数已用尽。';
     case 'HINT_TIER3_EXHAUSTED': return 'T3 关键提示本局已用完。';
