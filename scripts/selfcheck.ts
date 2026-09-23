@@ -79,7 +79,8 @@ for (const file of testFiles) {
 ok('测试不读取真实密钥环境变量（只用假密钥与内存主密钥）', envReads.length === 0, envReads.join(', '));
 
 const gitignore = await readFile(join(root, '.gitignore'), 'utf8').catch(() => '');
-ok('.gitignore 覆盖 .env 与 data/', /^\.env$/m.test(gitignore) && /^data\/$/m.test(gitignore));
+// 本地数据目录必须被忽略：接受 `data/` 或 `/data/`（后者只忽略仓库根目录，避免误伤 packages/**/data 下的源码）
+ok('.gitignore 覆盖 .env 与 data/', /^\.env$/m.test(gitignore) && /^\/?data\/$/m.test(gitignore));
 const envExample = await readFile(join(root, '.env.example'), 'utf8').catch(() => '');
 ok('.env.example 只含占位符（AI_KEY / MASTER_KEY 均为空）', /^AI_KEY=\s*$/m.test(envExample) && /^MASTER_KEY=\s*$/m.test(envExample));
 const hasDotEnv = await stat(join(root, '.env')).then(() => true).catch(() => false);
