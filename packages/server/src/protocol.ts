@@ -8,6 +8,24 @@
  */
 import type { CoreRoom, GameConfig, JudgeResult, PublicRoom } from '@ht/core';
 
+/**
+ * 凭据里保存的 Base URL。
+ *
+ * 字段在存储层历史上叫 `baseUrlHost`（只存主机名），但那样会丢掉路径前缀 —— 而 OpenAI 以及
+ * 大量兼容服务必须带 `/v1`（`https://api.openai.com/v1/chat/completions`）。
+ * 现在新记录存**完整 URL**（提交时已过 SSRF 校验：仅 https、无 query/fragment、非内网），
+ * 旧记录只有主机名也能正确还原，无需数据迁移。
+ *
+ * ⚠️ 刻意放在这个**零依赖**模块里：Worker 端的 rooms.ts 需要按值导入它。
+ *    若放在 vault.ts（用到 node:crypto），整个 Node 加密实现会被打进 Worker 包，
+ *    部署时会因 `node:crypto` 不可用而失败（见自检 "Worker 可打包性"）。
+ */
+export function credentialBaseUrl(cred: { baseUrlHost: string }): string {
+  const raw = String(cred.baseUrlHost ?? '').trim().replace(/\/+$/, '');
+  if (!raw) return '';
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
 export interface TimelineEntry {
   seq: number;
   kind: 'system' | 'question' | 'rejected' | 'vote' | 'transfer' | 'credit' | 'recap';

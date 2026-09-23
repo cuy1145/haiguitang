@@ -55,6 +55,37 @@ for (const file of coreFiles) {
 }
 ok('core 零依赖、零 IO、时间与随机由外部注入', forbidden.length === 0, forbidden.join('; '));
 
+// ---------------------------------------------------------------- ①b Worker 可打包性
+/**
+ * Worker 端复用了 packages/server 的 rooms.ts / ai.ts / protocol.ts，
+ * 这些模块**不能按值导入 Node 专有实现**（vault.ts 用 node:crypto、store.ts 用 node:sqlite…）：
+ * 一旦导入，esbuild 会把它们打进 Worker 包，`wrangler deploy` 会因运行时没有 node 内置模块而失败
+ * （本地 dry-run 只给 WARNING，很容易漏掉 —— 所以放在这里做硬门槛）。
+ * 只允许 `import type`，类型导入会被编译器完全擦除。
+ */
+const workerEntry = join(root, 'packages/worker/src/index.ts');
+const serverShared = ['rooms.ts', 'ai.ts', 'protocol.ts', 'ports.ts'].map((f) => join(root, 'packages/server/src', f));
+const nodeLeaks: string[] = [];
+for (const file of [workerEntry, ...serverShared]) {
+  const text = await readFile(file, 'utf8');
+  // 只匹配"按值导入"的 node: 模块（import type 是安全的）
+  const valueImports = [...text.matchAll(/^\s*import\s+(?!type\b)[^;]*?from\s+['"](node:[^'"]+)['"]/gm)].map((m) => m[1]);
+  for (const spec of valueImports) nodeLeaks.push(`${relative(root, file)} → ${spec}`);
+}
+ok('Worker 侧不按值导入 node: 内置模块（保证能打包上 Cloudflare）', nodeLeaks.length === 0, nodeLeaks.join(' ; '));
+
+// 进一步：worker 侧复用的共享模块不得按值导入 Node 专有实现文件
+const nodeOnlyModules = ['vault.ts', 'store.ts', 'server.ts', 'config.ts', 'index.ts'];
+const badSharedImports: string[] = [];
+for (const file of serverShared) {
+  const text = await readFile(file, 'utf8');
+  const valueImports = [...text.matchAll(/^\s*import\s+(?!type\b)[^;]*?from\s+['"]\.\/([^'"]+)['"]/gm)].map((m) => m[1] ?? '');
+  for (const spec of valueImports) {
+    if (nodeOnlyModules.includes(spec)) badSharedImports.push(`${relative(root, file)} → ./${spec}`);
+  }
+}
+ok('共享模块不按值导入 Node 专有实现（vault/store/server/config）', badSharedImports.length === 0, badSharedImports.join(' ; '));
+
 // ---------------------------------------------------------------- ② 仓库无密钥
 const allFiles = await walk(root);
 const secretHits: string[] = [];

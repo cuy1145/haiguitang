@@ -16,10 +16,9 @@ import type {
   ActionReject, CoreMember, CoreRoom, DomainEvent, GameConfig, Puzzle, ReduceCtx, SubmitReject,
 } from '@ht/core';
 import type { CredentialRecord } from './vault.ts';
-import { credentialBaseUrl } from './vault.ts';
 import type { QuestionRecord } from './store.ts';
 import type { HostPort, LoggerPort, RoomStorePort } from './ports.ts';
-import { CODE_LENGTH, TEXT, generateCode } from './protocol.ts';
+import { CODE_LENGTH, TEXT, credentialBaseUrl, generateCode } from './protocol.ts';
 import type { RoomView, TimelineEntry } from './protocol.ts';
 
 export interface SessionLike {

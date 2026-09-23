@@ -39,20 +39,6 @@ export interface CredentialRecord {
   lastUsedAt: number | null;
 }
 
-/**
- * 凭据里保存的 Base URL。
- *
- * 字段历史上叫 `baseUrlHost`（只存主机名），但那样会丢掉路径前缀 —— 而 OpenAI 以及大量
- * 兼容服务必须带 `/v1`（`https://api.openai.com/v1/chat/completions`）。
- * 现在新记录存**完整 URL**（已过 SSRF 校验：仅 https、无 query/fragment、非内网），
- * 旧记录只有主机名也能正确还原，无需数据迁移。
- */
-export function credentialBaseUrl(cred: { baseUrlHost: string }): string {
-  const raw = String(cred.baseUrlHost ?? '').trim().replace(/\/+$/, '');
-  if (!raw) return '';
-  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
-}
-
 export const KEY_ID = 'mk1';
 
 export class Vault {
