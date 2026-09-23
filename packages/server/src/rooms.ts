@@ -466,7 +466,7 @@ export class RoomRuntime {
     }
 
     let credential: { apiKey: string; baseUrl: string; model: string; provider: string } | null = null;
-    if (this.deps.host.realModelEnabled) credential = this.resolveCredential();
+    if (this.deps.host.realModelEnabled) credential = await this.resolveCredential();
     const outcome = await this.deps.host.judge({
       roomId: this.room.id, matchId: this.matchId, turnSeq, question: text, puzzle, credential,
     });
@@ -509,14 +509,15 @@ export class RoomRuntime {
   }
 
   /** 取当前应当使用的凭据：所有权 + 状态 + TTL 三重校验（R1）。 */
-  private resolveCredential(): { apiKey: string; baseUrl: string; model: string; provider: string } | null {
+  private async resolveCredential(): Promise<{ apiKey: string; baseUrl: string; model: string; provider: string } | null> {
     const cred = this.deps.store.roomCredential(this.room.id);
     if (!cred || cred.state !== 'active' || !cred.blob) return null;
     const hostPlayerId = getMember(this.room, this.room.hostId)?.playerId ?? null;
     if (!hostPlayerId || cred.ownerPlayerId !== hostPlayerId) return null;
     if (cred.ttlExpiresAt !== null && this.now >= cred.ttlExpiresAt) return null;
     try {
-      return { apiKey: this.deps.decrypt(cred), baseUrl: `https://${cred.baseUrlHost}`, model: cred.model, provider: cred.provider };
+      const apiKey = await this.deps.decrypt(cred);
+      return { apiKey, baseUrl: `https://${cred.baseUrlHost}`, model: cred.model, provider: cred.provider };
     } catch (e) {
       this.deps.logger.error('credential_decrypt_failed', { room_id: this.room.id, code: (e as Error).message });
       return null;
@@ -664,7 +665,7 @@ export class RoomRuntime {
     // 复测：用库中密文解密后调用，全程不回读原文给任何人
     let apiKey: string;
     try {
-      apiKey = this.deps.decrypt(cred);
+      apiKey = await this.deps.decrypt(cred);
     } catch {
       return { ok: false, code: 'NOT_ALLOWED' };
     }
@@ -983,5 +984,6 @@ export class RoomRegistry {
 }
 
 export { CODE_LENGTH };
+
 
 

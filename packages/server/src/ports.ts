@@ -51,5 +51,6 @@ export type HostPort = Pick<HostService, 'judge' | 'connectionTest' | 'ruleFallb
 /** 判定缓存端口（可选的第二落点：CF 上每房一个 DO，缓存天然按房间隔离）。 */
 export type VerdictCachePort = Pick<Store, 'getVerdict' | 'putVerdict'>;
 
-/** 凭据解密：只在出站调用与归还复测前调用一次，用后即弃。 */
-export type DecryptPort = (cred: CredentialRecord) => string;
+/** 凭据解密：只在出站调用与归还复测前调用一次，用后即弃。
+ *  Node 版用 node:crypto（同步）；Cloudflare 版用 WebCrypto（异步）——因此允许返回 Promise。 */
+export type DecryptPort = (cred: CredentialRecord) => string | Promise<string>;
