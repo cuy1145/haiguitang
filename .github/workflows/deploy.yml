@@ -89,9 +89,17 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: whoami
 
+      # 先把数据库结构迁移到最新，再部署代码（顺序不能反：新代码可能依赖新列）。
+      # wrangler 会记录已执行的迁移，重复运行只会跑"还没跑过的"，因此是幂等的。
+      # 需要 Token 具备 D1:Edit 权限。
+      - name: 应用 D1 迁移（只跑未执行的）
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply haiguitang --remote
+
       # wrangler deploy 会按 wrangler.toml 的 [assets] 上传前端、绑定 D1。
-      # 注意：D1 的**表结构迁移不会自动应用**，需要在本地显式执行一次：
-      #   npx wrangler d1 migrations apply haiguitang --remote
       - name: 部署到 Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
