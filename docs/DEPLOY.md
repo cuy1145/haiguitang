@@ -17,7 +17,8 @@
 | `wrangler login` | ✅ 已完成（OAuth Token 已存到本机） |
 | GitHub 仓库 | ✅ 已建：<https://github.com/cuy1145/haiguitang> |
 | 本地 git remote | ✅ 已配置 `origin` |
-| **workers.dev 子域** | ❌ **未注册 —— 这是当前唯一的硬阻塞，必须先做（见 §2.0）** |
+| **Durable Objects** | ❌ **免费计划不可用（需付费）** → 已改为 D1 方案，见 `docs/CF-WITHOUT-DO.md` |
+| **workers.dev 子域** | ❌ **未注册 —— 任何部署都必需，见 §2.0** |
 | Cloudflare API Token | ⬜ 可选（只为 GitHub Actions 自动部署；本地部署不需要，见 §2.3） |
 | Worker 移植 | ⬜ 我这边收尾中（`packages/worker/README.md`） |
 
@@ -287,3 +288,4 @@ pnpm cf:tail
 
 **不要**把 `CLOUDFLARE_API_TOKEN`、`MASTER_KEY`、`AI_KEY` 发给我或任何聊天窗口。
 如果哪天不小心发了，请立刻在对应后台作废并重新生成。
+
