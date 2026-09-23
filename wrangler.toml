@@ -42,6 +42,9 @@ crons = ["17 * * * *"]
 [vars]
 AI_PROVIDER = "openai-compatible"
 DEV_TOOLS = "0"
+# 房主自备 Key 弹窗里的默认提供方（仅预填，房主可改）。DeepSeek 官方 OpenAI 兼容端点。
+DEFAULT_HOST_BASE_URL = "https://api.deepseek.com"
+DEFAULT_HOST_MODEL = "deepseek-flash"
 SITE_MONTHLY_CALL_CAP = "2000"
 SITE_GRANT_BUDGET_CALLS = "200"
 SITE_GRANT_MAX_PER_MATCH = "2"

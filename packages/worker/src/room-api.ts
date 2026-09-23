@@ -31,6 +31,15 @@ import { generateCode, json, messageOf, newId, randomToken, readJson, sanitizeNi
 
 const logger = new ConsoleLogger('info');
 
+/**
+ * 房主自备 Key 的默认提供方（DeepSeek 官方 OpenAI 兼容端点）。
+ * 仅用于**预填**表单，房主可以在弹窗里改成任意 OpenAI 兼容端点。
+ * 注意：凭据只持久化 host（见 store 的 base_url_host），所以这里不带路径前缀，
+ * 与 resolveCredential() 重建出的 `https://host` 保持一致。
+ */
+export const DEFAULT_HOST_BASE_URL = 'https://api.deepseek.com';
+export const DEFAULT_HOST_MODEL = 'deepseek-flash';
+
 // ---------------------------------------------------------------- 公共入口
 export async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname;
@@ -54,17 +63,19 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
     }));
   }
   if (request.method === 'GET' && path === '/api/rooms/state') {
-    // 前端轮询用这一个端点：一次拿到【视图快照 + 时间线 + 自 since 起的新事件 + 最新 seq】
+    // 前端轮询用这一个端点：一次拿到【视图快照 + 时间线 + 公共提问记录 + 自 since 起的新事件 + 最新 seq】
     const since = Number(url.searchParams.get('since') ?? 0);
     return withRoom(env, roomId, async (runtime, store) => json({
       view: viewFor(runtime, memberId),
       timeline: await loadTimeline(env, roomId),
+      // 公共提问 / 对话记录：所有人都能看到的问答流水（不含事实点、不含汤底）
+      questions: publicQuestionLog(runtime, store.listQuestions(roomId)),
       seq: runtime.room.eventSeq,
       stateVersion: runtime.room.stateVersion,
       events: since > 0
         ? [...(await fetchEventsSince(env.DB, roomId, since)), ...store.emittedEvents.filter((e) => e.seq > since)]
         : store.emittedEvents,
-    }));
+    }), { withQuestions: true });
   }
   if (request.method === 'GET' && path === '/api/rooms/events') {
     const since = Number(url.searchParams.get('since') ?? 0);
@@ -392,8 +403,8 @@ async function submitCredential(request: Request, env: Env, roomId: string, memb
   const body = await readJson(request);
   const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
   const provider = typeof body.provider === 'string' ? body.provider : 'openai-compatible';
-  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : (env.AI_MODEL ?? '');
-  const baseUrlRaw = typeof body.baseUrl === 'string' && body.baseUrl.trim() ? body.baseUrl.trim() : (env.AI_BASE_URL ?? '');
+  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : (env.AI_MODEL ?? DEFAULT_HOST_MODEL);
+  const baseUrlRaw = typeof body.baseUrl === 'string' && body.baseUrl.trim() ? body.baseUrl.trim() : (env.AI_BASE_URL ?? DEFAULT_HOST_BASE_URL);
   if (!apiKey || !model || !baseUrlRaw) return json({ error: 'MISSING_FIELDS', message: 'apiKey / baseUrl / model 必填' }, 400);
   const baseUrl = HostService.validateBaseUrl(baseUrlRaw);
   if (!baseUrl.ok) return json({ error: baseUrl.reason }, 400);
@@ -445,11 +456,44 @@ async function authenticate(request: Request, env: Env): Promise<{ roomId: strin
   return lookupSession(env.DB, await sha256Hex(token));
 }
 
-async function loadTimeline(env: Env, roomId: string): Promise<Array<{ seq: number; kind: string; text: string; at: number }>> {
+async function loadTimeline(env: Env, roomId: string): Promise<Array<{ seq: number; kind: string; text: string; at: number; memberId: string | null }>> {
   const rows = await env.DB.prepare(
-    "SELECT seq, kind, text, created_at FROM room_events WHERE room_id = ? AND text != '' ORDER BY seq DESC LIMIT 200",
-  ).bind(roomId).all<{ seq: number; kind: string; text: string; created_at: number }>();
-  return (rows.results ?? []).reverse().map((r) => ({ seq: Number(r.seq), kind: String(r.kind), text: String(r.text), at: Number(r.created_at) }));
+    "SELECT seq, kind, text, created_at, payload_json FROM room_events WHERE room_id = ? AND text != '' ORDER BY seq DESC LIMIT 200",
+  ).bind(roomId).all<{ seq: number; kind: string; text: string; created_at: number; payload_json: string | null }>();
+  return (rows.results ?? []).reverse().map((r) => {
+    // 事件帧的 payload 里带着成员 id（用于把"谁做的"显示出来）；解析失败就当匿名
+    let memberId: string | null = null;
+    try {
+      const payload = JSON.parse(String(r.payload_json ?? '{}')) as { memberId?: unknown };
+      if (typeof payload?.memberId === 'string') memberId = payload.memberId;
+    } catch { /* 忽略：payload 不是 JSON 时按匿名处理 */ }
+    return { seq: Number(r.seq), kind: String(r.kind), text: String(r.text), at: Number(r.created_at), memberId };
+  });
+}
+
+/**
+ * 公共提问记录（所有人都能看到的问答流水）。
+ *
+ * 只做**白名单投影**：matchedFactIds（命中了哪些事实点）与任何汤底信息一律不下发——
+ * 那属于"汤底/事实表"，只能通过 GET /api/recap 在结算后按门禁揭晓。
+ * 这里给的 answer / reasonCode / source 本来就是对局中所有人可见的信息。
+ */
+function publicQuestionLog(
+  runtime: RoomRuntime,
+  questions: Array<{
+    turnSeq: number; memberId: string; text: string; answer: string;
+    reasonCode: string; source: string; late: boolean; createdAt: number;
+  }>,
+): Array<{
+  turnSeq: number; memberId: string; memberName: string; text: string;
+  answer: string; reasonCode: string; source: string; late: boolean; at: number;
+}> {
+  const nameOf = (id: string): string => getMember(runtime.room, id)?.name ?? '已离开的玩家';
+  return questions.map((q) => ({
+    turnSeq: q.turnSeq, memberId: q.memberId, memberName: nameOf(q.memberId),
+    text: q.text, answer: q.answer, reasonCode: q.reasonCode, source: q.source,
+    late: q.late === true, at: q.createdAt,
+  }));
 }
 
 function emptyRoomRow(id: string, code: string, config: GameConfig, now: number): {

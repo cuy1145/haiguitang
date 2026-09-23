@@ -60,10 +60,29 @@
   .modal{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px;max-width:720px;width:100%;max-height:86vh;overflow:auto}
   .field{display:grid;grid-template-columns:1fr 130px;gap:8px;align-items:center;margin-bottom:7px}
   .field label{color:var(--fg2);font-size:12.5px}
+  /* 弹窗里的表单一律「标签在上、输入框整行」：输入长 Key / URL 时需要足够宽度 */
+  .modal .field{grid-template-columns:1fr;gap:4px;align-items:start}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
   th{color:var(--fg2);font-size:12px}
   .banner{background:#3a2a12;border:1px solid #6a5121;color:#ffd894;padding:8px 12px;border-radius:var(--radius);font-size:12.5px;margin-bottom:12px}
+  /* 汤面单独成块：题目信息 + 汤面全文（汤底永不下发，只在复盘揭晓） */
+  .puzzle{background:#161a23;border:1px solid var(--line);border-radius:8px;padding:12px}
+  .puzzle .ptitle{font-size:16px;font-weight:600}
+  .puzzle .surface{font-size:15.5px;line-height:1.75;white-space:pre-wrap;margin-top:8px}
+  /* 公共提问 / 对话记录（所有人共享的问答流水） */
+  .log{display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto;padding-right:2px}
+  .log .qa{background:#161a23;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .log .qa .head{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--fg2)}
+  .log .qa .q{margin-top:3px;white-space:pre-wrap}
+  .log .qa .a{margin-top:5px;font-size:12.5px;color:var(--fg2)}
+  .log .qa .a.yes{color:#9fe3c0}.log .qa .a.no{color:#ff9fa8}
+  .log .qa .a.unanswerable{color:#f2d08a}
+  .log .qa.mine{border-color:#38427a}
+  .log .qa .late{color:var(--warn)}
+  /* Key 输入框：不用 type=password，避免浏览器/密码管理器介入（自动填充弹窗会打断输入） */
+  .secret{-webkit-text-security:disc;font-family:ui-monospace,monospace}
+  .timer{font-variant-numeric:tabular-nums;font-weight:600}
 </style>
 </head>
 <body>
@@ -93,7 +112,12 @@ const S = {
   connected: false,
   lastSeq: 0,
   ack: {},
-  pendingTimeline: [],
+  pendingTimeline: [],                  // 系统事件（来自 room_events）
+  questions: [],                        // 公共提问记录（来自 questions 表，所有人都能看到）
+  log: [],                              // 合并后的公共对话记录（提问 + 系统事件，按时间排序）
+  logPinned: true,                      // 用户是否停在记录底部（是则新消息自动滚到底）
+  drafts: {},                            // 弹窗输入的临时值：只在本页内存里，重渲染不丢；关闭即清
+  serverOffset: 0,                      // 服务端时钟 - 本机时钟（计时用服务端时间为准）
   hint: '',
   recap: null,
   keyMask: null,
@@ -106,6 +130,44 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 const fmt = (ms) => { ms = Math.max(0, ms | 0); const t = Math.ceil(ms / 1000); return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
 const nowMs = () => Date.now();
+/** 服务端当前时间（以服务端快照为基准对齐本机时钟） */
+const serverNow = () => Date.now() + S.serverOffset;
+/** 时刻 → HH:MM:SS（用于对话记录） */
+const fmtClock = (at) => { try { return new Date(at).toLocaleTimeString('zh-CN', { hour12: false }); } catch { return ''; } };
+
+/* ---------------------------------------------------------------- 计时（按秒走）
+ * 轮询每 1.8 秒才回来一次，但倒计时必须按秒动，所以这里单独跑一个轻量 ticker：
+ *   · 只更新带 data-deadline 的文本 / 带 data-bar 的进度条，**不重渲染整个界面**
+ *     （整页重渲染会摧毁正在输入的输入框——这正是"API Key 打一半就没了"的根因）
+ *   · 归零时催一次轮询，让服务端做惰性推进（超时跳过 / 投票截止…）
+ * ------------------------------------------------------------------------- */
+let tickTimer = null;
+let zeroNudgedAt = 0;
+function startTicker() {
+  if (tickTimer) return;
+  tickTimer = setInterval(tickUi, 250);
+  tickUi();
+}
+function tickUi() {
+  const now = serverNow();
+  let anyExpired = false;
+  document.querySelectorAll('[data-deadline]').forEach((el) => {
+    const left = Math.max(0, Number(el.getAttribute('data-deadline')) - now);
+    const text = el.getAttribute('data-format') === 'plain' ? `${Math.ceil(left / 1000)} 秒` : fmt(left);
+    if (el.textContent !== text) el.textContent = text;
+    if (left <= 0) anyExpired = true;
+  });
+  document.querySelectorAll('[data-bar]').forEach((el) => {
+    const left = Math.max(0, Number(el.getAttribute('data-deadline')) - now);
+    const total = Math.max(1, Number(el.getAttribute('data-total')) || 1);
+    const pct = Math.max(0, Math.min(100, (left / total) * 100));
+    el.style.width = `${pct}%`;
+  });
+  if (anyExpired && S.view && token() && !pollInFlight && Date.now() - zeroNudgedAt > 1500) {
+    zeroNudgedAt = Date.now();
+    void pollOnce();
+  }
+}
 
 function token() { return localStorage.getItem(LS_TOKEN) || ''; }
 function saveSession(roomId, memberId, tok) {
@@ -113,7 +175,15 @@ function saveSession(roomId, memberId, tok) {
   // 只存会话凭证，不存任何密钥或汤底（汤底服务端根本不下发）
   localStorage.setItem(LS_TOKEN, tok);
 }
-function clearSession() { localStorage.removeItem(LS_TOKEN); localStorage.removeItem(LS_DRAFT); S.me = null; S.view = null; }
+function clearSession() {
+  localStorage.removeItem(LS_TOKEN);
+  localStorage.removeItem(LS_DRAFT);
+  S.me = null;
+  S.view = null;
+  S.drafts = {};                 // 会话结束：连同内存里的 API Key 草稿一起丢掉
+  S.questions = [];
+  S.log = [];
+}
 
 async function api(path, opts = {}) {
   const headers = { 'content-type': 'application/json', ...(opts.headers || {}) };
@@ -160,6 +230,7 @@ const ACTIONS = {
 function startPolling() {
   if (!token()) return;
   stopPolling();
+  startTicker();
   pollTimer = setInterval(() => { void pollOnce(); }, 1800);
   hbTimer = setInterval(() => { void sendAction({ type: 'heartbeat', hidden: document.visibilityState !== 'visible' }, { silent: true }); }, 20000);
   void pollOnce();
@@ -192,15 +263,42 @@ async function pollOnce() {
   }
 }
 
-/** 应用服务端返回的 { view, timeline, events, seq } */
+/** 应用服务端返回的 { view, timeline, questions, events, seq } */
 function applyState(data) {
-  if (data.view) { S.view = data.view; S.screen = 'room'; }
-  if (Array.isArray(data.timeline)) {
-    S.pendingTimeline = data.timeline.map((t) => ({ seq: t.seq, text: t.text, kind: t.kind, at: t.at, meta: t.meta, answer: t.answer, reasonCode: t.reasonCode, source: t.source }));
+  if (data.view) {
+    S.view = data.view;
+    S.screen = 'room';
+    // 用服务端时间做基准，避免本机时钟偏差把倒计时算歪
+    if (data.view.room && typeof data.view.room.serverTime === 'number') {
+      S.serverOffset = data.view.room.serverTime - Date.now();
+    }
   }
+  if (Array.isArray(data.timeline)) {
+    S.pendingTimeline = data.timeline.map((t) => ({
+      seq: t.seq, kind: t.kind, text: t.text, at: t.at, meta: t.meta,
+      memberId: t.memberId ?? null, answer: t.answer, reasonCode: t.reasonCode, source: t.source,
+    }));
+  }
+  if (Array.isArray(data.questions)) {
+    S.questions = data.questions.map((q) => ({
+      at: q.at, kind: 'question', memberId: q.memberId, memberName: q.memberName, turnSeq: q.turnSeq,
+      text: q.text, answer: q.answer, reasonCode: q.reasonCode, source: q.source, late: q.late === true,
+    }));
+  }
+  S.log = buildLog(S.questions, S.pendingTimeline);
   if (typeof data.seq === 'number' && data.seq > S.lastSeq) S.lastSeq = data.seq;
   if (data.view && data.view.room && data.view.room.status === 'settled') S.notice = '对局已结束，可以查看复盘';
   render();
+}
+
+/**
+ * 公共对话记录 = 所有成员的提问（含判定结果）+ 系统事件，按时间合并排序。
+ * 提问来自服务端 questions 表（人人可见），系统事件来自 room_events。
+ */
+function buildLog(questions, timeline) {
+  const qs = (questions || []).map((q) => ({ ...q, text: q.text }));
+  const evs = (timeline || []).filter((t) => t.kind !== 'question').map((t) => ({ ...t, kind: t.kind === 'system' ? 'system' : t.kind }));
+  return [...qs, ...evs].sort((a, b) => (a.at - b.at) || ((a.seq || 0) - (b.seq || 0)));
 }
 
 /** 提交动作；返回服务端响应（含本次事件） */
@@ -308,22 +406,45 @@ function applyView(view) {
 
 /* ============================================================================
  * 渲染
+ *
+ * ⚠️ 这里是全量 innerHTML 重渲染，而轮询每 1.8 秒就会调一次 render()。
+ *    所以必须显式保住"用户正在输入的东西"：
+ *      · 记录当前焦点元素 id + 光标位置，重渲染后恢复（否则打字会被打断）
+ *      · 输入值统一走 S.drafts 回填（否则已输入/已粘贴的内容会被清空）
+ *      · 对话记录若原本贴在底部，重渲染后继续贴底
  * ==========================================================================*/
 function render() {
   const app = $('#app');
-  if (!S.view || S.screen === 'entry') { app.innerHTML = viewEntry(); bindEntry(); return; }
-  app.innerHTML = viewRoom();
+  const active = document.activeElement;
+  const keep = active && active.id && app.contains(active) && typeof active.selectionStart === 'number'
+    ? { id: active.id, start: active.selectionStart, end: active.selectionEnd }
+    : null;
+  const oldLog = $('#log');
+  const pinned = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 48) : S.logPinned;
+
+  if (!S.view || S.screen === 'entry') { app.innerHTML = viewEntry(); bindEntry(); }
+  else app.innerHTML = viewRoom();
+
+  if (keep) {
+    const el = document.getElementById(keep.id);
+    if (el) {
+      el.focus();
+      try { el.setSelectionRange(keep.start, keep.end); } catch { /* number 输入框不支持选区 */ }
+    }
+  }
+  const log = $('#log');
+  if (log) { log.scrollTop = pinned ? log.scrollHeight : Math.min(log.scrollTop, log.scrollHeight); S.logPinned = pinned; }
 }
 
 function viewEntry() {
-  const nickname = localStorage.getItem(LS_NICK) || '';
+  const nickname = S.drafts.nick ?? (localStorage.getItem(LS_NICK) || '');
   return `
   <div class="card">
     <h3>加入或创建房间</h3>
     <p class="dim">身份是轻量的：填个昵称即可，无需注册。房主自备 API Key 时，Key 只提交给服务端并加密存储，
       页面任何位置都拿不到明文（只显示掩码）。</p>
-    <div class="field"><label>你的昵称</label><input id="nick" value="${esc(nickname)}" maxlength="12" placeholder="例如：阿伟"></div>
-    <div class="field"><label>房间码（加入已有房间）</label><input id="code" placeholder="6 位房间码，留空则创建新房间" maxlength="8"></div>
+    <div class="field"><label>你的昵称</label><input id="nick" autocomplete="off" spellcheck="false" value="${esc(nickname)}" maxlength="12" placeholder="例如：阿伟"></div>
+    <div class="field"><label>房间码（加入已有房间）</label><input id="code" autocomplete="off" spellcheck="false" value="${esc(S.drafts.code ?? '')}" placeholder="6 位房间码，留空则创建新房间" maxlength="8"></div>
     <div class="field"><label>对局预设</label>
       <select id="preset">
         <option value="standard">标准</option><option value="quick">快速</option><option value="casual">休闲</option>
@@ -375,12 +496,16 @@ function viewRoom() {
   const you = v.you;
   const turn = room.turn;
   const puzzle = room.puzzle;
-  const draft = localStorage.getItem(LS_DRAFT) || '';
+  const draft = S.drafts.ask ?? (localStorage.getItem(LS_DRAFT) || '');
   const myTurn = you.canSubmit;
   const phaseLabel = { ACTIVE: '提问中', GRACE: '宽限期（提交仍有效）', JUDGING: '主持人判定中', SETTLED: '本轮结束', SKIPPED: '已跳过', PAUSED: '已暂停', IDLE: '—' }[turn.phase] || turn.phase;
-  const left = Math.max(0, (turn.phase === 'GRACE' ? turn.graceDeadlineAt : turn.deadlineAt) - room.serverTime);
-  const total = Math.max(1, turn.graceDeadlineAt - (turn.graceDeadlineAt - (turn.phase === 'GRACE' ? 0 : left)) || 1);
-  const pct = Math.max(0, Math.min(100, (left / Math.max(1, total)) * 100));
+  // 计时：以服务端时间为准，按秒走（真正的刷新由 tickUi() 每 250ms 打到 #tickLeft 上，不整页重渲染）
+  const counting = turn.phase === 'ACTIVE' || turn.phase === 'GRACE';
+  const deadline = turn.phase === 'GRACE' ? turn.graceDeadlineAt : turn.deadlineAt;
+  const phaseStart = turn.phase === 'GRACE' ? turn.deadlineAt : turn.startedAt;
+  const total = Math.max(1, deadline - phaseStart);
+  const left = counting ? Math.max(0, deadline - serverNow()) : 0;
+  const pct = counting ? Math.max(0, Math.min(100, (left / total) * 100)) : 0;
 
   return `
   <div class="grid">
@@ -427,14 +552,19 @@ function viewRoom() {
       <div class="turnbar">
         <div class="spread">
           <div><b>第 ${room.roundNo} 轮</b> · ${turn.memberId ? '轮到 ' + esc(nameOf(room, turn.memberId)) : '—'} <span class="pill">${esc(phaseLabel)}</span></div>
-          <div>${fmt(left)}</div>
+          <div>${counting
+            ? `<span class="timer" id="tickLeft" data-deadline="${deadline}">${fmt(left)}</span>`
+            : '<span class="dim">—</span>'}</div>
         </div>
-        <div class="bar${turn.phase === 'GRACE' ? ' grace' : room.status === 'suspended' ? ' paused' : ''}"><i style="width:${pct}%"></i></div>
-        <div class="dim">${puzzle ? `《${esc(puzzle.title)}》 · ${esc(puzzle.rating)} · 难度 ${puzzle.difficulty}<br>汤面：${esc(puzzle.surface)}` : '还没有选定题目：房主可以「房主指定」或发起「投票选汤」。'}</div>
+        <div class="bar${turn.phase === 'GRACE' ? ' grace' : room.status === 'suspended' ? ' paused' : ''}"><i
+          ${counting ? `data-bar data-deadline="${deadline}" data-total="${total}"` : ''} style="width:${pct}%"></i></div>
+        <div class="dim">倒计时按秒走，以服务端时间为准${counting ? `（本轮共 ${Math.round(total / 1000)} 秒）` : ''}。</div>
       </div>
 
       ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
       ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
+
+      ${puzzle ? puzzleCard(puzzle) : ''}
 
       ${(room.status === 'waiting' && !you.isHost) ? `
       <div class="card"><div class="spread"><h3 style="margin:0">选题</h3><span class="dim">等待房主选题…</span></div>
@@ -459,7 +589,7 @@ function viewRoom() {
       ${banners(room, you)}
 
       <div class="card">
-        <div class="spread"><h3 style="margin:0">时间线</h3>
+        <div class="spread"><h3 style="margin:0">公共提问 · 对话记录 <span class="dim">（${S.log.length} 条 · 所有人共享）</span></h3>
           <div class="row">
             <button data-hint="1" ${you.canHintT12 ? '' : 'disabled'}>提示 T1</button>
             <button data-hint="2" ${you.canHintT12 ? '' : 'disabled'}>提示 T2</button>
@@ -467,13 +597,11 @@ function viewRoom() {
             <button id="btnGuess" ${you.guessLeft && room.status === 'playing' ? '' : 'disabled'}>揭秘（剩 ${you.guessLeft}）</button>
           </div>
         </div>
-        <div class="timeline" id="tl">
-          ${S.pendingTimeline.map((t) => `
-            <div class="tl ${t.kind === 'system' ? 'sys' : t.kind === 'rejected' ? 'err' : t.kind === 'vote' ? 'vote' : ''}">
-              <div>${t.kind === 'question' && t.answer ? `<b>${esc(nameOf(room, t.memberId || ''))}</b>：${esc(t.text)} → <b>${answerLabel(t.answer)}</b>${t.reasonCode && t.reasonCode !== 'NONE' ? ` <span class="dim">（${esc(t.reasonCode)}）</span>` : ''}` : esc(t.text)}</div>
-              ${t.meta ? `<div class="meta">${esc(t.meta)}</div>` : ''}
-            </div>`).join('')}
+        <div class="log" id="log">
+          ${S.log.map((t) => logEntry(t, room, you)).join('') || '<div class="dim">还没有记录。轮到你时提第一个问题吧。</div>'}
         </div>
+        <div class="dim" style="margin-top:8px">所有人的提问与主持人判定都在这里，按时间排列，全员可见（自己的提问高亮）。
+          提问一旦发出即公开，无法撤回；草稿框里的内容在发送前只有你自己能看到。</div>
       </div>
 
       <div class="card">
@@ -500,6 +628,45 @@ function viewRoom() {
   ${S.recap ? recapModal(S.recap) : ''}`;
 }
 
+/** 题目块：汤面单独成块（汤底只在复盘揭晓，服务端根本不下发） */
+function puzzleCard(puzzle) {
+  return `
+  <div class="card"><div class="spread"><h3 style="margin:0">题目 · 汤面</h3>
+    <span class="dim">汤底不在这里，对局结束后用「查看复盘」揭晓</span></div>
+    <div class="puzzle">
+      <div class="spread">
+        <div class="ptitle">《${esc(puzzle.title)}》</div>
+        <div class="row">
+          <span class="pill ${String(puzzle.rating).toLowerCase()}">${esc(puzzle.rating)}</span>
+          <span class="pill">难度 ${puzzle.difficulty}</span>
+          ${puzzle.estMinutes ? `<span class="pill">约 ${puzzle.estMinutes} 分钟</span>` : ''}
+        </div>
+      </div>
+      <div class="surface">${esc(puzzle.surface)}</div>
+      <div class="row" style="margin-top:8px">
+        ${(puzzle.tags || []).map((t) => `<span class="pill">${esc(t)}</span>`).join('')}
+        ${(puzzle.sensitiveTags || []).map((t) => `<span class="pill l3">含：${esc(t)}</span>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+/** 公共对话记录里的一条：提问（含判定）或系统事件 */
+function logEntry(t, room, you) {
+  if (t.kind === 'question') {
+    const who = t.memberName || nameOf(room, t.memberId || '');
+    const mine = t.memberId && you && t.memberId === you.memberId;
+    return `<div class="qa${mine ? ' mine' : ''}">
+      <div class="head"><b>${esc(who)}${mine ? '（你）' : ''}</b><span>第 ${t.turnSeq} 轮 · ${fmtClock(t.at)}</span></div>
+      <div class="q">${esc(t.text)}</div>
+      <div class="a ${esc(t.answer || '')}">主持人：<b>${answerLabel(t.answer)}</b>${t.reasonCode && t.reasonCode !== 'NONE' ? ` <span class="dim">（${esc(t.reasonCode)}）</span>` : ''}${t.late ? ' <span class="late">· 临界提交</span>' : ''}</div>
+    </div>`;
+  }
+  const cls = t.kind === 'rejected' ? 'err' : t.kind === 'vote' ? 'vote' : 'sys';
+  return `<div class="tl ${cls}">${t.memberId ? `<b>${esc(nameOf(room, t.memberId))}</b>：` : ''}${esc(t.text)}
+    <div class="meta">${fmtClock(t.at)}${t.meta ? ' · ' + esc(t.meta) : ''}</div></div>`;
+}
+
 function banners(room, you) {
   const out = [];
   if (room.ai.state === 'BLOCKED') {
@@ -507,12 +674,12 @@ function banners(room, you) {
       ${you.isHost ? '<div class="row" style="margin-top:6px"><button id="btnFixKey">更新 API Key</button><button id="btnRevokeKey">撤销并改用平台额度</button></div>' : ''}</div>`);
   }
   if (room.vote && room.vote.type === 'fallback_credit' && room.vote.status === 'open') {
-    out.push(`<div class="notice">投票：是否临时启用平台备用额度继续对局？已投 ${room.vote.votedCount} / ${room.vote.eligibleCount}，剩余 ${fmt(room.vote.deadlineAt - room.serverTime)}
+    out.push(`<div class="notice">投票：是否临时启用平台备用额度继续对局？已投 ${room.vote.votedCount} / ${room.vote.eligibleCount}，剩余 <span data-deadline="${room.vote.deadlineAt}">${fmt(room.vote.deadlineAt - serverNow())}</span>
       <div class="row" style="margin-top:6px"><button data-vote="yes">赞成</button><button data-vote="no">反对</button><button data-vote="abstain">弃权</button></div>
       <div class="dim">门槛：有效人数 ≥ 2 且赞成票过半；挂机 / 离线成员的表决不被受理</div></div>`);
   }
   if (room.vote && room.vote.type === 'puzzle_choice' && room.vote.status === 'open') {
-    out.push(`<div class="card"><h3>投票选汤（已投 ${room.vote.votedCount} / ${room.vote.eligibleCount}，剩余 ${fmt(room.vote.deadlineAt - room.serverTime)}）</h3>
+    out.push(`<div class="card"><h3>投票选汤（已投 ${room.vote.votedCount} / ${room.vote.eligibleCount}，剩余 <span data-deadline="${room.vote.deadlineAt}">${fmt(room.vote.deadlineAt - serverNow())}</span>）</h3>
       <div class="cands">${(room.vote.candidates || []).map((c) => `
         <div class="cand">
           <div class="row"><span class="pill ${c.rating.toLowerCase()}">${esc(c.rating)}</span><span class="pill">难度 ${c.difficulty}</span><span class="pill">约 ${c.estMinutes} 分钟</span></div>
@@ -568,26 +735,59 @@ function cfgModal(room) {
 }
 
 function guessModal() {
+  const text = S.drafts.guessText ?? '';
   return `<div class="overlay"><div class="modal">
     <div class="spread"><h3 style="margin:0">提交你的推理（揭秘）</h3><button id="btnGuessCancel">取消</button></div>
     <p class="dim">判定尺度：关键事实点全部命中 + 表达出因果链 = 命中；命中 ≥ 60% = 接近（只告诉你数量，不告诉你命中了哪几条）；否则未命中。</p>
-    <textarea id="guessText" placeholder="用几句话说明：发生了什么、为什么会这样"></textarea>
+    <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样">${esc(text)}</textarea>
     <div class="row" style="margin-top:10px"><button class="primary" id="btnGuessSubmit">提交推理</button></div>
   </div></div>`;
 }
 
+/** 默认提供方（服务端 /api/config 下发，取不到就用 DeepSeek 官方端点兜底） */
+function defaultBaseUrl() { return (S.config && S.config.defaultBaseUrl) || 'https://api.deepseek.com'; }
+function defaultModel() { return (S.config && S.config.defaultModel) || 'deepseek-flash'; }
+
+/**
+ * 房主自备 API Key。
+ *
+ * ⚠️ 这个弹窗踩过两个坑，改法就写在控件属性里：
+ *   · 轮询每 1.8 秒会整页重渲染 → 输入到一半的内容会被清空。
+ *     现在输入值实时存进 S.drafts（只在内存里），重渲染后回填；render() 另外恢复焦点与光标位置。
+ *   · 用 type="password" 会被 Edge/Chrome 当成登录表单，弹「是否保存密码」并介入填充，
+ *     干扰输入（鼠标移开就可能被取消）。现在改用 type="text" + CSS 掩码（-webkit-text-security），
+ *     再配上 autocomplete="off/new-password"、data-form-type="other" 等标记，彻底避开密码管理器。
+ */
 function keyModal() {
+  const base = S.drafts.keyBase ?? defaultBaseUrl();
+  const model = S.drafts.keyModel ?? defaultModel();
+  const key = S.drafts.keyValue ?? '';
   return `<div class="overlay"><div class="modal">
     <div class="spread"><h3 style="margin:0">房主自备 API Key</h3><button id="btnKeyClose">关闭</button></div>
     <p class="dim">提交后服务端会先做一次连接测试：通过才加密入库并锁定生效（此后调用失败**不会**自动改用平台额度）；
       页面只显示掩码，任何人都无法回读原文。</p>
-    <div class="field"><label>Base URL</label><input id="keyBase" placeholder="https://api.example.com/v1"></div>
-    <div class="field"><label>模型名</label><input id="keyModel" placeholder="your-model"></div>
-    <div class="field"><label>API Key</label><input id="keyValue" type="password" placeholder="sk-..."></div>
-    ${S.keyMask ? `<div class="dim">当前掩码：<span class="mask">${esc(S.keyMask)}</span></div>` : ''}
+    <div class="field"><label>Base URL</label>
+      <input id="keyBase" name="ht-host-endpoint" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+        spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
+        value="${esc(base)}" placeholder="https://api.deepseek.com"></div>
+    <div class="field"><label>模型名</label>
+      <input id="keyModel" name="ht-host-model" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+        spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
+        value="${esc(model)}" placeholder="deepseek-flash"></div>
+    <div class="field"><label>API Key</label>
+      <input id="keyValue" name="ht-host-credential" type="text" class="secret" autocomplete="new-password"
+        autocapitalize="off" autocorrect="off" spellcheck="false" data-form-type="other"
+        data-lpignore="true" data-1p-ignore="true" value="${esc(key)}" placeholder="sk-..."></div>
+    <div class="row">
+      <button id="btnKeyToggle">显示 / 隐藏</button>
+      <span class="dim">默认已填好 DeepSeek：Base URL <code>https://api.deepseek.com</code> · 模型 <code>deepseek-flash</code>。
+        用别家兼容服务时改成对应的地址和模型名即可。</span>
+    </div>
+    ${S.keyMask ? `<div class="dim" style="margin-top:8px">当前掩码：<span class="mask">${esc(S.keyMask)}</span></div>` : ''}
     <div class="row" style="margin-top:10px"><button class="primary" id="btnKeySubmit">连接测试并提交</button>
       <button class="danger" id="btnKeyRevoke">撤销并销毁</button></div>
-    <div class="dim" style="margin-top:8px">提交失败时不会保存任何东西（服务端会立即销毁用于测试的密文）。</div>
+    <div class="dim" style="margin-top:8px">提交失败时不会保存任何东西（服务端会立即销毁用于测试的密文）。
+      Key 只留在本页内存里，不会写入浏览器存储。</div>
   </div></div>`;
 }
 
@@ -648,26 +848,33 @@ document.addEventListener('click', async (e) => {
       }
       case 'btnSkip': request({ t: 'skip_turn' }); break;
       case 'btnKey': S.keyModal = true; render(); break;
-      case 'btnKeyClose': S.keyModal = false; render(); break;
+      case 'btnKeyClose': S.keyModal = false; delete S.drafts.keyValue; render(); break;
+      case 'btnKeyToggle': {
+        const el = $('#keyValue');
+        if (el) el.classList.toggle('secret');
+        break;
+      }
       case 'btnKeySubmit': {
-        const baseUrl = $('#keyBase').value.trim();
-        const model = $('#keyModel').value.trim();
+        const baseUrl = ($('#keyBase').value || '').trim() || defaultBaseUrl();
+        const model = ($('#keyModel').value || '').trim() || defaultModel();
         const apiKey = $('#keyValue').value;                 // 只在内存中，提交后立即清空
         S.error = '';
         const res = await api('/api/credentials', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model }) });
         S.keyMask = res.credential.mask;
         S.notice = '已启用自备额度（' + res.message + '）';
         S.keyModal = false;
-        $('#keyValue') && ($('#keyValue').value = '');
+        delete S.drafts.keyValue;                            // Key 绝不留在内存里
+        if ($('#keyValue')) $('#keyValue').value = '';
         render();
         break;
       }
-      case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
+      case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; delete S.drafts.keyValue; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
       case 'btnGuess': S.guessModal = true; render(); break;
-      case 'btnGuessCancel': S.guessModal = false; render(); break;
+      case 'btnGuessCancel': S.guessModal = false; delete S.drafts.guessText; render(); break;
       case 'btnGuessSubmit': {
         const text = $('#guessText').value;
         S.guessModal = false;
+        delete S.drafts.guessText;
         request({ t: 'guess', text });
         break;
       }
@@ -700,11 +907,28 @@ function doSend() {
 }
 
 document.addEventListener('input', (e) => {
-  if (e.target && e.target.id === 'ask') {
+  const t = e.target;
+  if (!t || !t.id) return;
+  if (t.id === 'ask') {
     // 预输入草稿：只写本机 localStorage，绝不上传
-    localStorage.setItem(LS_DRAFT, e.target.value);
+    localStorage.setItem(LS_DRAFT, t.value);
+    S.drafts.ask = t.value;
+    return;
   }
+  // 弹窗输入（API Key / Base URL / 模型名 / 推理）：只存内存，重渲染时不丢；
+  // 关闭弹窗或提交后立即删除，尤其 API Key 绝不落盘。
+  if (t.id === 'keyBase' || t.id === 'keyModel' || t.id === 'keyValue' || t.id === 'guessText') {
+    S.drafts[t.id] = t.value;
+    return;
+  }
+  if (t.id === 'nick' || t.id === 'code') { S.drafts[t.id] = t.value; return; }
 });
+
+// 公共对话记录：只有用户本来就贴在底部时，新消息才自动滚到底
+document.addEventListener('scroll', (e) => {
+  const el = e.target;
+  if (el && el.id === 'log') S.logPinned = (el.scrollHeight - el.scrollTop - el.clientHeight) < 48;
+}, true);
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('#ask')) { e.preventDefault(); doSend(); }
@@ -728,9 +952,11 @@ document.addEventListener('visibilitychange', () => {
       const me = await api('/api/session');
       S.me = { roomId: me.roomId, memberId: me.memberId, token: token() };
       S.view = me.view; S.screen = 'room';
+      if (S.view && S.view.room) S.serverOffset = S.view.room.serverTime - Date.now();
       startPolling();
     } catch { clearSession(); }
   }
+  startTicker();          // 倒计时按秒走（只改文本/进度条，不整页重渲染）
   render();
 })();
 </script>

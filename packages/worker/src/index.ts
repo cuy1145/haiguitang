@@ -8,8 +8,9 @@
  *
  * 未完成端点统一返回 501 + 明确的 `MIGRATION_IN_PROGRESS`，避免"看起来能玩但行为不对"。
  */
+// 房主自备 Key 的默认提供方常量与 API 一起放在 room-api.ts（单一来源）
 import { json, securityHeaders } from './http.ts';
-import { handleApi } from './room-api.ts';
+import { handleApi, DEFAULT_HOST_BASE_URL, DEFAULT_HOST_MODEL } from './room-api.ts';
 import { listPurgeableRooms, purgeRoom } from './store-d1.ts';
 import { ConsoleLogger } from './log.ts';
 
@@ -23,6 +24,8 @@ export interface Env {
   AI_BASE_URL?: string;
   AI_MODEL?: string;
   AI_PROVIDER?: string;
+  DEFAULT_HOST_BASE_URL?: string;
+  DEFAULT_HOST_MODEL?: string;
   AI_TIMEOUT_MS?: string;
   AI_MAX_RETRIES?: string;
   DEV_TOOLS?: string;
@@ -64,6 +67,10 @@ export default {
         vaultEnabled: Boolean(env.MASTER_KEY),
         realModelEnabled: Boolean(env.AI_KEY && env.AI_BASE_URL && env.AI_MODEL),
         storage: 'd1',
+        // 房主自备 Key 的默认提供方（只下发非敏感字段，用于预填表单）
+        defaultProvider: env.AI_PROVIDER ?? 'openai-compatible',
+        defaultBaseUrl: env.DEFAULT_HOST_BASE_URL ?? DEFAULT_HOST_BASE_URL,
+        defaultModel: env.DEFAULT_HOST_MODEL ?? DEFAULT_HOST_MODEL,
       });
     }
 
