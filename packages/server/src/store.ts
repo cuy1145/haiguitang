@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import type { CoreMember, CoreRoom, GameConfig, Puzzle, PuzzleFact, PuzzleMeta } from '@ht/core';
 import type { CredentialRecord, CredentialState, EncryptedBlob } from './vault.ts';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export interface StoredMemberKeyState {
   hasKey: boolean;
@@ -34,6 +34,8 @@ export interface QuestionRecord {
   source: string;
   late: boolean;
   matchedFactIds: string[];
+  /** 「是 / 否」时可选的一句补充说明（已过泄露检查；没有就是 null） */
+  explain?: string | null;
   createdAt: number;
 }
 
@@ -163,6 +165,7 @@ export class Store {
         source TEXT NOT NULL,
         late INTEGER NOT NULL DEFAULT 0,
         matched_json TEXT NOT NULL,
+        explain TEXT,
         client_submit_id TEXT,
         created_at INTEGER NOT NULL,
         UNIQUE(room_id, turn_seq),
@@ -258,6 +261,9 @@ export class Store {
         UNIQUE(scope, period)
       );
     `);
+    // v1 → v2：questions 增加 explain（「是/否」后的可选补充说明）。
+    // 建表语句已经带上该列；对已存在的旧库这里补一次，失败（列已存在）忽略。
+    try { this.db.exec('ALTER TABLE questions ADD COLUMN explain TEXT'); } catch { /* 已存在 */ }
     this.db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, Date.now());
   }
 
@@ -440,11 +446,20 @@ export class Store {
 
   // ---------------------------------------------------------------- 提问 / 对局
   insertQuestion(q: QuestionRecord): void {
-    this.db.prepare(`
-      INSERT INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(room_id, turn_seq) DO NOTHING
-    `).run(q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.createdAt);
+    // explain 兼容旧库：列不存在时回落为不带该列的插入（Node 参考实现里库是本地文件）
+    try {
+      this.db.prepare(`
+        INSERT INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(room_id, turn_seq) DO NOTHING
+      `).run(q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, q.createdAt);
+    } catch {
+      this.db.prepare(`
+        INSERT INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(room_id, turn_seq) DO NOTHING
+      `).run(q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.createdAt);
+    }
   }
 
   listQuestions(roomId: string): QuestionRecord[] {
@@ -461,6 +476,7 @@ export class Store {
       source: String(r.source),
       late: Number(r.late) === 1,
       matchedFactIds: JSON.parse(String(r.matched_json ?? '[]')),
+      explain: r.explain === null || r.explain === undefined ? null : String(r.explain),
       createdAt: Number(r.created_at),
     }));
   }

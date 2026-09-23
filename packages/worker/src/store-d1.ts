@@ -92,7 +92,9 @@ export async function loadSnapshot(db: D1Database, roomId: string, opts: { withQ
         id: String(r.id), roomId: String(r.room_id), matchId: (r.match_id as string | null) ?? null,
         turnSeq: Number(r.turn_seq), memberId: String(r.member_id), text: String(r.text), answer: String(r.answer),
         reasonCode: String(r.reason_code), source: String(r.source), late: Number(r.late) === 1,
-        matchedFactIds: JSON.parse(String(r.matched_json ?? '[]')), createdAt: Number(r.created_at),
+        matchedFactIds: JSON.parse(String(r.matched_json ?? '[]')),
+        explain: r.explain === null || r.explain === undefined ? null : String(r.explain),
+        createdAt: Number(r.created_at),
       });
     }
   }
@@ -188,9 +190,9 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     if (this.knownQuestions.some((x) => x.turnSeq === q.turnSeq)) return;
     this.knownQuestions.push(q);
     this.pending.push({
-      sql: `INSERT OR IGNORE INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, client_submit_id, created_at)
-            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), null, q.createdAt, this.roomId, 0],
+      sql: `INSERT OR IGNORE INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, client_submit_id, created_at)
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
+      bindings: [q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, null, q.createdAt, this.roomId, 0],
     });
   }
 

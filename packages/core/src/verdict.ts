@@ -136,7 +136,10 @@ export type JudgeValidation =
   | { ok: true; result: JudgeResult }
   | { ok: false; reason: 'SCHEMA_INVALID' | 'LEAK_DETECTED' | 'INCONSISTENT' | 'UNANSWERABLE_ABUSE'; detail: string };
 
-const ALLOWED_KEYS = new Set(['answer', 'reason_code', 'matched_fact_ids']);
+const ALLOWED_KEYS = new Set(['answer', 'reason_code', 'matched_fact_ids', 'explain']);
+
+/** 补充说明的长度上限（字）：一句话，不能变成小作文 */
+export const EXPLAIN_MAX_CHARS = 30;
 
 /**
  * L3 输出校验（《阶段2》§2.2(c)）：模型返回后的四道检查。
@@ -175,7 +178,6 @@ export function validateJudgeOutput(raw: unknown, ctx: JudgeValidationCtx): Judg
     const shared = sharedNgram(value, ctx.truth, 8);
     if (shared) return { ok: false, reason: 'LEAK_DETECTED', detail: `输出与汤底共享片段：${shared}` };
   }
-
   const known = new Set(ctx.facts.map((f) => f.id));
   for (const id of matchedRaw) {
     if (!known.has(id)) return { ok: false, reason: 'INCONSISTENT', detail: `未知的事实点 id：${id}` };
@@ -203,8 +205,30 @@ export function validateJudgeOutput(raw: unknown, ctx: JudgeValidationCtx): Judg
       reasonCode: reasonCode as ReasonCode,
       matchedFactIds: matchedRaw as string[],
       source: 'model',
+      explain: sanitizeExplain(obj.explain, answer as AnswerEnum, ctx),
     },
   };
+}
+
+/**
+ * 「是 / 否」的补充说明（可选）：帮玩家理解这个结论的**范围**，不给新信息。
+ *
+ * 这里做的是**只丢不杀**的清洗 —— 说明写得不合适时返回 null（只留裸的"是/否"），
+ * 绝不因为这一句把整次判定判为失败（否则一句多嘴就会中断整局）。
+ * 规则：
+ *   · 只有 yes / no 允许带说明（irrelevant / unanswerable 说的是"无关/无法回答"，不需要）
+ *   · ≤ EXPLAIN_MAX_CHARS 字，且不得是问句（避免反问式提示）
+ *   · 不得与汤底共享 8-gram、不得近似抄写事实点原文（isLeaky）
+ */
+export function sanitizeExplain(raw: unknown, answer: AnswerEnum, ctx: JudgeValidationCtx): string | null {
+  if (typeof raw !== 'string') return null;
+  const text = raw.replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (answer !== 'yes' && answer !== 'no') return null;
+  if (text.length > EXPLAIN_MAX_CHARS) return null;
+  if (/[?？]$/.test(text)) return null;
+  if (isLeaky(text, ctx.truth, ctx.facts)) return null;
+  return text;
 }
 
 /** 原因码必须与可机判的输入特征一致（否则视为滥用）。 */

@@ -10,7 +10,7 @@
  *  - 输出不合规/泄露 → 拒收并降级为"规则裁决"（不涉及额度）
  */
 import {
-  PROMPT_VERSION, REASON_CODES, analyzeInput, decideFromFacts, preflight, sharedNgram,
+  PROMPT_VERSION, REASON_CODES, analyzeInput, decideFromFacts, isLeaky, preflight, sharedNgram,
   similarity, stableHash, validateJudgeOutput,
 } from '@ht/core';
 import type { AnswerEnum, JudgeResult, Puzzle, ReasonCode } from '@ht/core';
@@ -202,14 +202,22 @@ export class HostService {
     const system = [
       '你是海龟汤（情境推理游戏）的主持人。玩家只能得到「是 / 否 / 无关 / 无法回答」四类结论。',
       '你的唯一任务：把玩家的问题映射到给定的事实点，并返回严格 JSON。',
-      '输出格式（只能包含这三个字段，禁止任何解释、禁止输出汤底）：',
-      '{"answer":"yes|no|irrelevant|unanswerable","reason_code":"NONE|OUT_OF_SCOPE|META_QUESTION|LIST_REQUEST|SUBJECTIVE|COMPOUND_SPLIT_REQUIRED","matched_fact_ids":["f1"]}',
+      '输出格式（只能包含这四个字段，禁止任何解释、禁止输出汤底）：',
+      '{"answer":"yes|no|irrelevant|unanswerable","reason_code":"NONE|OUT_OF_SCOPE|META_QUESTION|LIST_REQUEST|SUBJECTIVE|COMPOUND_SPLIT_REQUIRED","matched_fact_ids":["f1"],"explain":"可省略"}',
       '规则：',
       '1) 问题指向某条事实点且该事实成立 → answer=yes，matched_fact_ids 填该条 id；',
       '2) 指向的事实点不成立 → answer=no；',
       '3) 问题涉及汤底未提及、与真相无关的要素 → answer=irrelevant；',
       '4) 只有在问题询问你自身/判断依据/置信度（META_QUESTION）、要求批量列举（LIST_REQUEST）、开放式无法二值化（SUBJECTIVE）、或世界外（OUT_OF_SCOPE）时才用 unanswerable，并给出对应 reason_code；',
       '5) 绝不复述汤底，绝不在 JSON 之外输出任何文字。',
+      '',
+      '【explain（可选，一句，不超过 25 个字）】',
+      '· 只在 answer 为 yes 或 no、且玩家很可能误解了这个"是/否"的适用范围时才写；不需要就整个省略该字段。',
+      '· 只允许说明：这个结论针对的是问题里的哪个部分，或问题的前提在本题设定中并不成立。',
+      '· 严禁引入汤底里没有的新信息：不得出现人名、数字、地点、原因、结局、动机等具体内容；',
+      '  严禁复述或改述汤底与事实点原文；严禁写成"接近了/再想想"这类引导式提示。',
+      '· 反例（不许写）：「是因为他吃了同伴的肉才自杀的」「和那次海难有关」「再想想他为什么自责」。',
+      '· 正例：「否——你问的情形在本题设定中不存在。」「是——但只针对你说的前半句。」',
       '',
       '【本局汤底（仅供你判断，严禁输出）】',
       puzzle.truth.truth,
@@ -283,16 +291,27 @@ export class HostService {
       }
       return { ok: false, errorClass: 'SCHEMA_INVALID', message: `模型输出不是可解析的 JSON（finish_reason=${finishReason || '未知'}）：${preview}` };
     }
-    // 额外兜底：原始文本绝不能包含汤底片段（即使解析成功也要拦）
-    const leak = sharedNgram(jsonText, puzzle.truth.truth, 8);
-    if (leak) return { ok: false, errorClass: 'LEAK_DETECTED', message: `输出与汤底共享片段：${leak}` };
-
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonText);
     } catch {
       return { ok: false, errorClass: 'SCHEMA_INVALID', message: '模型输出不是可解析的 JSON（补救解析后仍然失败）' };
     }
+    // 额外兜底：原始文本绝不能包含汤底片段（即使解析成功也要拦）
+    // 例外：explain（补充说明）属于"锦上添花"，违规时只丢掉这一句，绝不因此中断整局。
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const objOut = parsed as Record<string, unknown>;
+      if (typeof objOut.explain === 'string') {
+        const why = isLeaky(objOut.explain, puzzle.truth.truth, puzzle.facts);
+        if (why) {
+          this.deps.logger.info('judge_explain_dropped', { reason: why });
+          delete objOut.explain;
+        }
+      }
+    }
+    const sanitizedText = JSON.stringify(parsed);
+    const leak = sharedNgram(sanitizedText, puzzle.truth.truth, 8);
+    if (leak) return { ok: false, errorClass: 'LEAK_DETECTED', message: `输出与汤底共享片段：${leak}` };
 
     return {
       ok: true,

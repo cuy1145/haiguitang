@@ -250,6 +250,14 @@ export interface JudgeResult {
   reasonCode: ReasonCode;
   matchedFactIds: string[];
   source: VerdictSource;
+  /**
+   * 「是 / 否」时**可选**的一句补充说明（≤ 30 字，由模型按需给出）。
+   *
+   * 定位：帮玩家理解这个"是/否"的**范围**，而不是给新信息。
+   * 红线：不得引入汤底里没有的具体信息（人名、原因、结局），不得复述/改述汤底与事实点原文。
+   * 只要过不了泄露检查，就整条丢掉、只留裸的"是/否"（宁缺勿滥，绝不冒险提示）。
+   */
+  explain?: string | null;
 }
 
 export interface GuessResult {

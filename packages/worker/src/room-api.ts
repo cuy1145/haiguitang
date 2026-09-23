@@ -540,17 +540,17 @@ function publicQuestionLog(
   runtime: RoomRuntime,
   questions: Array<{
     turnSeq: number; memberId: string; text: string; answer: string;
-    reasonCode: string; source: string; late: boolean; createdAt: number;
+    reasonCode: string; source: string; late: boolean; explain?: string | null; createdAt: number;
   }>,
 ): Array<{
   turnSeq: number; memberId: string; memberName: string; text: string;
-  answer: string; reasonCode: string; source: string; late: boolean; at: number;
+  answer: string; reasonCode: string; source: string; late: boolean; explain: string | null; at: number;
 }> {
   const nameOf = (id: string): string => getMember(runtime.room, id)?.name ?? '已离开的玩家';
   return questions.map((q) => ({
     turnSeq: q.turnSeq, memberId: q.memberId, memberName: nameOf(q.memberId),
     text: q.text, answer: q.answer, reasonCode: q.reasonCode, source: q.source,
-    late: q.late === true, at: q.createdAt,
+    late: q.late === true, explain: q.explain ?? null, at: q.createdAt,
   }));
 }
 

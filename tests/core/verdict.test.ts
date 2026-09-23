@@ -102,8 +102,47 @@ test('输出越界字段（explanation）→ SCHEMA_INVALID，绝不透传', () 
   assert.equal(v.ok === false && v.reason, 'SCHEMA_INVALID');
 });
 
-test('输出夹带汤底片段 → LEAK_DETECTED', () => {
-  const v = validateJudgeOutput(
+// ---------------------------------------------------------------- explain（「是/否」的可选补充说明）
+test('explain：合法的一句说明被保留；irrelevant/unanswerable 不允许带', () => {
+  const f = analyzeInput('他以前出过海吗？').features;
+  const yes = validateJudgeOutput(
+    { answer: 'yes', reason_code: 'NONE', matched_fact_ids: ['f1'], explain: '否——你问的情形在本题设定中不存在。'.replace('否', '是') },
+    { truth: puzzle.truth.truth, facts: leakFacts, features: f },
+  );
+  assert.equal(yes.ok, true);
+  assert.equal(yes.ok === true && yes.result.explain, '是——你问的情形在本题设定中不存在。');
+
+  const irrelevant = validateJudgeOutput(
+    { answer: 'irrelevant', reason_code: 'NONE', matched_fact_ids: [], explain: '这句不该被保留。' },
+    { truth: puzzle.truth.truth, facts: leakFacts, features: f },
+  );
+  assert.equal(irrelevant.ok, true, 'irrelevant 带说明不算错，只是会被丢掉');
+  assert.equal(irrelevant.ok === true && irrelevant.result.explain, null);
+});
+
+test('explain：超长 / 问句 / 复述汤底 → 只丢这一句，判定本身依然有效（不中断整局）', () => {
+  const f = analyzeInput('他以前出过海吗？').features;
+  const base = { answer: 'no' as const, reason_code: 'NONE' as const, matched_fact_ids: ['f6'] };
+  const ctx = { truth: puzzle.truth.truth, facts: leakFacts, features: f };
+
+  const tooLong = validateJudgeOutput({ ...base, explain: '这一条不成立，原因是你问的那个部分的设定和你想的完全不一样，请换个方向继续推理下去' }, ctx);
+  assert.equal(tooLong.ok, true);
+  assert.equal(tooLong.ok === true && tooLong.result.explain, null, '超过 30 字直接丢弃');
+
+  const asks = validateJudgeOutput({ ...base, explain: '你确定要问这个吗？' }, ctx);
+  assert.equal(asks.ok, true);
+  assert.equal(asks.ok === true && asks.result.explain, null, '反问式说明会被丢弃');
+
+  const leaky = validateJudgeOutput({ ...base, explain: puzzle.truth.truth.slice(0, 28) }, ctx);
+  assert.equal(leaky.ok, true, '复述汤底也不该让整次判定失败');
+  assert.equal(leaky.ok === true && leaky.result.explain, null, '与汤底重合的说明会被丢弃');
+
+  const none = validateJudgeOutput({ ...base }, ctx);
+  assert.equal(none.ok, true);
+  assert.equal(none.ok === true && none.result.explain, null);
+});
+
+test('输出夹带汤底片段 → LEAK_DETECTED', () => {  const v = validateJudgeOutput(
     { answer: 'yes', reason_code: 'NONE', matched_fact_ids: [LEAK_MARKER] },
     { truth: puzzle.truth.truth, facts: leakFacts, features: analyzeInput('他以前出过海吗？').features },
   );

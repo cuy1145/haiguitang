@@ -78,6 +78,7 @@
   .log .qa .a{margin-top:5px;font-size:12.5px;color:var(--fg2)}
   .log .qa .a.yes{color:#9fe3c0}.log .qa .a.no{color:#ff9fa8}
   .log .qa .a.unanswerable{color:#f2d08a}
+  .log .qa .explain{color:var(--fg2);font-style:italic}
   .log .qa.mine{border-color:#38427a}
   .log .qa .late{color:var(--warn)}
   /* Key 输入框：不用 type=password，避免浏览器/密码管理器介入（自动填充弹窗会打断输入） */
@@ -116,6 +117,7 @@ const S = {
   questions: [],                        // 公共提问记录（来自 questions 表，所有人都能看到）
   log: [],                              // 合并后的公共对话记录（提问 + 系统事件，按时间排序）
   logPinned: true,                      // 用户是否停在记录底部（是则新消息自动滚到底）
+  renderPending: false,                 // 输入期间被推迟的渲染（输入结束后补一次）
   drafts: {},                            // 弹窗输入的临时值：只在本页内存里，重渲染不丢；关闭即清
   serverOffset: 0,                      // 服务端时钟 - 本机时钟（计时用服务端时间为准）
   hint: '',
@@ -289,6 +291,7 @@ function applyState(data) {
     S.questions = data.questions.map((q) => ({
       at: q.at, kind: 'question', memberId: q.memberId, memberName: q.memberName, turnSeq: q.turnSeq,
       text: q.text, answer: q.answer, reasonCode: q.reasonCode, source: q.source, late: q.late === true,
+      explain: q.explain || null,
     }));
   }
   S.log = buildLog(S.questions, S.pendingTimeline);
@@ -414,13 +417,43 @@ function applyView(view) {
  * 渲染
  *
  * ⚠️ 这里是全量 innerHTML 重渲染，而轮询每 1.8 秒就会调一次 render()。
- *    所以必须显式保住"用户正在输入的东西"：
- *      · 记录当前焦点元素 id + 光标位置，重渲染后恢复（否则打字会被打断）
- *      · 输入值统一走 S.drafts 回填（否则已输入/已粘贴的内容会被清空）
- *      · 对话记录若原本贴在底部，重渲染后继续贴底
+ *    **正在输入时绝不重渲染**：整页 innerHTML 会把输入框整个换掉，
+ *    中文输入法正在组字的内容会直接被打断、光标丢失 —— 表现就是"打不进字/一闪一闪"。
+ *    输入结束后（失焦或停手 700ms）再补一次渲染，把期间收到的状态追上。
+ *    另外仍显式保住：焦点/光标位置、S.drafts 回填的输入值、对话记录是否贴底。
  * ==========================================================================*/
-function render() {
+function isEditing() {
+  const a = document.activeElement;
+  if (!a || !a.tagName) return false;
+  const editable = a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable === true;
+  return editable && $('#app').contains(a);
+}
+
+let deferredRenderTimer = null;
+function scheduleDeferredRender() {
+  if (deferredRenderTimer) clearTimeout(deferredRenderTimer);
+  deferredRenderTimer = setTimeout(() => {
+    deferredRenderTimer = null;
+    if (S.renderPending && !isEditing()) render(true);
+  }, 700);
+}
+
+/** 输入结束（失焦）后补渲染；延迟一点，避免把正要点击的按钮提前替换掉 */
+function flushDeferredRender() {
+  setTimeout(() => {
+    if (S.renderPending && !isEditing()) render(true);
+  }, 250);
+}
+
+function render(force = false) {
   const app = $('#app');
+  if (!force && isEditing()) {
+    S.renderPending = true;
+    scheduleDeferredRender();
+    return;
+  }
+  S.renderPending = false;
+
   const active = document.activeElement;
   const keep = active && active.id && app.contains(active) && typeof active.selectionStart === 'number'
     ? { id: active.id, start: active.selectionStart, end: active.selectionEnd }
@@ -665,7 +698,7 @@ function logEntry(t, room, you) {
     return `<div class="qa${mine ? ' mine' : ''}">
       <div class="head"><b>${esc(who)}${mine ? '（你）' : ''}</b><span>第 ${t.turnSeq} 轮 · ${fmtClock(t.at)}</span></div>
       <div class="q">${esc(t.text)}</div>
-      <div class="a ${esc(t.answer || '')}">主持人：<b>${answerLabel(t.answer)}</b>${t.reasonCode && t.reasonCode !== 'NONE' ? ` <span class="dim">（${esc(t.reasonCode)}）</span>` : ''}${t.late ? ' <span class="late">· 临界提交</span>' : ''}</div>
+      <div class="a ${esc(t.answer || '')}">主持人：<b>${answerLabel(t.answer)}</b>${t.reasonCode && t.reasonCode !== 'NONE' ? ` <span class="dim">（${esc(t.reasonCode)}）</span>` : ''}${t.late ? ' <span class="late">· 临界提交</span>' : ''}${t.explain ? `<br><span class="explain">${esc(t.explain)}</span>` : ''}</div>
     </div>`;
   }
   const cls = t.kind === 'rejected' ? 'err' : t.kind === 'vote' ? 'vote' : 'sys';
@@ -744,8 +777,10 @@ function answerLabel(a) { return { yes: '是', no: '否', irrelevant: '无关', 
  * ==========================================================================*/
 function cfgModal(room) {
   const c = room.config;
-  const num = (k, label, min, max) => `<div class="field"><label>${label}</label><input type="number" data-cfg="${k}" value="${c[k]}" min="${min}" max="${max}"></div>`;
-  const bool = (k, label) => `<div class="field"><label>${label}</label><div><input type="checkbox" data-cfg="${k}" ${c[k] ? 'checked' : ''}></div></div>`;
+  // 草稿优先：用户在弹窗里改过的值即使被重渲染也要留住（这些控件没有 id，走 cfg: 前缀）
+  const cur = (k) => (S.drafts[`cfg:${k}`] !== undefined ? S.drafts[`cfg:${k}`] : c[k]);
+  const num = (k, label, min, max) => `<div class="field"><label>${label}</label><input type="number" data-cfg="${k}" value="${cur(k)}" min="${min}" max="${max}"></div>`;
+  const bool = (k, label) => `<div class="field"><label>${label}</label><div><input type="checkbox" data-cfg="${k}" ${cur(k) ? 'checked' : ''}></div></div>`;
   return `<div class="overlay"><div class="modal">
     <div class="spread"><h3 style="margin:0">对局参数（config_version ${room.configVersion}）</h3><button id="btnCfgClose">关闭</button></div>
     <p class="dim">开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。</p>
@@ -929,15 +964,21 @@ document.addEventListener('click', async (e) => {
       case 'pickPuzzle': request({ t: 'start', mode: 'pick', puzzleId: el.getAttribute('data-pick') }); break;
       case 'btnStartVote': request({ t: 'start', mode: 'vote' }); break;
       case 'btnCfg': S.configModal = true; render(); break;
-      case 'btnCfgClose': S.configModal = false; render(); break;
+      case 'btnCfgClose':
+        Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
+        S.configModal = false; render(); break;
       case 'btnCfgApply': {
         const patch = {};
         document.querySelectorAll('[data-cfg]').forEach((input) => {
           const k = input.getAttribute('data-cfg');
           patch[k] = input.type === 'checkbox' ? input.checked : Number(input.value);
         });
-        request({ t: 'config', patch, expectedVersion: room.configVersion });
-        S.configModal = false;
+        const res = await sendAction({ type: 'config', patch, expectedVersion: room.configVersion });
+        if (res) {
+          // 服务端已接受：清掉草稿，之后以服务端配置为准
+          Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
+          S.configModal = false;
+        }
         break;
       }
       case 'btnSkip': request({ t: 'skip_turn' }); break;
@@ -1056,6 +1097,12 @@ document.addEventListener('input', (e) => {
     }
     return;
   }
+  // 对局参数弹窗（没有 id，用 data-cfg 记录草稿）
+  if (typeof t.hasAttribute === 'function' && t.hasAttribute('data-cfg')) {
+    const k = t.getAttribute('data-cfg');
+    S.drafts[`cfg:${k}`] = t.type === 'checkbox' ? t.checked : t.value;
+    return;
+  }
   if (t.id === 'nick' || t.id === 'code') { S.drafts[t.id] = t.value; return; }
 });
 
@@ -1064,6 +1111,12 @@ document.addEventListener('scroll', (e) => {
   const el = e.target;
   if (el && el.id === 'log') S.logPinned = (el.scrollHeight - el.scrollTop - el.clientHeight) < 48;
 }, true);
+
+// 光标离开输入框 → 把输入期间推迟的渲染补上（延迟 250ms，先让点击事件走完）
+document.addEventListener('focusout', (e) => {
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) flushDeferredRender();
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('#ask')) { e.preventDefault(); doSend(); }

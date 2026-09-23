@@ -17,6 +17,8 @@ export interface TimelineEntry {
   answer?: JudgeResult['answer'];
   reasonCode?: string;
   source?: JudgeResult['source'];
+  /** 「是/否」时可选的一句补充说明（已过泄露检查，可缺省） */
+  explain?: string | null;
   meta?: string;
 }
 

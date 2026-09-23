@@ -492,7 +492,8 @@ export class RoomRuntime {
         const q: QuestionRecord = {
           id: this.deps.newId('q'), roomId: this.room.id, matchId: this.matchId, turnSeq,
           memberId, text, answer: result.answer, reasonCode: result.reasonCode, source: result.source,
-          late: this.room.turn.lateSubmit, matchedFactIds: result.matchedFactIds, createdAt: Date.now(),
+          late: this.room.turn.lateSubmit, matchedFactIds: result.matchedFactIds,
+          explain: result.explain ?? null, createdAt: Date.now(),
         };
         this.deps.store.insertQuestion(q);
         const before = this.room.revealedFacts.length;
@@ -502,6 +503,7 @@ export class RoomRuntime {
         this.timeline.push({
           seq: ++this.room.eventSeq, kind: 'question', at: this.now, memberId, text,
           answer: result.answer, reasonCode: result.reasonCode, source: result.source,
+          explain: result.explain ?? null,
           meta: `来源：${result.source === 'cache' ? '判定缓存' : result.source === 'rule' ? '规则拦截' : '模型映射'}${unlocked > 0 ? ` · 解锁 ${unlocked} 个事实点` : ''}`,
         });
         const out = reduce(this.room, { type: 'JUDGE_DONE' }, this.ctx());
