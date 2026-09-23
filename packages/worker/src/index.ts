@@ -70,6 +70,16 @@ export default {
       }, 501);
     }
 
+    // 方案 A 改用轮询，不再提供 WebSocket。
+    // 这里显式返回 410，避免落到静态资源兜底（那会让前端误以为是网络问题而无限重连）。
+    if (url.pathname === '/ws') {
+      return json({
+        error: 'WEBSOCKET_REMOVED',
+        message: '本部署使用 D1 + 轮询方案（无 Durable Objects），WebSocket 不再提供；前端正在改为轮询',
+        pollEndpoints: ['/api/rooms/:id/state', '/api/rooms/:id/events?since=seq'],
+      }, 410);
+    }
+
     // 静态资源（前端）
     const asset = await env.ASSETS.fetch(request);
     const headers = new Headers(asset.headers);
