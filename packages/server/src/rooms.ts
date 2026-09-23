@@ -327,6 +327,18 @@ export class RoomRuntime {
     });
   }
 
+  /** 恢复候选题目列表。
+   *  无状态运行时（Cloudflare D1 方案）每个请求都会重建 RoomRuntime，内存里的 candidates 会丢失，
+   *  因此需要从持久化的投票记录（vote.puzzleIds）或题库筛选结果里恢复出来。 */
+  setCandidates(puzzleIds: string[]): void {
+    this.candidates = [...puzzleIds];
+  }
+
+  /** 候选题目 id 列表（只读，便于调试与测试）。 */
+  candidateIds(): string[] {
+    return [...this.candidates];
+  }
+
   view(viewerId: string): RoomView {
     const puzzle = this.currentPuzzle();
     const candidatePuzzles = this.candidates

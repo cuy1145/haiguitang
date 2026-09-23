@@ -10,6 +10,10 @@
  */
 import { json, securityHeaders } from './http.ts';
 import { handleApi } from './room-api.ts';
+import { listPurgeableRooms, purgeRoom } from './store-d1.ts';
+import { ConsoleLogger } from './log.ts';
+
+const logger = new ConsoleLogger('info');
 
 export interface Env {
   DB: D1Database;
@@ -90,6 +94,35 @@ export default {
     for (const [k, v] of Object.entries(securityHeaders('static'))) headers.set(k, v);
     void ctx;
     return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
+  },
+
+  /**
+   * Cron 清理（wrangler.toml: `crons = ["17 * * * *"]`）。
+   * 只做"没人访问、也就没人会来管"的收尾 —— 对局计时由请求内的惰性推进负责，不依赖 Cron。
+   *  · 空房间（含单人退出后残留的）→ 立即清理
+   *  · 未开局超 6 小时 / 已结束超 24 小时 / 超 24 小时无更新
+   *  · 过期密钥密文物理清空
+   */
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    const now = Date.now();
+    try {
+      const purgeable = await listPurgeableRooms(env.DB, now);
+      for (const room of purgeable) {
+        await purgeRoom(env.DB, room.id);
+        logger.info('room_purged', { room_id: room.id, code: room.reason });
+      }
+      const destroyed = await env.DB.prepare(
+        `UPDATE credentials SET state='destroyed', cipher=NULL, iv=NULL, tag=NULL, key_id=NULL,
+           fingerprint=NULL, mask=NULL, destroyed_reason='TTL_EXPIRED', ttl_expires_at=NULL
+         WHERE state IN ('active','suspended','validating') AND ttl_expires_at IS NOT NULL AND ttl_expires_at <= ?`,
+      ).bind(now).run();
+      logger.info('cron_done', {
+        purged_rooms: purgeable.length,
+        expired_credentials: destroyed.meta?.changes ?? 0,
+      });
+    } catch (err) {
+      logger.error('cron_failed', { code: (err as Error).message });
+    }
   },
 } satisfies ExportedHandler<Env>;
 

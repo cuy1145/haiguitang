@@ -264,6 +264,27 @@ function send(frame) {
   }
 }
 
+/** 主动离开房间：先告诉服务端（最后一人离开会被立即清理），再清本地 */
+async function leaveRoom() {
+  if (token()) {
+    try {
+      await fetch('/api/rooms/actions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}` },
+        body: JSON.stringify({ type: 'leave' }),
+        keepalive: true,
+      });
+    } catch { /* 网络失败也要允许离开 */ }
+  }
+  clearSession();
+  stopPolling();
+  S.screen = 'entry';
+  S.view = null;
+  S.notice = '';
+  S.error = '';
+  render();
+}
+
 function noticeFor(action) {
   switch (action.type) {
     case 'submit': return '已提交';
@@ -414,6 +435,23 @@ function viewRoom() {
 
       ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
       ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
+
+      ${(v.candidates && v.candidates.length > 0 && room.status === 'waiting') ? `
+      <div class="card"><div class="spread"><h3 style="margin:0">选题（${v.candidates.length} 道可选）</h3>
+        <span class="dim">${you.isHost ? '点「选这道」直接开局，或发起投票让成员选' : '等待房主选题'}</span></div>
+        <div class="cands">
+          ${v.candidates.map((c) => `
+            <div class="cand">
+              <div class="row"><span class="pill ${String(c.rating).toLowerCase()}">${esc(c.rating)}</span>
+                <span class="pill">难度 ${c.difficulty}</span><span class="pill">约 ${c.estMinutes} 分钟</span></div>
+              <div>${esc(c.surface)}</div>
+              <div class="row">${(c.tags || []).map((t) => `<span class="pill">${esc(t)}</span>`).join('')}
+                ${(c.sensitiveTags || []).map((t) => `<span class="pill l3">含：${esc(t)}</span>`).join('')}</div>
+              ${you.isHost ? `<button data-pick="${esc(c.id)}">选这道</button>` : ''}
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
+
       ${banners(room, you)}
 
       <div class="card">
@@ -572,13 +610,14 @@ function recapModal(recap) {
  * 交互绑定
  * ==========================================================================*/
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[id],[data-hint],[data-vote],[data-votepuzzle],[data-reenable],[data-cfg]');
+  const el = e.target.closest('[id],[data-pick],[data-hint],[data-vote],[data-votepuzzle],[data-reenable],[data-cfg]');
   if (!el) return;
   const id = el.id;
   const hintTier = el.getAttribute('data-hint');
   const vote = el.getAttribute('data-vote');
   const votePuzzle = el.getAttribute('data-votepuzzle');
   const reenable = el.getAttribute('data-reenable');
+  const pickPuzzle = el.getAttribute && el.getAttribute('data-pick');
   const room = S.view ? S.view.room : null;
 
   try {
@@ -586,8 +625,10 @@ document.addEventListener('click', async (e) => {
     if (vote) { S.error = ''; request({ t: 'vote', choice: vote }); return; }
     if (votePuzzle) { S.error = ''; request({ t: 'vote', choice: votePuzzle }); return; }
     if (reenable) { S.error = ''; request({ t: 'reenable_key', yes: reenable === 'yes' }); return; }
+    if (pickPuzzle) { S.error = ''; request({ t: 'start', mode: 'pick', puzzleId: pickPuzzle }); return; }
     switch (id) {
       case 'btnStart': request({ t: 'start', mode: 'pick' }); break;
+      case 'pickPuzzle': request({ t: 'start', mode: 'pick', puzzleId: el.getAttribute('data-pick') }); break;
       case 'btnStartVote': request({ t: 'start', mode: 'vote' }); break;
       case 'btnCfg': S.configModal = true; render(); break;
       case 'btnCfgClose': S.configModal = false; render(); break;
@@ -631,7 +672,7 @@ document.addEventListener('click', async (e) => {
       case 'btnDeclineReturn': request({ t: 'decline_return' }); break;
       case 'btnFixKey': S.keyModal = true; render(); break;
       case 'btnRevokeKey': await api('/api/credentials', { method: 'DELETE' }); S.notice = '已撤销 Key'; render(); break;
-      case 'btnLeave': clearSession(); S.screen = 'entry'; S.view = null; stopPolling(); render(); break;
+      case 'btnLeave': await leaveRoom(); break;
       case 'btnRecap': {
         const recap = await api('/api/recap');
         S.recap = recap; render();

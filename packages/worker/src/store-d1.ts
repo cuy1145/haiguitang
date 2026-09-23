@@ -314,6 +314,8 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
   }
 
   // ---- ③ 生成写回语句（房间 CAS + 全部派生写入）
+  /** 房间已被物理清理（最后一人离开）：此时不得再写回或重试 */
+  purged = false;
   private pendingRoom: CoreRoom | null = null;
   private matchesRuntime: RoomSnapshot['match'] | null = null;
 
@@ -412,6 +414,51 @@ export async function findRoomByCode(db: D1Database, code: string): Promise<stri
 export async function roomCodeTaken(db: D1Database, code: string): Promise<boolean> {
   const row = await db.prepare('SELECT 1 AS x FROM rooms WHERE code = ?').bind(code).first<Row>();
   return Boolean(row);
+}
+
+/**
+ * 物理清理一个房间：房间行 + 全部关联数据（含密钥密文）。
+ * 触发时机：最后一名成员主动离开（"单人退出即视为过期房间，直接清理"）、以及 Cron 清理扫描。
+ * 密钥密文一并删除 —— 与"房间销毁即销毁密钥"的红线一致。
+ */
+export async function purgeRoom(db: D1Database, roomId: string): Promise<void> {
+  await db.batch([
+    db.prepare('DELETE FROM sessions WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM room_events WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM questions WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM votes WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM matches WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM credit_grants WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM credentials WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM members WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM rooms WHERE id = ?').bind(roomId),
+  ]);
+}
+
+/**
+ * 找出应当清理的房间（Cron 使用）：
+ *  · 已经没有任何成员（含"单人退出"之后残留的空房间）
+ *  · 未开局且创建超过 6 小时
+ *  · 已结束且超过 24 小时
+ *  · 超过 24 小时没有任何更新（兜底）
+ */
+export async function listPurgeableRooms(db: D1Database, now: number): Promise<Array<{ id: string; reason: string }>> {
+  const rows = await db.prepare(`
+    SELECT r.id, r.status, r.created_at, r.updated_at,
+           (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id) AS member_count
+      FROM rooms r
+     WHERE (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id) = 0
+        OR (r.status = 'waiting' AND r.created_at < ?)
+        OR (r.status = 'settled' AND r.updated_at < ?)
+        OR (r.updated_at < ?)
+     LIMIT 200
+  `).bind(now - 6 * 3600 * 1000, now - 24 * 3600 * 1000, now - 24 * 3600 * 1000).all<Row>();
+  return (rows.results ?? []).map((r) => ({
+    id: String(r.id),
+    reason: Number(r.member_count) === 0 ? 'NO_MEMBERS'
+      : String(r.status) === 'waiting' ? 'WAIT_EXPIRED'
+        : String(r.status) === 'settled' ? 'SETTLED_TIMEOUT' : 'IDLE_TIMEOUT',
+  }));
 }
 
 // ---------------------------------------------------------------- 行 → 对象

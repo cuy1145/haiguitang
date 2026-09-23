@@ -23,7 +23,7 @@ import { HostService } from '../../server/src/ai.ts';
 import type { Env } from './index.ts';
 import {
   D1RoomStore, flushRoomStore, fetchEventsSince, findRoomByCode, loadSnapshot, lookupSession,
-  roomCodeTaken, saveSession,
+  roomCodeTaken, saveSession, purgeRoom,
 } from './store-d1.ts';
 import { ConsoleLogger } from './log.ts';
 import { WebCryptoVault } from './vault.ts';
@@ -153,6 +153,19 @@ async function withRoom(
       rand: Math.random,
     });
 
+    // 恢复候选题目列表：无状态请求下 RoomRuntime 内存里的 candidates 每次都是空的，
+    //   · 等待开局 → 按房间筛选条件给出可选题目（房主可从中指定）
+    //   · 选题投票进行中 → 用投票记录里持久化的 puzzleIds（否则客户端看不到候选卡片）
+    if (snapshot.room.status === 'waiting') {
+      runtime.setCandidates(store.listPuzzles({
+        ratingMax: snapshot.room.config.ratingMax,
+        difficultyMin: snapshot.room.config.difficultyMin,
+        difficultyMax: snapshot.room.config.difficultyMax,
+      }).slice(0, 8).map((p) => p.id));
+    } else if (snapshot.room.vote && snapshot.room.vote.type === 'puzzle_choice' && snapshot.room.vote.status === 'open') {
+      runtime.setCandidates([...snapshot.room.vote.puzzleIds]);
+    }
+
     // 收集器会话：把 broadcast 出来的帧收集起来（原本推给 WebSocket）。
     // 注意：**在收到帧的当下就登记到事件表缓冲**——这样动作响应里能直接带上本次事件，
     // 客户端拿到响应即可渲染，无需再多一次轮询。若本次 CAS 失败，这些缓冲会随事务一起丢弃。
@@ -180,6 +193,9 @@ async function withRoom(
     } finally {
       detach();
     }
+
+    // 房间已在本次请求里被物理清理（最后一人离开）→ 不再写回、不再重试
+    if (store.purged) return response;
 
     // 事件流已在收集器里登记进 store 缓冲（见上），这里只需提交事务
     const flush = await flushRoomStore(env.DB, store);
@@ -234,7 +250,18 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
         return r.ok ? ok(store, r.data) : fail(r.code, store);
       }
       case 'revoke_key': { const r = runtime.revokeKey(memberId); return r.ok ? ok(store) : fail(r.code, store); }
-      case 'leave': { await runtime.removeMember(memberId); return ok(store); }
+      case 'leave': {
+        await runtime.removeMember(memberId);
+        // 最后一名成员离开 → 视为过期房间，随请求直接清理（含密钥密文），不留残留数据
+        if (runtime.room.members.length === 0) {
+          await flushRoomStore(env.DB, store);   // 先把"成员已移除"落库，再整体删除
+          store.purged = true;
+          await purgeRoom(env.DB, roomId);
+          logger.info('room_purged_on_leave', { room_id: roomId });
+          return json({ ok: true, purged: true, events: [] });
+        }
+        return ok(store);
+      }
       default:
         return json({ error: 'UNKNOWN_ACTION', type, message: `未知动作：${type}` }, 400);
     }
