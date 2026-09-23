@@ -303,6 +303,8 @@ export class App {
     });
     runtime.setKeyState(auth.memberId, 'active', this.deps.vault.maskOf(apiKey));
     this.deps.store.audit({ action: 'credential_submitted', roomId: runtime.room.id, subject: credId, result: test.reasonCode, ipHash: hashIp(ip, 'ht') });
+    // 换上可用的 Key 后，若对局正因 AI 中断而暂停，就立刻解除暂停继续玩
+    const restored = await runtime.restoreAfterKeyUpdate(auth.memberId);
     // 房主完成有效处理 → 若存在额度降级投票则立即作废（呼应《阶段4》§8.2）
     await runtime.enqueue(() => {
       const room = runtime.room;
@@ -315,6 +317,7 @@ export class App {
     json(res, 200, {
       ok: true,
       credential: { id: credId, provider, model, baseUrlHost: baseUrl.host, mask: this.deps.vault.maskOf(apiKey), state: 'active', rateLimitedAtSubmit: test.reasonCode === 'RATE_LIMITED_AT_SUBMIT' },
+      resumedBlockedMatch: restored.ok ? (restored.data?.resumed ?? false) : false,
       message: test.message,
     });
   }

@@ -673,6 +673,22 @@ function logEntry(t, room, you) {
     <div class="meta">${fmtClock(t.at)}${t.meta ? ' · ' + esc(t.meta) : ''}</div></div>`;
 }
 
+/** 对局被 AI 中断时，告诉房主"具体该改什么" */
+function aiBlockHint(code) {
+  switch (code) {
+    case 'SCHEMA_INVALID': return '模型没有按要求的 JSON 格式回答（常见原因：模型名不匹配、输出被截断）。可换一个模型名（例如 deepseek-v4-pro）后重新提交，系统会自动重试一次。';
+    case 'HTTP_401': case 'AUTH_FAILED': return 'API Key 无效或已被撤销：到服务商后台重新生成后提交。';
+    case 'HTTP_402': case 'QUOTA_EXHAUSTED': return '账号余额/额度不足：充值或换一个 Key。';
+    case 'HTTP_429': case 'RATE_LIMITED': return '被上游限流：稍等一会儿重新提交即可。';
+    case 'HTTP_404': case 'MODEL_OR_BASE_URL_NOT_FOUND': return 'Base URL 或模型名不对：DeepSeek 用 https://api.deepseek.com + deepseek-flash。';
+    case 'HTTP_400': case 'INVALID_REQUEST': return '上游不接受请求参数：多半是模型名不对。';
+    case 'CONNECT_TIMEOUT': case 'READ_TIMEOUT': case 'UPSTREAM_TIMEOUT': return '调用超时：检查网络/代理，或换一个上游地址。';
+    case 'LEAK_DETECTED': return '模型输出里含有汤底片段，已被安全机制拦截（不会展示给玩家）。换一个模型名通常可以避免。';
+    case 'PROVIDER_REFUSAL': return '上游因内容策略拒绝了这次判定。换一个模型名试试。';
+    default: return '点「更新 API Key 并继续对局」重新做一次连接测试并提交，通过后会自动解除暂停。';
+  }
+}
+
 function banners(room, you) {
   const out = [];
   // 服务端没有平台额度时：房主自备 Key 就是唯一的真实模型来源，直接给出入口
@@ -685,7 +701,8 @@ function banners(room, you) {
   }
   if (room.ai.state === 'BLOCKED') {
     out.push(`<div class="notice">AI 服务异常（${esc(room.ai.reasonCode || '')}）：对局已暂停，等待房主处理。<b>本轮未消耗，且不会自动切换到平台额度。</b>
-      ${you.isHost ? '<div class="row" style="margin-top:6px"><button id="btnFixKey">更新 API Key</button><button id="btnRevokeKey">撤销并改用平台额度</button></div>' : ''}</div>`);
+      <br><span class="dim">${esc(aiBlockHint(room.ai.reasonCode))}</span>
+      ${you.isHost ? '<div class="row" style="margin-top:6px"><button id="btnFixKey">更新 API Key 并继续对局</button><button id="btnRevokeKey">撤销并改用平台额度</button></div>' : ''}</div>`);
   }
   if (room.vote && room.vote.type === 'fallback_credit' && room.vote.status === 'open') {
     out.push(`<div class="notice">投票：是否临时启用平台备用额度继续对局？已投 ${room.vote.votedCount} / ${room.vote.eligibleCount}，剩余 <span data-deadline="${room.vote.deadlineAt}">${fmt(room.vote.deadlineAt - serverNow())}</span>
@@ -959,7 +976,9 @@ document.addEventListener('click', async (e) => {
         try {
           const res = await api('/api/credentials', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model }) });
           S.keyMask = res.credential.mask;
-          S.notice = '已启用自备额度（' + res.message + '）';
+          S.notice = res.resumedBlockedMatch
+            ? '已启用自备额度，且已解除 AI 中断 —— 对局继续'
+            : '已启用自备额度（' + res.message + '）';
           S.keyTest = null;
           S.keyModal = false;
           delete S.drafts.keyValue;                          // Key 绝不留在内存里
@@ -989,7 +1008,7 @@ document.addEventListener('click', async (e) => {
       case 'btnResumeTurn': request({ t: 'resume_transfer' }); break;
       case 'btnReturnHost': request({ t: 'return_host' }); break;
       case 'btnDeclineReturn': request({ t: 'decline_return' }); break;
-      case 'btnFixKey': S.keyModal = true; render(); break;
+      case 'btnFixKey': S.keyModal = true; S.keyTest = null; render(); break;
       case 'btnRevokeKey': await api('/api/credentials', { method: 'DELETE' }); S.notice = '已撤销 Key'; render(); break;
       case 'btnLeave': await leaveRoom(); break;
       case 'btnRecap': {

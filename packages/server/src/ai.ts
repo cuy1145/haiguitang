@@ -56,7 +56,9 @@ export interface HostDeps {
   onCall?: (info: { source: string; ok: boolean; latencyMs: number; tokensIn: number; tokensOut: number; errorClass?: string }) => void;
 }
 
-const RETRYABLE = new Set<AiErrorClass>(['CONNECT_TIMEOUT', 'READ_TIMEOUT', 'CONN_RESET', 'HTTP_408', 'HTTP_425', 'HTTP_429', 'HTTP_5XX']);
+// SCHEMA_INVALID 也重试：多数情况是输出被 max_tokens 截断或上游偶发返回散文，重试一次常常就正常了。
+// 注意：L3 输出校验失败走的是另一条分支，那里显式 retryable:false（同一提示词重试大概率再犯）。
+const RETRYABLE = new Set<AiErrorClass>(['CONNECT_TIMEOUT', 'READ_TIMEOUT', 'CONN_RESET', 'HTTP_408', 'HTTP_425', 'HTTP_429', 'HTTP_5XX', 'SCHEMA_INVALID']);
 
 export class HostService {
   private readonly deps: HostDeps;
@@ -223,16 +225,7 @@ export class HostService {
       res = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${cred.apiKey}` },
-        body: JSON.stringify({
-          model: cred.model,
-          temperature: 0,
-          max_tokens: 120,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: JSON.stringify({ question }) },
-          ],
-        }),
+        body: JSON.stringify(buildJudgeBody(cred, system, question)),
         signal: controller.signal,
       });
     } catch (err) {
@@ -266,21 +259,40 @@ export class HostService {
     } catch {
       return { ok: false, errorClass: 'SCHEMA_INVALID', message: '响应不是 JSON' };
     }
-    const obj = data as { choices?: Array<{ message?: { content?: string; refusal?: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+    const obj = data as {
+      choices?: Array<{ message?: { content?: string; refusal?: string }; finish_reason?: string }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
     if (obj.choices?.[0]?.message?.refusal) {
       return { ok: false, errorClass: 'PROVIDER_REFUSAL', message: '上游拒绝回答（内容策略）' };
     }
     const content = obj.choices?.[0]?.message?.content ?? '';
-    const jsonText = content.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(jsonText);
-    } catch {
-      return { ok: false, errorClass: 'SCHEMA_INVALID', message: '模型输出不是可解析的 JSON' };
+    const finishReason = obj.choices?.[0]?.finish_reason ?? '';
+    const jsonText = extractJsonObject(content);
+    if (!jsonText) {
+      // 诊断信息要能定位问题，但**绝不能把汤底写进日志/审计**：预览先过泄露检查
+      const preview = leakSafePreview(content, puzzle.truth.truth);
+      this.deps.logger.warn('judge_output_parse_failed', {
+        finish_reason: finishReason, content_len: content.length, preview,
+      });
+      if (!content.trim()) {
+        return {
+          ok: false, errorClass: 'SCHEMA_INVALID',
+          message: `模型没有返回内容（finish_reason=${finishReason || '未知'}，通常是输出被 max_tokens 截断或模型不支持该参数）`,
+        };
+      }
+      return { ok: false, errorClass: 'SCHEMA_INVALID', message: `模型输出不是可解析的 JSON（finish_reason=${finishReason || '未知'}）：${preview}` };
     }
     // 额外兜底：原始文本绝不能包含汤底片段（即使解析成功也要拦）
     const leak = sharedNgram(jsonText, puzzle.truth.truth, 8);
     if (leak) return { ok: false, errorClass: 'LEAK_DETECTED', message: `输出与汤底共享片段：${leak}` };
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      return { ok: false, errorClass: 'SCHEMA_INVALID', message: '模型输出不是可解析的 JSON（补救解析后仍然失败）' };
+    }
 
     return {
       ok: true,
@@ -369,6 +381,116 @@ export class HostService {
     }
     return null;
   }
+}
+
+/**
+ * 从模型输出里尽力取出一个 JSON 对象。
+ *
+ * 线上真实故障（审计里能看到 SCHEMA_INVALID / "模型输出不是可解析的 JSON"）几乎都是这类原因：
+ *   · 输出被 ```json 围栏包着，或前后带一句"好的，判定如下："
+ *   · 输出被 max_tokens 截断，只差最后一个 } 或一个引号
+ * 这里逐级放宽：整体 → 去掉围栏 → 第一个 { 到最后一个 } → 补齐未闭合的引号/括号。
+ * 兜底解析出来的对象仍要过 L3 校验（枚举、白名单、越界字段），所以放宽解析不会放宽安全性。
+ */
+export function extractJsonObject(raw: string): string | null {
+  const text = String(raw ?? '').trim();
+  if (!text) return null;
+  const unfenced = text.replace(/```[a-zA-Z]*/g, '').trim();
+  for (const candidate of [text, unfenced]) {
+    if (isJsonObject(candidate)) return candidate;
+  }
+  const start = unfenced.indexOf('{');
+  if (start < 0) return null;
+  const end = unfenced.lastIndexOf('}');
+  const slice = end > start ? unfenced.slice(start, end + 1) : unfenced.slice(start);
+  if (isJsonObject(slice)) return slice;
+  const repaired = repairTruncatedJson(slice);
+  if (repaired && isJsonObject(repaired)) return repaired;
+  return null;
+}
+
+function isJsonObject(text: string): boolean {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
+/** 截断补救：补上未闭合的引号与括号，能救回"就差最后一个 }"的情况。 */
+function repairTruncatedJson(text: string): string | null {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{' || ch === '[') stack.push(ch);
+    else if (ch === '}' || ch === ']') stack.pop();
+  }
+  if (stack.length === 0 && !inString) return null;   // 结构本来就完整 → 不是截断问题
+  let out = text.replace(/,\s*"[^"]*$/, '').replace(/,\s*$/, '');
+  if (inString) out += '"';
+  while (stack.length > 0) {
+    const open = stack.pop();
+    out += open === '{' ? '}' : ']';
+  }
+  return out;
+}
+
+/** 日志预览：截到 160 字符；若与汤底共享 8-gram 片段则整体打码（日志里也不能出现汤底）。 */
+export function leakSafePreview(text: string, truth: string, max = 160): string {
+  const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!flat) return '';
+  const cut = flat.length > max ? `${flat.slice(0, max)}…` : flat;
+  if (truth && sharedNgram(cut, truth, 8)) return '<已屏蔽：预览与汤底重合>';
+  return cut;
+}
+
+/**
+ * 是否 DeepSeek 官方端点（只有它需要/支持 `thinking` 参数，别的兼容服务可能因未知字段直接 400）。
+ */
+export function isDeepSeekHost(baseUrl: string): boolean {
+  try {
+    const host = new URL(String(baseUrl)).hostname.toLowerCase();
+    return host === 'deepseek.com' || host.endsWith('.deepseek.com');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 构造判定请求体。
+ *
+ * ⚠️ 线上真实故障（D1 审计里的 SCHEMA_INVALID / "模型输出不是可解析的 JSON"）根因就在这：
+ *   DeepSeek 的 **思考模式默认开启且 effort=high**（官方文档《思考模式》），思维链会先吃掉
+ *   max_tokens 预算，导致 `content` 被截断甚至为空 —— 而思维链在 `reasoning_content` 里，不在 content。
+ *   判定任务只是"问题 → 事实点"的映射，不需要思考模式，所以对 DeepSeek 显式关掉；
+ *   同时把 max_tokens 提到 400（原来是 120，连正常 JSON 都可能放不下）。
+ */
+export function buildJudgeBody(
+  cred: { baseUrl: string; model: string },
+  system: string,
+  question: string,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: cred.model,
+    temperature: 0,
+    max_tokens: 400,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: JSON.stringify({ question }) },
+    ],
+  };
+  if (isDeepSeekHost(cred.baseUrl)) {
+    body.thinking = { type: 'disabled' };
+    body.reasoning_effort = 'low';   // 双保险：即使上游忽略 thinking，也不让它按 high 思考
+  }
+  return body;
 }
 
 function backoffMs(attempt: number): number {

@@ -13,6 +13,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const { HostService } = await import('../../packages/server/src/ai.ts');
+const { extractJsonObject, leakSafePreview, buildJudgeBody, isDeepSeekHost } = await import('../../packages/server/src/ai.ts');
 const { leakPuzzle } = await import('../fixtures/puzzle.ts');
 const makePuzzle = () => leakPuzzle();
 
@@ -123,3 +124,68 @@ test('C6: chatCompletionsUrl 自动补后缀且不重复追加', () => {
   assert.equal(HostService.chatCompletionsUrl('https://api.deepseek.com/chat/completions'), 'https://api.deepseek.com/chat/completions');
   assert.equal(HostService.chatCompletionsUrl('  '), '');
 });
+
+/**
+ * 线上故障回归：审计里出现过 SCHEMA_INVALID / "模型输出不是可解析的 JSON"，
+ * 整局因此被中断。原因是模型输出带了围栏/前后文字/被截断，而旧代码只会
+ * 朴素地 JSON.parse(content)。下面覆盖这些真实形态。
+ */
+test('C7: 模型输出带 ```json 围栏 → 仍能解析', () => {
+  const out = extractJsonObject('```json\n{"answer":"yes","reason_code":"NONE","matched_fact_ids":["f1"]}\n```');
+  assert.ok(out, '应当能取出 JSON');
+  assert.deepEqual(JSON.parse(out), { answer: 'yes', reason_code: 'NONE', matched_fact_ids: ['f1'] });
+});
+
+test('C8: 模型输出前后带解释文字 → 取出其中的 JSON 对象', () => {
+  const out = extractJsonObject('好的，判定如下：\n{"answer":"no","reason_code":"NONE","matched_fact_ids":[]}\n希望有帮助。');
+  assert.ok(out, '应当能取出 JSON');
+  assert.deepEqual(JSON.parse(out), { answer: 'no', reason_code: 'NONE', matched_fact_ids: [] });
+});
+
+test('C9: 输出被 max_tokens 截断（缺右括号）→ 补救解析', () => {
+  const out = extractJsonObject('{"answer":"irrelevant","reason_code":"OUT_OF_SCOPE","matched_fact_ids":[]');
+  assert.ok(out, '应当能补救出 JSON');
+  assert.deepEqual(JSON.parse(out), { answer: 'irrelevant', reason_code: 'OUT_OF_SCOPE', matched_fact_ids: [] });
+});
+
+test('C10: 完全不是 JSON（纯文本 / 空）→ 返回 null，交给上层报 SCHEMA_INVALID', () => {
+  assert.equal(extractJsonObject('我觉得这个问题与真相无关。'), null);
+  assert.equal(extractJsonObject(''), null);
+  assert.equal(extractJsonObject('   \n '), null);
+  assert.equal(extractJsonObject('[1,2,3]'), null, '数组不算对象');
+});
+
+test('C11: 日志预览不得泄露汤底（与汤底重合时整体打码）', () => {
+  const puzzle = makePuzzle();
+  const leaky = leakSafePreview(puzzle.truth.truth.slice(0, 120), puzzle.truth.truth);
+  assert.equal(leaky, '<已屏蔽：预览与汤底重合>');
+  const safe = leakSafePreview('{"answer":"yes","reason_code":"NONE"}', puzzle.truth.truth);
+  assert.equal(safe, '{"answer":"yes","reason_code":"NONE"}');
+  assert.equal(leakSafePreview('', puzzle.truth.truth), '');
+});
+
+/**
+ * 线上故障的根因回归：DeepSeek 思考模式默认开启（effort=high），思维链会吃掉 max_tokens，
+ * 导致 content 为空/截断 → SCHEMA_INVALID 中断对局。所以判定请求必须显式关闭思考模式。
+ */
+test('C12: 判定请求对 DeepSeek 显式关闭思考模式，并给足输出预算', () => {
+  const body = buildJudgeBody({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' }, 'SYS', '问题');
+  assert.deepEqual(body.thinking, { type: 'disabled' });
+  assert.equal(body.reasoning_effort, 'low');
+  assert.equal(body.max_tokens, 400);
+  assert.deepEqual(body.response_format, { type: 'json_object' });
+  assert.equal(body.model, 'deepseek-flash');
+  assert.equal(JSON.parse((body.messages as Array<{ content: string }>)[1]!.content).question, '问题');
+});
+
+test('C13: 非 DeepSeek 端点不附带 thinking 字段（避免不认识的参数被 400）', () => {
+  assert.equal(isDeepSeekHost('https://api.deepseek.com'), true);
+  assert.equal(isDeepSeekHost('https://api.deepseek.com/v1'), true);
+  assert.equal(isDeepSeekHost('https://notdeepseek.com'), false);
+  assert.equal(isDeepSeekHost('https://api.openai.com/v1'), false);
+  assert.equal(isDeepSeekHost('https://proxy.example.com/deepseek.com'), false);
+  const body = buildJudgeBody({ baseUrl: 'https://api.openai.com/v1', model: 'gpt-x' }, 'SYS', 'q');
+  assert.equal('thinking' in body, false);
+  assert.equal('reasoning_effort' in body, false);
+});
+

@@ -40,6 +40,8 @@ export type CoreEvent =
   | { type: 'CREDIT_REVOKE'; reason: 'HOST_RECOVERED' | 'MATCH_ENDED' }
   | { type: 'CREDIT_REVOKED_BY_OWNER' }
   | { type: 'AI_RECOVERED' }
+  /** 房主换上/更新了可用的自备 Key：解除 AI 中断、恢复对局，额度来源仍是自备 */
+  | { type: 'CREDIT_RESTORED' }
   | { type: 'MATCH_END'; result: 'solved' | 'unsolved' | 'aborted'; reason: string }
   | { type: 'ROOM_SUSPEND'; reason: string }
   | { type: 'ROOM_RESUME' };
@@ -262,6 +264,28 @@ export function reduce(room: CoreRoom, event: CoreEvent, ctx: ReduceCtx): Reduce
 
     case 'AI_RECOVERED': {
       const next = withRoom(room, { ai: { state: 'OK', reasonCode: null, blockedAt: null } }, ctx.now);
+      return { room: next, events: [{ type: 'ai_recovered' }] };
+    }
+
+    /**
+     * 房主更新了自备 Key（复测通过）→ 解除 ai_blocked 暂停并接着玩。
+     * 与 CREDIT_REVOKED_BY_OWNER 的区别：额度来源保持 host_key（不是因为放弃自备 Key 而切到平台额度）。
+     */
+    case 'CREDIT_RESTORED': {
+      const next = withRoom(room, {
+        ai: { state: 'OK', reasonCode: null, blockedAt: null },
+        credit: { mode: 'host_key', reason: 'HOST_RESTORED', grantLeft: 0, grantId: null },
+        ...(room.status === 'suspended' && room.pauseReason === 'ai_blocked'
+          ? { status: 'playing' as const, pauseReason: null }
+          : {}),
+        turn: room.turn.phase === 'PAUSED'
+          ? {
+            ...room.turn, phase: 'ACTIVE', startedAt: ctx.now,
+            deadlineAt: ctx.now + room.config.perTurnSec * 1000,
+            graceDeadlineAt: ctx.now + room.config.perTurnSec * 1000 + room.config.graceSec * 1000,
+          }
+          : room.turn,
+      }, ctx.now);
       return { room: next, events: [{ type: 'ai_recovered' }] };
     }
 

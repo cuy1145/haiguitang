@@ -284,6 +284,8 @@ pnpm cf:tail
 | `wrangler dev` 起不来，提示 workerd 缺失 | pnpm 拦截了安装脚本 | `package.json` 里已声明 `pnpm.onlyBuiltDependencies`，执行 `pnpm install` 即可 |
 | 页面能打开但一直"断开，正在重连" | 轮询被拦（代理/企业网络）或 D1 报错 | 看 `wrangler tail` 的 `GET /api/rooms/state` 状态码；`/api/health` 里的 `db.ok` 是否为 true |
 | 提交提问后判定结果明显"答非所问" | 没有可用的模型凭据，用的是内置模拟主持人（关键词表，只能识别题库里写过的说法） | 房主点「我的 API Key」填入自备 Key（先点「测试连接」验证），或运维配置 `AI_*` 平台额度 |
+| 对局被中断，原因码 `SCHEMA_INVALID` | 模型没有按 JSON 回答。**DeepSeek 的思考模式默认开启**（effort=high），思维链会吃掉 `max_tokens`，导致正文为空/截断 | 已自动处理：对 DeepSeek 端点显式关闭思考模式并把 `max_tokens` 提到 400。若仍出现，换一个模型名后重新提交 Key（提交成功会自动解除暂停） |
+| 房主修好 Key 后对局还卡在"等待房主处理" | 旧版本提交 Key 不会解除 `ai_blocked` | 已修复：提交成功即恢复对局；也可点提示条里的「更新 API Key 并继续对局」 |
 | 提交提问后一直"主持人判定中" | 模型调用卡住/上游无响应 | `wrangler tail` 看 `judge_call_failed` / `judge_failed`（超时 20 秒即中断并暂停对局） |
 | 房主提交 Key 报 `VAULT_DISABLED` | 没设置 `MASTER_KEY` | `npx wrangler secret put MASTER_KEY`（32 字节 base64） |
 | 房主提交 Key 报 `AUTH_FAILED` / `MODEL_OR_BASE_URL_NOT_FOUND` | Key 无效，或地址/模型名不对 | 点弹窗里的「测试连接（不入库）」看具体原因与真实请求地址；DeepSeek 用 `https://api.deepseek.com` + `deepseek-flash` |

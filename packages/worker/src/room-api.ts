@@ -485,6 +485,10 @@ async function submitCredential(request: Request, env: Env, roomId: string, memb
     runtime.setKeyState(memberId, 'active', vault.maskOf(apiKey));
     store.audit({ action: 'credential_submitted', roomId, subject: credId, result: test.reasonCode });
 
+    // 换上可用的 Key 后，若对局正因 AI 中断而暂停，就立刻解除暂停继续玩
+    // （否则房主修好了 Key 也永远卡在"等待房主处理"）
+    const restored = await runtime.restoreAfterKeyUpdate(memberId);
+
     // 房主完成有效处理 → 若存在额度降级投票则立即作废
     await runtime.enqueue(() => {
       const room = runtime.room;
@@ -496,6 +500,7 @@ async function submitCredential(request: Request, env: Env, roomId: string, memb
     return json({
       ok: true,
       credential: { id: credId, provider, model, baseUrlHost: baseUrl.host, mask: vault.maskOf(apiKey), state: 'active', rateLimitedAtSubmit: test.reasonCode === 'RATE_LIMITED_AT_SUBMIT' },
+      resumedBlockedMatch: restored.ok ? (restored.data?.resumed ?? false) : false,
       message: test.message,
     });
   });

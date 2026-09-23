@@ -698,6 +698,26 @@ export class RoomRuntime {
     });
   }
 
+  /**
+   * 房主提交/更新了自备 Key 之后调用：若对局正因 AI 中断而暂停（ai_blocked），
+   * 就解除暂停并继续——否则房主修好了 Key 也永远卡在"等待房主处理"。
+   * 只在确实 BLOCKED 时才产生状态变更（避免刷出无意义的事件）。
+   */
+  async restoreAfterKeyUpdate(memberId: string): Promise<Result<{ resumed: boolean }>> {
+    if (this.room.hostId !== memberId) return { ok: false, code: 'NOT_HOST' };
+    const cred = this.deps.store.roomCredential(this.room.id);
+    if (!cred || cred.state !== 'active') return { ok: false, code: 'NOT_ALLOWED' };
+    const blocked = this.room.ai.state === 'BLOCKED';
+    return this.enqueue(() => {
+      if (this.room.ai.state === 'BLOCKED') {
+        const out = reduce(this.room, { type: 'CREDIT_RESTORED' }, this.ctx());
+        this.room = out.room;
+        this.apply(out.events);
+      }
+      return { ok: true as const, data: { resumed: blocked } };
+    });
+  }
+
   async declineReturn(memberId: string): Promise<Result> {
     if (this.room.hostId !== memberId) return { ok: false, code: 'NOT_HOST' };
     const former = this.room.members.find((m) => this.keyStateOf(m.id).formerHost);

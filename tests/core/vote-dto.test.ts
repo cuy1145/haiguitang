@@ -160,7 +160,34 @@ test('额度降级投票通过 → 授予平台额度并恢复对局；房主有
   assert.match(voided.vote?.result ?? '', /作废/);
 });
 
+/**
+ * 房主换上可用的自备 Key（CREDIT_RESTORED）：解除 AI 中断、继续对局，
+ * 且额度来源仍是 host_key —— 与"放弃自备 Key 改用平台额度"（CREDIT_REVOKED_BY_OWNER）区分开。
+ */
+test('房主更新 Key → 解除 AI 中断并继续本轮（额度来源仍是自备）', () => {
+  const now = 1_000_000;
+  let room = makeRoom(now);
+  room = reduce(room, { type: 'MATCH_BEGIN', puzzleId: 'p-leak' }, ctx(now)).room;
+  const turnSeqBefore = room.turn.seq;
+  room = reduce(room, { type: 'CREDIT_BLOCK', reasonCode: 'SCHEMA_INVALID' }, ctx(now)).room;
+  assert.equal(room.status, 'suspended');
+  assert.equal(room.turn.phase, 'PAUSED');
+
+  const restored = reduce(room, { type: 'CREDIT_RESTORED' }, ctx(now + 5000));
+  assert.equal(restored.room.ai.state, 'OK');
+  assert.equal(restored.room.ai.reasonCode, null);
+  assert.equal(restored.room.ai.blockedAt, null);
+  assert.equal(restored.room.status, 'playing');
+  assert.equal(restored.room.pauseReason, null);
+  assert.equal(restored.room.credit.mode, 'host_key');
+  assert.equal(restored.room.turn.phase, 'ACTIVE', '恢复后本轮重新开始计时');
+  assert.equal(restored.room.turn.seq, turnSeqBefore, '不额外消耗轮次');
+  assert.ok(restored.room.turn.deadlineAt > now, '给了新的截止时间');
+  assert.deepEqual(restored.events.map((e) => e.type), ['ai_recovered']);
+});
+
 // ---------------------------------------------------------------- DTO 泄露防护
+
 test('toPublicPuzzle 不包含汤底与事实点字段（类型层白名单投影）', () => {
   const pub = toPublicPuzzle(leakPuzzle());
   const json = JSON.stringify(pub);
