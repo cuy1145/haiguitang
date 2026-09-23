@@ -4,7 +4,11 @@
 !.env.example
 
 # ---- 本地数据与临时产物 ----
-data/
+# ⚠️ 必须是 /data/（只忽略仓库根目录的本地数据库目录）。
+# 之前写的是 data/，它会匹配**任意层级**的 data 目录，于是把真正的源码
+# packages/server/src/data/seed-puzzles.ts（题库种子）也一起忽略了：
+# 本地能跑，clone 出来的仓库却缺文件 → CI 的类型检查/种子自检一直是红的。
+/data/
 *.db
 *.db-wal
 *.db-shm
