@@ -1,0 +1,17 @@
+# ============================================================================
+# 本地开发变量（wrangler dev 读取）。复制为 .dev.vars 后填写，不要提交。
+# 生产环境用 `wrangler secret put <NAME>`。
+# ============================================================================
+
+# 加密房主自备 Key 的主密钥（32 字节 base64）
+# 生成：node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
+MASTER_KEY=
+
+# AI 提供方（留空则使用内置模拟主持人，可离线判定）
+AI_PROVIDER=openai-compatible
+AI_BASE_URL=
+AI_MODEL=
+AI_KEY=
+
+# 本地打开调试接口
+DEV_TOOLS=1

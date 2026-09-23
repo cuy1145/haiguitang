@@ -1,0 +1,44 @@
+name: CI
+
+# 每次推送与 PR 都跑：测试、类型检查、工程自检。
+# 这三条是硬门槛：任何一条不过都不应该合并。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # workerd / esbuild 需要执行安装脚本（pnpm 默认拦截，见 package.json 的 onlyBuiltDependencies）
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm typecheck
+
+      - name: 测试（核心规则 + 集成，零网络 / 假时钟 / 真实 WebSocket）
+        run: pnpm test
+
+      - name: 工程自检（core 零依赖、密钥扫描、汤底不下发、启动烟雾）
+        run: node scripts/selfcheck.ts
+
+      - name: 题库种子自检
+        run: pnpm seed

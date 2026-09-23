@@ -1,0 +1,52 @@
+#:schema node_modules/wrangler/config-schema.json
+# ============================================================================
+# Cloudflare Workers 部署配置（生产运行时）
+#
+# 关键点：
+#  · Durable Objects 一律使用 **SQLite 存储后端**（`new_sqlite_classes`）——
+#    这是免费计划可用的形态；KV 后端的新命名空间已被 Cloudflare 停止支持。
+#  · 密钥（MASTER_KEY / AI_KEY）不进本文件，用 `wrangler secret put` 写入。
+#  · 静态资源（前端）由 Workers Static Assets 托管。
+# ============================================================================
+name = "haiguitang"
+main = "packages/worker/src/index.ts"
+compatibility_date = "2025-08-01"
+workers_dev = true
+
+# 前端静态资源（正式 React 客户端的构建产物也输出到这里）
+[assets]
+directory = "packages/web/public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# 每局/每房一个 Durable Object（房间状态 + 该房间的 SQLite）
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomDurableObject"
+
+# 全局单例：房间码索引、会话令牌索引、题库、站点额度计数
+[[durable_objects.bindings]]
+name = "LIBRARY"
+class_name = "LibraryDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDurableObject", "LibraryDurableObject"]
+
+[vars]
+# 未配置 AI_KEY 时使用内置模拟主持人（离线可判定）
+AI_PROVIDER = "openai-compatible"
+DEV_TOOLS = "0"
+SITE_MONTHLY_CALL_CAP = "2000"
+SITE_GRANT_BUDGET_CALLS = "200"
+SITE_GRANT_MAX_PER_MATCH = "2"
+SITE_GRANT_COOLDOWN_SEC = "600"
+# MASTER_KEY / AI_KEY / AI_BASE_URL / AI_MODEL 通过 secret 或 [env.production.vars] 提供
+
+# 本地开发：`wrangler dev` 读取 .dev.vars（已被 .gitignore 排除）
+# 示例内容：
+#   MASTER_KEY=<base64 32 字节>
+#   AI_KEY=<你的 Key>
+#   AI_BASE_URL=https://api.example.com/v1
+#   AI_MODEL=your-model
+#   DEV_TOOLS=1

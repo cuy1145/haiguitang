@@ -1,0 +1,10 @@
+{
+  "name": "@ht/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "海龟汤核心规则域：纯函数、零依赖、零 IO，服务端与浏览器共用同一份实现",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

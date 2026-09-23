@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI 海龟汤</title>
+<!--
+  M1 本地服务器版前端（阶段性实现：零依赖、直接吃同一份 @ht/core 语义）。
+  正式客户端将按《阶段1》§3.1 换成 React + Vite，并把 packages/web 作为构建产物目录；
+  当前这一版是"能真正联机试玩"的最小实现，用来验证服务端行为与交互节奏。
+  安全前提：本页面**永远不接触 API Key 明文**——房主提交的 Key 只在服务端加密存储，
+  页面拿到的只有掩码；所有判定与汤底都在服务端。
+-->
+<style>
+  :root{
+    --bg:#12141a;--bg2:#191c24;--bg3:#212532;--line:#2c3242;--fg:#e6e8ee;--fg2:#a3aab9;--fg3:#6f7788;
+    --ok:#3ecf8e;--warn:#f2c14e;--bad:#ef5f6b;--info:#5aa9f8;--radius:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  button{font:inherit;color:inherit;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
+  button:hover:not(:disabled){border-color:#3a4256;background:#262b3a}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:linear-gradient(180deg,#6f5df0,#5a49d8);border-color:#6f5df0;color:#fff;font-weight:600}
+  button.danger{border-color:#5a2b31;color:#ffb3ba}
+  input,textarea,select{font:inherit;color:inherit;background:#141721;border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+  textarea{resize:vertical;min-height:70px}
+  .wrap{max-width:1120px;margin:0 auto;padding:14px 16px 90px}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+  .card h3{margin:0 0 10px;font-size:14px;color:#cdd3e0}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .spread{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  .grid{display:grid;grid-template-columns:290px 1fr;gap:12px;align-items:start}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .pill{display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:999px;font-size:11.5px;border:1px solid var(--line);background:#1b1f2a;color:var(--fg2)}
+  .pill.l1{color:#9fe3c0;border-color:#2c5c45}.pill.l2{color:#f2d08a;border-color:#5c4a25}.pill.l3{color:#ff9fa8;border-color:#5c2b31}
+  .dim{color:var(--fg3);font-size:12px}.muted{color:var(--fg2)}
+  .notice{font-size:12.5px;color:#ffd894;background:#3a2a12;border:1px solid #6a5121;border-radius:8px;padding:8px 10px;margin-bottom:10px}
+  .err{font-size:12.5px;color:#ffb3ba;background:#241618;border:1px solid #5a2b31;border-radius:8px;padding:8px 10px;margin-bottom:10px}
+  .mem{display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-radius:8px}
+  .mem.turn{background:#1d2436;outline:1px solid #38427a}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
+  .dot.active{background:var(--ok)}.dot.idle{background:var(--warn)}.dot.off{background:#5a6070}
+  .timeline{display:flex;flex-direction:column;gap:8px;max-height:48vh;overflow:auto}
+  .tl{background:#161a23;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .tl.sys{border-style:dashed;color:var(--fg2)}.tl.err{border-color:#5a2b31;background:#1e1518}.tl.vote{border-color:#3a4470}
+  .tl .meta{color:var(--fg3);font-size:11.5px}
+  .turnbar{background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:12px}
+  .bar{height:8px;background:#0e1117;border-radius:99px;overflow:hidden;margin-top:8px}
+  .bar>i{display:block;height:100%;background:var(--ok);transition:width .15s linear}
+  .bar.grace>i{background:var(--warn)}.bar.paused>i{background:var(--fg3)}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
+  .kv .k{color:var(--fg2)}
+  .cands{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+  .cand{background:#161a23;border:1px solid var(--line);border-radius:8px;padding:10px}
+  .cand.win{border-color:var(--ok)}
+  .mask{background:#141721;border:1px dashed var(--line);border-radius:8px;padding:3px 8px;font-family:ui-monospace,monospace}
+  .overlay{position:fixed;inset:0;background:rgba(8,10,14,.72);display:flex;align-items:center;justify-content:center;padding:18px;z-index:50}
+  .modal{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px;max-width:720px;width:100%;max-height:86vh;overflow:auto}
+  .field{display:grid;grid-template-columns:1fr 130px;gap:8px;align-items:center;margin-bottom:7px}
+  .field label{color:var(--fg2);font-size:12.5px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+  th{color:var(--fg2);font-size:12px}
+  .banner{background:#3a2a12;border:1px solid #6a5121;color:#ffd894;padding:8px 12px;border-radius:var(--radius);font-size:12.5px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="banner">
+    M1 本地服务器版：真实多客户端联机 · 密钥只在服务端 · 汤底不下发（复盘门禁）。
+    <span class="dim">本页为阶段性前端；正式客户端将替换为 React + Vite。</span>
+  </div>
+  <div id="app"></div>
+</div>
+
+<script>
+/* ============================================================================
+ * 客户端状态与工具
+ * ==========================================================================*/
+const LS_TOKEN = 'ht.token';
+const LS_DRAFT = 'ht.draft';           // 预输入草稿：只存本机，绝不上传（隐私红线）
+const LS_NICK = 'ht.nickname';
+
+const S = {
+  screen: 'entry',                      // entry | room
+  error: '',
+  notice: '',
+  config: null,                         // GET /api/config
+  me: null,                             // { roomId, memberId, token }
+  view: null,                           // 最近一次 RoomView
+  connected: false,
+  lastSeq: 0,
+  ack: {},
+  pendingTimeline: [],
+  hint: '',
+  recap: null,
+  keyMask: null,
+  configModal: false,
+  guessModal: false,
+  keyModal: false,
+};
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const fmt = (ms) => { ms = Math.max(0, ms | 0); const t = Math.ceil(ms / 1000); return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
+const nowMs = () => Date.now();
+
+function token() { return localStorage.getItem(LS_TOKEN) || ''; }
+function saveSession(roomId, memberId, tok) {
+  S.me = { roomId, memberId, token: tok };
+  // 只存会话凭证，不存任何密钥或汤底（汤底服务端根本不下发）
+  localStorage.setItem(LS_TOKEN, tok);
+}
+function clearSession() { localStorage.removeItem(LS_TOKEN); localStorage.removeItem(LS_DRAFT); S.me = null; S.view = null; }
+
+async function api(path, opts = {}) {
+  const headers = { 'content-type': 'application/json', ...(opts.headers || {}) };
+  if (token()) headers.authorization = `Bearer ${token()}`;
+  const res = await fetch(path, { ...opts, headers });
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text }; }
+  if (!res.ok) throw new Error((body && (body.error || body.message)) || `HTTP ${res.status}`);
+  return body;
+}
+
+/* ============================================================================
+ * WebSocket：心跳 + 事件 + 快照收敛
+ * ==========================================================================*/
+let ws = null;
+let hbTimer = null;
+
+function connect() {
+  if (!token()) return;
+  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?token=${encodeURIComponent(token())}`;
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    S.connected = true;
+    // 心跳 20 秒一次（与服务端 disconnectSec=60 匹配，容忍丢两帧）；活动上报同理
+    clearInterval(hbTimer);
+    hbTimer = setInterval(() => send({ t: 'heartbeat', hidden: document.visibilityState !== 'visible' }), 20000);
+    render();
+  };
+  ws.onclose = () => {
+    S.connected = false;
+    clearInterval(hbTimer);
+    render();
+    setTimeout(connect, 1500);          // 自动重连；服务端会下发全量快照
+  };
+  ws.onmessage = (ev) => {
+    let frame;
+    try { frame = JSON.parse(ev.data); } catch { return; }
+    handleFrame(frame);
+  };
+}
+
+function send(frame) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { S.error = '连接尚未就绪，请稍候重试'; render(); return; }
+  ws.send(JSON.stringify(frame));
+}
+
+function request(frame) {
+  const id = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).slice(0, 12);
+  S.ack[id] = { at: nowMs(), frame };
+  send({ ...frame, id });
+  return id;
+}
+
+function handleFrame(frame) {
+  switch (frame.t) {
+    case 'hello':
+      S.me = { ...(S.me || {}), roomId: frame.you.roomId, memberId: frame.you.memberId };
+      applyView(frame.view);
+      S.screen = 'room';
+      break;
+    case 'snapshot':
+      applyView(frame.view);
+      break;
+    case 'event': {
+      // 事件流：按 seq 递增（缺口时请求快照兜底）
+      if (frame.seq && frame.seq <= S.lastSeq) return;
+      S.lastSeq = frame.seq || S.lastSeq;
+      if (frame.text) S.pendingTimeline.push({ seq: frame.seq, text: frame.text, kind: frame.kind, at: frame.serverTime });
+      if (frame.kind === 'match_ended') S.notice = '对局已结束，正在生成复盘…';
+      break;
+    }
+    case 'ack': {
+      const ctx = S.ack[frame.id];
+      delete S.ack[frame.id];
+      if (frame.data && frame.data.text) S.hint = frame.data.text;
+      if (frame.data && frame.data.reason) S.notice = frame.data.reason;
+      if (ctx) S.notice = noticeFor(ctx.frame, true);
+      S.error = '';
+      if (ctx && ctx.frame.t === 'guess') S.guessModal = false;
+      if (ctx && ctx.frame.t === 'revoke_key') S.keyMask = null;
+      render();
+      break;
+    }
+    case 'error': {
+      const ctx = S.ack[frame.id];
+      delete S.ack[frame.id];
+      S.error = frame.message + (frame.data && frame.data.errors
+        ? '（' + frame.data.errors.map((e) => `${e.path}: ${e.reason}`).join('；') + '）'
+        : '');
+      render();
+      break;
+    }
+  }
+  render();
+}
+
+function noticeFor(frame, ok) {
+  if (!ok) return '';
+  switch (frame.t) {
+    case 'submit': return '已提交';
+    case 'hint': return '提示已发放';
+    case 'vote': return '已记录你的表决';
+    case 'start': return '对局开始';
+    case 'config': return '参数已更新';
+    case 'skip_turn': return '已跳过本轮';
+    default: return '';
+  }
+}
+
+function applyView(view) {
+  if (!view) return;
+  S.view = view;
+  S.lastSeq = view.room.eventSeq;
+  if (view.timeline) S.pendingTimeline = view.timeline.map((t) => ({ seq: t.seq, text: t.text, kind: t.kind, at: t.at, meta: t.meta, answer: t.answer, reasonCode: t.reasonCode, source: t.source }));
+  render();
+}
+
+/* ============================================================================
+ * 渲染
+ * ==========================================================================*/
+function render() {
+  const app = $('#app');
+  if (!S.view || S.screen === 'entry') { app.innerHTML = viewEntry(); bindEntry(); return; }
+  app.innerHTML = viewRoom();
+}
+
+function viewEntry() {
+  const nickname = localStorage.getItem(LS_NICK) || '';
+  return `
+  <div class="card">
+    <h3>加入或创建房间</h3>
+    <p class="dim">身份是轻量的：填个昵称即可，无需注册。房主自备 API Key 时，Key 只提交给服务端并加密存储，
+      页面任何位置都拿不到明文（只显示掩码）。</p>
+    <div class="field"><label>你的昵称</label><input id="nick" value="${esc(nickname)}" maxlength="12" placeholder="例如：阿伟"></div>
+    <div class="field"><label>房间码（加入已有房间）</label><input id="code" placeholder="6 位房间码，留空则创建新房间" maxlength="8"></div>
+    <div class="field"><label>对局预设</label>
+      <select id="preset">
+        <option value="standard">标准</option><option value="quick">快速</option><option value="casual">休闲</option>
+      </select></div>
+    <div class="row">
+      <button class="primary" id="btnGo">创建 / 加入</button>
+      <button id="btnResume" ${token() ? '' : 'disabled'}>回到我的房间</button>
+    </div>
+    ${S.error ? `<div class="err" style="margin-top:10px">${esc(S.error)}</div>` : ''}
+    <div class="dim" style="margin-top:10px">
+      ${S.config ? `服务端：${S.config.realModelEnabled ? '已接入真实模型' : '使用内置模拟主持人（离线可玩）'} · 密钥保险箱：${S.config.vaultEnabled ? '已启用' : '未启用'}` : ''}
+    </div>
+  </div>`;
+}
+
+function bindEntry() {
+  const go = $('#btnGo');
+  if (go) go.onclick = async () => {
+    const nickname = ($('#nick').value || '').trim() || '玩家';
+    const code = ($('#code').value || '').trim().toUpperCase();
+    const preset = $('#preset').value;
+    localStorage.setItem(LS_NICK, nickname);
+    try {
+      S.error = '';
+      const res = code
+        ? await api(`/api/rooms/${code}/join`, { method: 'POST', body: JSON.stringify({ nickname }) })
+        : await api('/api/rooms', { method: 'POST', body: JSON.stringify({ nickname, preset }) });
+      saveSession(res.roomId, res.memberId, res.token);
+      if (res.view) { S.view = res.view; S.screen = 'room'; }
+      connect();
+      render();
+    } catch (e) { S.error = e.message; render(); }
+  };
+  const resume = $('#btnResume');
+  if (resume) resume.onclick = async () => {
+    try {
+      const me = await api('/api/session');
+      S.me = { roomId: me.roomId, memberId: me.memberId, token: token() };
+      S.view = me.view; S.screen = 'room';
+      connect();
+      render();
+    } catch (e) { S.error = e.message; clearSession(); render(); }
+  };
+}
+
+function viewRoom() {
+  const v = S.view;
+  const room = v.room;
+  const you = v.you;
+  const turn = room.turn;
+  const puzzle = room.puzzle;
+  const draft = localStorage.getItem(LS_DRAFT) || '';
+  const myTurn = you.canSubmit;
+  const phaseLabel = { ACTIVE: '提问中', GRACE: '宽限期（提交仍有效）', JUDGING: '主持人判定中', SETTLED: '本轮结束', SKIPPED: '已跳过', PAUSED: '已暂停', IDLE: '—' }[turn.phase] || turn.phase;
+  const left = Math.max(0, (turn.phase === 'GRACE' ? turn.graceDeadlineAt : turn.deadlineAt) - room.serverTime);
+  const total = Math.max(1, turn.graceDeadlineAt - (turn.graceDeadlineAt - (turn.phase === 'GRACE' ? 0 : left)) || 1);
+  const pct = Math.max(0, Math.min(100, (left / Math.max(1, total)) * 100));
+
+  return `
+  <div class="grid">
+    <div>
+      <div class="card"><h3>房间</h3>
+        <div class="kv">
+          <div class="k">房间码</div><div><b>${esc(room.code)}</b></div>
+          <div class="k">状态</div><div>${esc(room.status)}${room.pauseReason ? ' · ' + esc(room.pauseReason) : ''}</div>
+          <div class="k">轮次</div><div>第 ${room.roundNo} 轮 · turn_seq ${turn.seq}</div>
+          <div class="k">连接</div><div>${S.connected ? '已连接' : '<span style="color:#ffb3ba">断开，正在重连…</span>'}</div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          ${you.isHost ? `<button id="btnStart">开局（房主指定）</button><button id="btnStartVote">开局（投票选汤）</button>` : ''}
+          ${you.isHost ? `<button id="btnCfg">对局参数</button><button id="btnSkip">跳过本轮</button>` : ''}
+          ${you.isHost ? `<button id="btnKey">我的 API Key</button>` : ''}
+          <button id="btnLeave" class="danger">离开</button>
+        </div>
+      </div>
+
+      <div class="card"><h3>成员</h3>
+        ${room.members.map((m) => `
+          <div class="mem${turn.memberId === m.id ? ' turn' : ''}">
+            <div><span class="dot ${m.conn === 'disconnected' ? 'off' : m.activity === 'idle' ? 'idle' : 'active'}"></span>
+              ${esc(m.name)} ${m.isHost ? '<span class="pill">房主</span>' : ''}${m.formerHost ? '<span class="pill">原房主</span>' : ''}
+              ${m.keyState === 'suspended' ? '<span class="pill l2">Key 挂起</span>' : ''}
+            </div>
+            <div class="dim">${m.stateLabel} · 分 ${m.score}</div>
+          </div>`).join('')}
+        <div class="dim" style="margin-top:6px">挂机只跳过其回合、不移交房主；断连才触发移交。挂机与离线不计入投票分母。</div>
+      </div>
+
+      <div class="card"><h3>额度来源</h3>
+        <div class="kv">
+          <div class="k">当前</div><div>${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'}</div>
+          <div class="k">原因码</div><div>${esc(room.credit.reason)}</div>
+          ${room.credit.grantLeft ? `<div class="k">临时授权</div><div>${room.credit.grantLeft} 次</div>` : ''}
+          <div class="k">房主 Key</div><div>${room.members.find((m) => m.isHost) && room.members.find((m) => m.isHost).keyMask ? `<span class="mask">${esc(room.members.find((m) => m.isHost).keyMask)}</span>` : '未配置'}</div>
+        </div>
+        <div class="dim" style="margin-top:6px">原文不可回读：任何角色（含房主本人）都取不回明文。调用失败时系统不会自动改用平台额度。</div>
+      </div>
+    </div>
+
+    <div>
+      <div class="turnbar">
+        <div class="spread">
+          <div><b>第 ${room.roundNo} 轮</b> · ${turn.memberId ? '轮到 ' + esc(nameOf(room, turn.memberId)) : '—'} <span class="pill">${esc(phaseLabel)}</span></div>
+          <div>${fmt(left)}</div>
+        </div>
+        <div class="bar${turn.phase === 'GRACE' ? ' grace' : room.status === 'suspended' ? ' paused' : ''}"><i style="width:${pct}%"></i></div>
+        <div class="dim">${puzzle ? `《${esc(puzzle.title)}》 · ${esc(puzzle.rating)} · 难度 ${puzzle.difficulty}<br>汤面：${esc(puzzle.surface)}` : '还没有选定题目：房主可以「房主指定」或发起「投票选汤」。'}</div>
+      </div>
+
+      ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
+      ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
+      ${banners(room, you)}
+
+      <div class="card">
+        <div class="spread"><h3 style="margin:0">时间线</h3>
+          <div class="row">
+            <button data-hint="1" ${you.canHintT12 ? '' : 'disabled'}>提示 T1</button>
+            <button data-hint="2" ${you.canHintT12 ? '' : 'disabled'}>提示 T2</button>
+            <button data-hint="3" ${you.canHintT3 ? '' : 'disabled'}>提示 T3</button>
+            <button id="btnGuess" ${you.guessLeft && room.status === 'playing' ? '' : 'disabled'}>揭秘（剩 ${you.guessLeft}）</button>
+          </div>
+        </div>
+        <div class="timeline" id="tl">
+          ${S.pendingTimeline.map((t) => `
+            <div class="tl ${t.kind === 'system' ? 'sys' : t.kind === 'rejected' ? 'err' : t.kind === 'vote' ? 'vote' : ''}">
+              <div>${t.kind === 'question' && t.answer ? `<b>${esc(nameOf(room, t.memberId || ''))}</b>：${esc(t.text)} → <b>${answerLabel(t.answer)}</b>${t.reasonCode && t.reasonCode !== 'NONE' ? ` <span class="dim">（${esc(t.reasonCode)}）</span>` : ''}` : esc(t.text)}</div>
+              ${t.meta ? `<div class="meta">${esc(t.meta)}</div>` : ''}
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="spread"><h3 style="margin:0">提问 / 预输入草稿</h3>
+          <span class="dim">草稿只存在本机浏览器，不上传、不广播</span></div>
+        <textarea id="ask" placeholder="随时可以打字（预输入）。轮到你时才能发送。">${esc(draft)}</textarea>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${turn.phase === 'GRACE' && myTurn ? '发送（宽限期内仍有效）' : '发送'}</button>
+          <span class="dim">${myTurn ? '轮到你了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}</span>
+          ${turn.lateSubmit ? '<span class="pill l2">上一轮为临界提交</span>' : ''}
+        </div>
+        ${S.hint ? `<div class="notice" style="margin-top:10px">${esc(S.hint)}</div>` : ''}
+      </div>
+
+      ${room.status === 'settled' ? `
+      <div class="card"><div class="spread"><h3 style="margin:0">对局结束</h3><button class="primary" id="btnRecap">查看复盘</button></div>
+        <div class="dim">复盘含汤底揭晓；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。</div></div>` : ''}
+    </div>
+  </div>
+
+  ${S.configModal ? cfgModal(room) : ''}
+  ${S.guessModal ? guessModal(v) : ''}
+  ${S.keyModal ? keyModal(v) : ''}
+  ${S.recap ? recapModal(S.recap) : ''}`;
+}
+
+function banners(room, you) {
+  const out = [];
+  if (room.ai.state === 'BLOCKED') {
+    out.push(`<div class="notice">AI 服务异常（${esc(room.ai.reasonCode || '')}）：对局已暂停，等待房主处理。<b>本轮未消耗，且不会自动切换到平台额度。</b>
+      ${you.isHost ? '<div class="row" style="margin-top:6px"><button id="btnFixKey">更新 API Key</button><button id="btnRevokeKey">撤销并改用平台额度</button></div>' : ''}</div>`);
+  }
+  if (room.vote && room.vote.type === 'fallback_credit' && room.vote.status === 'open') {
+    out.push(`<div class="notice">投票：是否临时启用平台备用额度继续对局？已投 ${room.vote.votedCount} / ${room.vote.eligibleCount}，剩余 ${fmt(room.vote.deadlineAt - room.serverTime)}
+      <div class="row" style="margin-top:6px"><button data-vote="yes">赞成</button><button data-vote="no">反对</button><button data-vote="abstain">弃权</button></div>
+      <div class="dim">门槛：有效人数 ≥ 2 且赞成票过半；挂机 / 离线成员的表决不被受理</div></div>`);
+  }
+  if (room.vote && room.vote.type === 'puzzle_choice' && room.vote.status === 'open') {
+    out.push(`<div class="card"><h3>投票选汤（已投 ${room.vote.votedCount} / ${room.vote.eligibleCount}，剩余 ${fmt(room.vote.deadlineAt - room.serverTime)}）</h3>
+      <div class="cands">${(room.vote.candidates || []).map((c) => `
+        <div class="cand">
+          <div class="row"><span class="pill ${c.rating.toLowerCase()}">${esc(c.rating)}</span><span class="pill">难度 ${c.difficulty}</span><span class="pill">约 ${c.estMinutes} 分钟</span></div>
+          <div>${esc(c.surface)}</div>
+          <div class="row">${c.tags.map((t) => `<span class="pill">${esc(t)}</span>`).join('')}${c.sensitiveTags.map((t) => `<span class="pill l3">含：${esc(t)}</span>`).join('')}</div>
+          <button data-votepuzzle="${esc(c.id)}" ${room.vote.myBallot ? 'disabled' : ''}>投给这道</button>
+        </div>`).join('')}</div></div>`);
+  }
+  if (room.vote && room.vote.status !== 'open' && room.vote.result) out.push(`<div class="notice">投票已结束：${esc(room.vote.result)}</div>`);
+  if (room.transfer.state === 'paused_for_resume') {
+    out.push(`<div class="notice">房主变更完成，本轮已作废（不计入跳过次数）。等待新房主开始下一轮。
+      ${you.isHost ? '<div class="row" style="margin-top:6px"><button class="primary" id="btnResumeTurn">继续对局</button></div>' : ''}</div>`);
+  }
+  const former = room.members.find((m) => m.formerHost);
+  if (former && you.isHost) {
+    out.push(`<div class="notice">${esc(former.name)} 已回来（现为普通成员）。是否归还房主位？
+      <div class="row" style="margin-top:6px"><button id="btnReturnHost">归还</button><button id="btnDeclineReturn" class="danger">不归还（销毁其挂起 Key）</button></div></div>`);
+  }
+  if (you.isHost && room.members.find((m) => m.isHost) && room.members.find((m) => m.isHost).keyState === 'suspended' && !former) {
+    out.push(`<div class="notice">你的 API Key 处于挂起状态：是否重新启用？
+      <div class="row" style="margin-top:6px"><button data-reenable="yes">是（复测并切回自备额度）</button><button data-reenable="no">否（销毁 Key）</button></div></div>`);
+  }
+  return out.join('');
+}
+
+function nameOf(room, id) { const m = room.members.find((x) => x.id === id); return m ? m.name : '—'; }
+function answerLabel(a) { return { yes: '是', no: '否', irrelevant: '无关', unanswerable: '无法回答' }[a] || a; }
+
+/* ============================================================================
+ * 弹窗
+ * ==========================================================================*/
+function cfgModal(room) {
+  const c = room.config;
+  const num = (k, label, min, max) => `<div class="field"><label>${label}</label><input type="number" data-cfg="${k}" value="${c[k]}" min="${min}" max="${max}"></div>`;
+  const bool = (k, label) => `<div class="field"><label>${label}</label><div><input type="checkbox" data-cfg="${k}" ${c[k] ? 'checked' : ''}></div></div>`;
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">对局参数（config_version ${room.configVersion}）</h3><button id="btnCfgClose">关闭</button></div>
+    <p class="dim">开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。</p>
+    ${num('perTurnSec', '每人提问时长（秒）', 15, 600)}
+    ${num('graceSec', '超时宽限（秒）', 0, 30)}
+    ${num('guessEveryRounds', '揭秘间隔（每 N 轮）', 1, 10)}
+    ${num('guessMaxPerMember', '每人揭秘次数', 1, 10)}
+    ${num('hintQuotaPerMember', '每人提示次数（T1+T2）', 0, 10)}
+    ${num('hintTier3Max', 'T3 提示（每局共享）', 0, 3)}
+    ${num('hintCooldownSec', '提示冷却（秒）', 0, 600)}
+    ${num('maxRounds', '总回合上限（轮）', 1, 60)}
+    ${num('candidateCount', '候选题数量', 3, 5)}
+    ${num('voteDurationSec', '投票时长（秒）', 30, 600)}
+    ${bool('timeoutSkip', '超时自动跳过')}
+    ${bool('idleSkip', '跳过挂机成员的回合')}
+    <div class="row" style="margin-top:10px"><button class="primary" id="btnCfgApply">应用</button></div>
+  </div></div>`;
+}
+
+function guessModal() {
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">提交你的推理（揭秘）</h3><button id="btnGuessCancel">取消</button></div>
+    <p class="dim">判定尺度：关键事实点全部命中 + 表达出因果链 = 命中；命中 ≥ 60% = 接近（只告诉你数量，不告诉你命中了哪几条）；否则未命中。</p>
+    <textarea id="guessText" placeholder="用几句话说明：发生了什么、为什么会这样"></textarea>
+    <div class="row" style="margin-top:10px"><button class="primary" id="btnGuessSubmit">提交推理</button></div>
+  </div></div>`;
+}
+
+function keyModal() {
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">房主自备 API Key</h3><button id="btnKeyClose">关闭</button></div>
+    <p class="dim">提交后服务端会先做一次连接测试：通过才加密入库并锁定生效（此后调用失败**不会**自动改用平台额度）；
+      页面只显示掩码，任何人都无法回读原文。</p>
+    <div class="field"><label>Base URL</label><input id="keyBase" placeholder="https://api.example.com/v1"></div>
+    <div class="field"><label>模型名</label><input id="keyModel" placeholder="your-model"></div>
+    <div class="field"><label>API Key</label><input id="keyValue" type="password" placeholder="sk-..."></div>
+    ${S.keyMask ? `<div class="dim">当前掩码：<span class="mask">${esc(S.keyMask)}</span></div>` : ''}
+    <div class="row" style="margin-top:10px"><button class="primary" id="btnKeySubmit">连接测试并提交</button>
+      <button class="danger" id="btnKeyRevoke">撤销并销毁</button></div>
+    <div class="dim" style="margin-top:8px">提交失败时不会保存任何东西（服务端会立即销毁用于测试的密文）。</div>
+  </div></div>`;
+}
+
+function recapModal(recap) {
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">复盘 · ${esc(recap.puzzle.title)}</h3><button id="btnRecapClose">关闭</button></div>
+    <div class="row"><span class="pill">${esc(recap.result?.result || '')}</span><span class="pill">${esc(recap.result?.reason || '')}</span>
+      <span class="pill">共 ${recap.questions.length} 次提问</span></div>
+    ${recap.canRevealTruth ? `<h3 style="margin-top:12px">汤底揭晓</h3><p>${esc(recap.truth || '')}</p>`
+      : `<div class="notice" style="margin-top:12px">${esc(recap.truthNote || '本局不予揭晓汤底')}</div>`}
+    <h3>完整提问记录</h3>
+    <table><tr><th>#</th><th>成员</th><th>提问</th><th>判定</th><th>来源</th></tr>
+      ${recap.questions.map((q) => `<tr><td>${q.turnSeq}</td><td>${esc(q.memberName)}</td><td>${esc(q.text)}</td>
+        <td>${answerLabel(q.answer)}${q.reasonCode && q.reasonCode !== 'NONE' ? ` <span class="dim">(${esc(q.reasonCode)})</span>` : ''}</td>
+        <td>${esc(q.source)}</td></tr>`).join('')}</table>
+    <h3 style="margin-top:12px">计分</h3>
+    <table><tr><th>成员</th><th>得分</th><th>被跳过</th><th>揭秘次数</th></tr>
+      ${recap.members.map((m) => `<tr><td>${esc(m.name)}</td><td>${m.score}</td><td>${m.skipStreak}</td><td>${m.guessesUsed}</td></tr>`).join('')}</table>
+    <div class="dim" style="margin-top:8px">复盘不含任何 Key；请勿分享给将要玩这道题的人。</div>
+  </div></div>`;
+}
+
+/* ============================================================================
+ * 交互绑定
+ * ==========================================================================*/
+document.addEventListener('click', async (e) => {
+  const el = e.target.closest('[id],[data-hint],[data-vote],[data-votepuzzle],[data-reenable],[data-cfg]');
+  if (!el) return;
+  const id = el.id;
+  const hintTier = el.getAttribute('data-hint');
+  const vote = el.getAttribute('data-vote');
+  const votePuzzle = el.getAttribute('data-votepuzzle');
+  const reenable = el.getAttribute('data-reenable');
+  const room = S.view ? S.view.room : null;
+
+  try {
+    if (hintTier) { S.error = ''; request({ t: 'hint', tier: Number(hintTier) }); return; }
+    if (vote) { S.error = ''; request({ t: 'vote', choice: vote }); return; }
+    if (votePuzzle) { S.error = ''; request({ t: 'vote', choice: votePuzzle }); return; }
+    if (reenable) { S.error = ''; request({ t: 'reenable_key', yes: reenable === 'yes' }); return; }
+    switch (id) {
+      case 'btnStart': request({ t: 'start', mode: 'pick' }); break;
+      case 'btnStartVote': request({ t: 'start', mode: 'vote' }); break;
+      case 'btnCfg': S.configModal = true; render(); break;
+      case 'btnCfgClose': S.configModal = false; render(); break;
+      case 'btnCfgApply': {
+        const patch = {};
+        document.querySelectorAll('[data-cfg]').forEach((input) => {
+          const k = input.getAttribute('data-cfg');
+          patch[k] = input.type === 'checkbox' ? input.checked : Number(input.value);
+        });
+        request({ t: 'config', patch, expectedVersion: room.configVersion });
+        S.configModal = false;
+        break;
+      }
+      case 'btnSkip': request({ t: 'skip_turn' }); break;
+      case 'btnKey': S.keyModal = true; render(); break;
+      case 'btnKeyClose': S.keyModal = false; render(); break;
+      case 'btnKeySubmit': {
+        const baseUrl = $('#keyBase').value.trim();
+        const model = $('#keyModel').value.trim();
+        const apiKey = $('#keyValue').value;                 // 只在内存中，提交后立即清空
+        S.error = '';
+        const res = await api('/api/credentials', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model }) });
+        S.keyMask = res.credential.mask;
+        S.notice = '已启用自备额度（' + res.message + '）';
+        S.keyModal = false;
+        $('#keyValue') && ($('#keyValue').value = '');
+        render();
+        break;
+      }
+      case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
+      case 'btnGuess': S.guessModal = true; render(); break;
+      case 'btnGuessCancel': S.guessModal = false; render(); break;
+      case 'btnGuessSubmit': {
+        const text = $('#guessText').value;
+        S.guessModal = false;
+        request({ t: 'guess', text });
+        break;
+      }
+      case 'btnResumeTurn': request({ t: 'resume_transfer' }); break;
+      case 'btnReturnHost': request({ t: 'return_host' }); break;
+      case 'btnDeclineReturn': request({ t: 'decline_return' }); break;
+      case 'btnFixKey': S.keyModal = true; render(); break;
+      case 'btnRevokeKey': await api('/api/credentials', { method: 'DELETE' }); S.notice = '已撤销 Key'; render(); break;
+      case 'btnLeave': clearSession(); S.screen = 'entry'; S.view = null; if (ws) ws.close(); render(); break;
+      case 'btnRecap': {
+        const recap = await api('/api/recap');
+        S.recap = recap; render();
+        break;
+      }
+      case 'btnRecapClose': S.recap = null; render(); break;
+      case 'btnSend': doSend(); break;
+    }
+  } catch (err) {
+    S.error = err.message; render();
+  }
+});
+
+function doSend() {
+  const ta = $('#ask');
+  const text = (ta ? ta.value : '').trim();
+  if (!text) return;
+  const v = S.view;
+  localStorage.removeItem(LS_DRAFT);
+  request({ t: 'submit', turnSeq: v.room.turn.seq, text, clientSubmitId: (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())) });
+}
+
+document.addEventListener('input', (e) => {
+  if (e.target && e.target.id === 'ask') {
+    // 预输入草稿：只写本机 localStorage，绝不上传
+    localStorage.setItem(LS_DRAFT, e.target.value);
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('#ask')) { e.preventDefault(); doSend(); }
+  // 任何交互都算活动信号（服务端据此推导挂机状态；只上报"有活动"这一事实）
+  if (S.connected) send({ t: 'activity', hidden: document.visibilityState !== 'visible' });
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (S.connected) send({ t: 'activity', hidden: document.visibilityState !== 'visible' });
+});
+
+/* ============================================================================
+ * 启动
+ * ==========================================================================*/
+(async () => {
+  try {
+    S.config = await api('/api/config');
+  } catch { /* 忽略：入口页会用默认文案 */ }
+  if (token()) {
+    try {
+      const me = await api('/api/session');
+      S.me = { roomId: me.roomId, memberId: me.memberId, token: token() };
+      S.view = me.view; S.screen = 'room';
+      connect();
+    } catch { clearSession(); }
+  }
+  render();
+  // 每 15 秒跑一次倒计时与状态刷新（服务端快照才是权威）
+  setInterval(async () => {
+    if (!S.view || !S.connected) return;
+    try { const snap = await api('/api/session'); applyView(snap.view); } catch { /* 忽略 */ }
+  }, 15000);
+})();
+</script>
+</body>
+</html>

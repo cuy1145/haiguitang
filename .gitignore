@@ -1,0 +1,38 @@
+# ---- 密钥与本地配置（绝不入仓库）----
+.env
+.env.*
+!.env.example
+
+# ---- 本地数据与临时产物 ----
+data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.log
+logs/
+tmp/
+temp/
+
+# ---- 单文件原型与本地测试产生的临时配置 ----
+prototypes/**/.env
+prototypes/**/local-config.json
+
+# ---- 依赖与构建产物 ----
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# ---- 编辑器与系统 ----
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Cloudflare 本地变量与产物 ----
+.dev.vars
+.wrangler/
+worker-configuration.d.ts

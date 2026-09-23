@@ -1,0 +1,12 @@
+{
+  "name": "@ht/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "海龟汤服务端：HTTP + WebSocket、房间编排、SQLite 持久化、密钥保险箱、AI 代理",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@ht/core": "workspace:*",
+    "ws": "^8.18.0"
+  }
+}

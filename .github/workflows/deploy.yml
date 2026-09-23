@@ -1,0 +1,83 @@
+name: Deploy (Cloudflare Workers)
+
+# main 分支推送 → 先跑与 CI 完全相同的验证，再执行 wrangler deploy。
+# 需要的仓库 Secrets：
+#   CLOUDFLARE_API_TOKEN   —— 权限：Workers Scripts:Edit + Durable Objects:Edit（免费计划同样适用）
+#   CLOUDFLARE_ACCOUNT_ID  —— Cloudflare 账号 ID
+# 运行期密钥（不进仓库、不进配置）：
+#   wrangler secret put MASTER_KEY   # 加密房主自备 Key 的主密钥（32 字节 base64）
+#   wrangler secret put AI_KEY       # 站点内置额度用的 Key（可选；不配则用内置模拟主持人）
+#   wrangler secret put AI_BASE_URL / AI_MODEL  （也可放在 wrangler.toml 的 [vars]，二者皆可）
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: node scripts/selfcheck.ts
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 说明：`wrangler deploy` 会按 wrangler.toml 里的 [[migrations]] 应用 Durable Object 迁移
+      # （new_sqlite_classes：SQLite 后端，免费计划可用）。
+      - name: 部署到 Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      - name: 部署后健康检查
+        run: |
+          set -e
+          URL="${{ vars.WORKER_URL }}"
+          if [ -z "$URL" ]; then
+            echo "未配置仓库变量 WORKER_URL，跳过健康检查（可在 Settings → Variables 里设置）"
+            exit 0
+          fi
+          for i in 1 2 3 4 5; do
+            if curl -fsS "$URL/api/health" | tee /dev/stderr | grep -q '"ok":true'; then
+              echo "健康检查通过"
+              exit 0
+            fi
+            echo "第 $i 次健康检查未通过，5 秒后重试…"
+            sleep 5
+          done
+          echo "健康检查失败" >&2
+          exit 1

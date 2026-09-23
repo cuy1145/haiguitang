@@ -1,0 +1,38 @@
+{
+  "name": "haiguitang",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 海龟汤 —— 朋友间小规模联机推理游戏（部署于 Cloudflare Workers + Durable Objects）",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:tail": "wrangler tail",
+    "cf:secret:master": "wrangler secret put MASTER_KEY",
+    "cf:secret:ai": "wrangler secret put AI_KEY",
+    "reference": "node packages/server/src/index.ts",
+    "test": "node --test",
+    "test:core": "node --test --test-name-pattern='.*' tests/core",
+    "typecheck": "tsc -p tsconfig.json",
+    "seed": "node scripts/seed-puzzles.ts",
+    "verify": "node --test && node scripts/selfcheck.ts"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "workerd",
+      "esbuild"
+    ]
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2",
+    "wrangler": "^4.136.3"
+  }
+}
