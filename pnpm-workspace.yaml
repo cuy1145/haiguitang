@@ -1,10 +1,17 @@
 packages:
   - 'packages/*'
 
-# pnpm 11 起，构建脚本白名单的**唯一**配置位置就是这里
-# （package.json 里的 pnpm.onlyBuiltDependencies 已被忽略，只会在安装时打一条 WARN）。
-# workerd / esbuild 必须执行安装脚本才能拿到可执行二进制；未列入白名单时 pnpm 11 会
-# 直接以 ERR_PNPM_IGNORED_BUILDS 退出（CI 的 install 步骤就是这么红的）。
-onlyBuiltDependencies:
-  - esbuild
-  - workerd
+# ---------------------------------------------------------------------------
+# 构建脚本白名单（pnpm 11 的写法）
+#
+# 为什么必须有这段：workerd / esbuild 需要执行安装脚本才能拿到可执行二进制。
+# pnpm 10 起默认拦截所有依赖的安装脚本，pnpm 11 更是**直接失败**：
+#     [ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: esbuild@…, workerd@…
+# 之前这段配置写在 package.json 的 "pnpm.onlyBuiltDependencies"，但 pnpm 11
+# 已经完全不再读 package.json 里的 pnpm 字段（只会打一条 WARN），
+# 于是 CI 的 `pnpm install --frozen-lockfile` 每一步都红。
+# pnpm 11 认的是这里的 allowBuilds（包名 → true/false）。
+# ---------------------------------------------------------------------------
+allowBuilds:
+  esbuild: true
+  workerd: true
