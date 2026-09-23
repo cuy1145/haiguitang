@@ -167,10 +167,11 @@ X [ERROR] You can either deploy your worker to one or more routes by specifying 
    | 第 1 个下拉（作用域） | 第 2 个下拉（资源） | 第 3 个下拉（权限级别） |
    |---|---|---|
    | `Account` | `Workers Scripts` | `Edit` |
-   | `Account` | `Durable Objects` | `Edit` |
+   | `Account` | `D1` | `Edit` |
    | `Account` | `Account Settings` | `Read` |
 
-   > 第 2 行（Durable Objects）**不能少**：模板里的 "Edit Cloudflare Workers" 不包含它，这是本项目必须自建 Token 的原因。
+   > 第 2 行（D1）**不能少**：本项目状态全存在 D1 里（方案 A，不用 Durable Objects），
+   > 模板里的 "Edit Cloudflare Workers" 不包含它，这是本项目必须自建 Token 的原因。
    > 权限级别必须是 `Edit`，`Read` 会导致部署报 `Authentication error [code: 10000]`。
 
 6. **Account Resources**：选 `Include` → 右侧下拉选你的账号名（通常只有一个）
@@ -197,8 +198,8 @@ npx wrangler whoami            # 会打印账号名 + 这个 Token 拥有的权�
 Remove-Item Env:CLOUDFLARE_API_TOKEN
 ```
 
-`wrangler whoami` 输出里应当能看到 `Account Name`、`Account ID`，以及一段权限列表（包含 Workers Scripts、Durable Objects）。
-如果提示 `not authenticated` 或权限列表里缺 Durable Objects，就回到第 5 步补权限重新建。
+`wrangler whoami` 输出里应当能看到 `Account Name`、`Account ID`，以及一段权限列表（包含 Workers Scripts、D1）。
+如果提示 `not authenticated` 或权限列表里缺 D1，就回到第 5 步补权限重新建。
 
 > 部署工作流里已经加了"先 `whoami` 再 deploy"的步骤：万一 Token 配错，Actions 日志会直接打印它实际拥有的权限，
 > 而不是等到部署失败才看不出来。
@@ -228,10 +229,17 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 # 2) 写入 Cloudflare（不会显示在终端历史里，也不会进仓库）
 npx wrangler secret put MASTER_KEY        # 粘贴上一步生成的值
 
-# 3) 可选：站点内置额度用的 Key（不配也能玩，会用内置模拟主持人做判定）
+# 3) 可选：站点内置额度用的 Key（**不配也能玩真实模型**——房主在页面里填自己的 Key 即可）
 npx wrangler secret put AI_KEY
-npx wrangler secret put AI_BASE_URL       # 例如 https://api.deepseek.com/v1
-npx wrangler secret put AI_MODEL          # 例如 deepseek-chat
+npx wrangler secret put AI_BASE_URL       # 例如 https://api.deepseek.com
+npx wrangler secret put AI_MODEL          # 例如 deepseek-flash
+
+# 判定用哪个 Key（凭据优先级，见 packages/server/src/ai.ts 的 judge）：
+#   ① 房主在「我的 API Key」里提交的自备 Key（加密存储，用完即弃，优先级最高）
+#   ② 站点 Key（上一条 AI_KEY；受 SITE_MONTHLY_CALL_CAP 月度上限约束）
+#   ③ 两者都没有 → 内置模拟主持人（关键词表驱动，能玩但不理解自然语言）
+# 也就是说：**服务端完全不配 AI_* 也能打出真实模型对局**，只要房主自己填 Key。
+# 房主填完后可在弹窗里点「测试连接（不入库）」先验证 Key 是否可用。
 
 # 4) 本地先跑一遍（本地 workerd，不需要账号也能验证功能）
 Copy-Item .dev.vars.example .dev.vars     # 然后把 MASTER_KEY / AI_* 填进去
@@ -271,14 +279,15 @@ pnpm cf:tail
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `git push` 提示 403 / Authentication failed | 用的密码不是 PAT，或 PAT 权限不够 | 重新生成细粒度 PAT，权限 `Contents: Read and write` 并勾选该仓库 |
-| Actions 里 deploy 报 `Authentication error [code: 10000]` | `CLOUDFLARE_API_TOKEN` 缺失/权限不足 | 按 2.3 重新生成，权限必须含 `Workers Scripts: Edit` 与 `Durable Objects: Edit` |
-| deploy 报 `Cannot apply new_sqlite_classes` 或迁移冲突 | 之前用 `new_classes` 建过同名 DO | 本项目从未部署过就正常；若已部署过，改 `[[migrations]]` 的 tag 或删除旧的 DO 命名空间 |
+| Actions 里 deploy 报 `Authentication error [code: 10000]` | `CLOUDFLARE_API_TOKEN` 缺失/权限不足 | 按 2.3 重新生成，权限必须含 `Workers Scripts: Edit`、`D1: Edit`（本项目状态存 D1，不用 Durable Objects） |
+| deploy 报 D1 绑定/迁移相关错误 | 数据库 id 写错，或 token 缺 `D1: Edit` | 核对 `wrangler.toml` 的 `database_id`；迁移用 `npx wrangler d1 migrations apply haiguitang --remote` |
 | `wrangler dev` 起不来，提示 workerd 缺失 | pnpm 拦截了安装脚本 | `package.json` 里已声明 `pnpm.onlyBuiltDependencies`，执行 `pnpm install` 即可 |
-| 页面能打开但一直"断开，正在重连" | WebSocket 被拦，或 DO 报错 | 看 `wrangler tail` 的 `ws_connected` / `do_http_error`；企业网络可能拦 WS |
-| 提交提问后一直"主持人判定中" | 未配 `AI_*` 时用的是内置模拟主持人（应瞬间返回）；说明 DO 抛错 | `wrangler tail` 看 `judge_failed` / `ws_frame_error` |
+| 页面能打开但一直"断开，正在重连" | 轮询被拦（代理/企业网络）或 D1 报错 | 看 `wrangler tail` 的 `GET /api/rooms/state` 状态码；`/api/health` 里的 `db.ok` 是否为 true |
+| 提交提问后判定结果明显"答非所问" | 没有可用的模型凭据，用的是内置模拟主持人（关键词表，只能识别题库里写过的说法） | 房主点「我的 API Key」填入自备 Key（先点「测试连接」验证），或运维配置 `AI_*` 平台额度 |
+| 提交提问后一直"主持人判定中" | 模型调用卡住/上游无响应 | `wrangler tail` 看 `judge_call_failed` / `judge_failed`（超时 20 秒即中断并暂停对局） |
 | 房主提交 Key 报 `VAULT_DISABLED` | 没设置 `MASTER_KEY` | `npx wrangler secret put MASTER_KEY`（32 字节 base64） |
-| 房主提交 Key 报 `AUTH_FAILED` | Key 无效/被撤销 | 在提供方后台确认 Key 与余额，再重新提交 |
-| 免费额度告警 | 请求数或 DO 时长超限 | 提高 tick 间隔、减少日志；或升级 Workers Paid（$5/月） |
+| 房主提交 Key 报 `AUTH_FAILED` / `MODEL_OR_BASE_URL_NOT_FOUND` | Key 无效，或地址/模型名不对 | 点弹窗里的「测试连接（不入库）」看具体原因与真实请求地址；DeepSeek 用 `https://api.deepseek.com` + `deepseek-flash` |
+| 免费额度告警 | 请求数超限 | 提高轮询间隔（前端 1.8 秒）、减少日志；或升级 Workers Paid（$5/月） |
 
 ---
 

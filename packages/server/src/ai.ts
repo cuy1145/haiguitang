@@ -109,16 +109,24 @@ export class HostService {
       };
     }
 
-    // ③ 未配置真实模型（或没有可用凭据）→ 内置规则主持人（离线可玩）
-    const useReal = this.deps.config.enabled && Boolean(req.credential?.apiKey);
-    if (!useReal) {
+    // ③ 选凭据：**房主自备 Key 优先**；房主没填才用平台额度（受月度上限约束）；
+    //    两者都没有 → 内置规则主持人（离线可玩，语义与真实模型一致，只是不做语言理解）
+    const hostCred = req.credential?.apiKey ? req.credential : null;
+    const siteCred = this.deps.config.enabled && this.deps.config.key
+      ? {
+        apiKey: this.deps.config.key, baseUrl: this.deps.config.baseUrl,
+        model: this.deps.config.model, provider: this.deps.config.provider,
+      }
+      : null;
+    const cred = hostCred ?? (siteCred && this.deps.siteQuotaAllows() ? siteCred : null);
+    if (!cred) {
       const result = mockJudge(req.question, { facts: req.puzzle.facts, factSetVersion, puzzleId: req.puzzle.id });
       this.deps.store.putVerdict({ ...parts, answer: result.answer, reasonCode: result.reasonCode, matchedFactIds: result.matchedFactIds, hitCount: 0, createdAt: Date.now() });
       return { kind: 'ok', result, latencyMs: 0, tokensIn: 0, tokensOut: 0, attempts: 0, usedSource: 'none' };
     }
+    const usedSource: 'host_key' | 'site_fallback' = hostCred ? 'host_key' : 'site_fallback';
 
     // ④ 真实模型：带重试的调用 + L3 校验
-    const cred = req.credential!;
     const maxAttempts = Math.max(1, 1 + this.deps.config.maxRetries);
     let lastError: JudgeOutcome & { kind: 'error' } = {
       kind: 'error', errorClass: 'UNKNOWN', retryable: false, reasonCode: 'UNKNOWN', message: '未执行', attempts: 0,
@@ -168,9 +176,10 @@ export class HostService {
       this.deps.logger.info('judge_result', {
         room_id: req.roomId, turn_seq: req.turnSeq,
         answer: result.answer, reason_code: result.reasonCode, answer_source: 'model',
+        credit_source: usedSource,
         latency_ms: latencyMs, attempt,
       });
-      return { kind: 'ok', result, latencyMs, tokensIn: call.tokensIn, tokensOut: call.tokensOut, attempts: attempt, usedSource: 'host_key' };
+      return { kind: 'ok', result, latencyMs, tokensIn: call.tokensIn, tokensOut: call.tokensOut, attempts: attempt, usedSource };
     }
     return lastError;
   }

@@ -461,7 +461,7 @@ function viewEntry() {
     </div>
     ${S.error ? `<div class="err" style="margin-top:10px">${esc(S.error)}</div>` : ''}
     <div class="dim" style="margin-top:10px">
-      ${S.config ? `服务端：${S.config.realModelEnabled ? '已接入真实模型' : '使用内置模拟主持人（离线可玩）'} · 密钥保险箱：${S.config.vaultEnabled ? '已启用' : '未启用'}` : ''}
+      ${S.config ? `服务端模型：${S.config.realModelEnabled ? '已配置平台额度' : '未配置（可由房主自备 API Key）'} · 密钥保险箱：${S.config.vaultEnabled ? '已启用' : '未启用'}` : ''}
     </div>
   </div>`;
 }
@@ -675,6 +675,14 @@ function logEntry(t, room, you) {
 
 function banners(room, you) {
   const out = [];
+  // 服务端没有平台额度时：房主自备 Key 就是唯一的真实模型来源，直接给出入口
+  const hostMember = room.members.find((m) => m.isHost);
+  if (!(S.config && S.config.realModelEnabled) && (S.config ? S.config.vaultEnabled : true)
+      && you.isHost && hostMember && !hostMember.keyMask) {
+    out.push(`<div class="notice">服务端没有配置模型额度：当前判定由<b>内置模拟主持人</b>给出（能玩，但不理解自然语言）。
+      填上你自己的 API Key（默认 DeepSeek）后，判定就会走真实模型。
+      <div class="row" style="margin-top:6px"><button class="primary" id="btnKeyFromBanner">填写我的 API Key</button></div></div>`);
+  }
   if (room.ai.state === 'BLOCKED') {
     out.push(`<div class="notice">AI 服务异常（${esc(room.ai.reasonCode || '')}）：对局已暂停，等待房主处理。<b>本轮未消耗，且不会自动切换到平台额度。</b>
       ${you.isHost ? '<div class="row" style="margin-top:6px"><button id="btnFixKey">更新 API Key</button><button id="btnRevokeKey">撤销并改用平台额度</button></div>' : ''}</div>`);
@@ -905,6 +913,7 @@ document.addEventListener('click', async (e) => {
       }
       case 'btnSkip': request({ t: 'skip_turn' }); break;
       case 'btnKey': S.keyModal = true; S.keyTest = null; render(); break;
+      case 'btnKeyFromBanner': S.keyModal = true; S.keyTest = null; render(); break;
       case 'btnKeyClose': S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; render(); break;
       case 'btnKeyToggle': {
         const el = $('#keyValue');

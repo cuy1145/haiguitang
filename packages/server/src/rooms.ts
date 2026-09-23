@@ -477,8 +477,10 @@ export class RoomRuntime {
       return { ok: true };
     }
 
-    let credential: { apiKey: string; baseUrl: string; model: string; provider: string } | null = null;
-    if (this.deps.host.realModelEnabled) credential = await this.resolveCredential();
+    // 房主自备 Key 与平台额度**互不依赖**：服务端没配置任何模型额度时，
+    // 房主自己填的 Key 就是唯一的真实模型来源（此前这里被 realModelEnabled 挡住，
+    // 导致"服务端没配 Key"时房主填了 Key 也仍走内置模拟主持人）。
+    const credential = await this.resolveCredential();
     const outcome = await this.deps.host.judge({
       roomId: this.room.id, matchId: this.matchId, turnSeq, question: text, puzzle, credential,
     });
