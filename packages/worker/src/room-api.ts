@@ -54,10 +54,16 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
     }));
   }
   if (request.method === 'GET' && path === '/api/rooms/state') {
+    // 前端轮询用这一个端点：一次拿到【视图快照 + 时间线 + 自 since 起的新事件 + 最新 seq】
+    const since = Number(url.searchParams.get('since') ?? 0);
     return withRoom(env, roomId, async (runtime, store) => json({
       view: runtime.view(memberId),
       timeline: await loadTimeline(env, roomId),
-      events: store.emittedEvents,
+      seq: runtime.room.eventSeq,
+      stateVersion: runtime.room.stateVersion,
+      events: since > 0
+        ? [...(await fetchEventsSince(env.DB, roomId, since)), ...store.emittedEvents.filter((e) => e.seq > since)]
+        : store.emittedEvents,
     }));
   }
   if (request.method === 'GET' && path === '/api/rooms/events') {

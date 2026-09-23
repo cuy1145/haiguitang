@@ -127,108 +127,161 @@ async function api(path, opts = {}) {
 }
 
 /* ============================================================================
- * WebSocket：心跳 + 事件 + 快照收敛
+ * 传输层：轮询（方案 A：D1 + 惰性推进，无 WebSocket / 无 Durable Objects）
+ *
+ *  · 每 1.8 秒 GET /api/rooms/state?since=<seq>
+ *      一次请求同时拿到【权威状态快照】+【时间线】+【新事件】+【最新 seq】
+ *  · 动作走 POST /api/rooms/actions，响应里自带本次事件 → 自己的操作零等待
+ *  · 心跳 20 秒一次（服务端断连判定 60 秒）；页面交互上报"活动"（挂机判定用）
+ *  · 服务端每个请求都会先"惰性补算"过期事件（超时跳过/挂机/移交/投票截止），
+ *    所以即使没有服务器定时器，语义也与"每秒 tick"等价
  * ==========================================================================*/
-let ws = null;
+let pollTimer = null;
 let hbTimer = null;
+let pollInFlight = false;
 
-function connect() {
+/** {t:...} 帧 → 服务端动作（保持原有调用点不变） */
+const ACTIONS = {
+  submit: (f) => ({ type: 'submit', turnSeq: f.turnSeq, text: f.text, clientSubmitId: f.clientSubmitId }),
+  hint: (f) => ({ type: 'hint', tier: f.tier }),
+  guess: (f) => ({ type: 'guess', text: f.text }),
+  vote: (f) => ({ type: 'vote', choice: f.choice }),
+  config: (f) => ({ type: 'config', patch: f.patch, expectedVersion: f.expectedVersion }),
+  start: (f) => ({ type: 'start', mode: f.mode ?? 'pick', ...(f.puzzleId ? { puzzleId: f.puzzleId } : {}) }),
+  resume_transfer: () => ({ type: 'resume_transfer' }),
+  return_host: () => ({ type: 'return_host' }),
+  decline_return: () => ({ type: 'decline_return' }),
+  reenable_key: (f) => ({ type: 'reenable_key', yes: f.yes === true }),
+  revoke_key: () => ({ type: 'revoke_key' }),
+  skip_turn: () => ({ type: 'skip_turn' }),
+  end_match: () => ({ type: 'end_match' }),
+};
+
+function startPolling() {
   if (!token()) return;
-  const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?token=${encodeURIComponent(token())}`;
-  ws = new WebSocket(url);
-  ws.onopen = () => {
+  stopPolling();
+  pollTimer = setInterval(() => { void pollOnce(); }, 1800);
+  hbTimer = setInterval(() => { void sendAction({ type: 'heartbeat', hidden: document.visibilityState !== 'visible' }, { silent: true }); }, 20000);
+  void pollOnce();
+}
+
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  if (hbTimer) clearInterval(hbTimer);
+  pollTimer = null;
+  hbTimer = null;
+}
+
+async function pollOnce() {
+  if (pollInFlight || !token()) return;
+  pollInFlight = true;
+  try {
+    const res = await fetch(`/api/rooms/state?since=${S.lastSeq}`, { headers: { authorization: `Bearer ${token()}` } });
+    if (res.status === 401) { expireSession(); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
     S.connected = true;
-    // 心跳 20 秒一次（与服务端 disconnectSec=60 匹配，容忍丢两帧）；活动上报同理
-    clearInterval(hbTimer);
-    hbTimer = setInterval(() => send({ t: 'heartbeat', hidden: document.visibilityState !== 'visible' }), 20000);
-    render();
-  };
-  ws.onclose = () => {
+    S.error = '';
+    applyState(data);
+  } catch (err) {
     S.connected = false;
-    clearInterval(hbTimer);
+    S.error = `连接中断（${err.message}），正在重试…`;
     render();
-    setTimeout(connect, 1500);          // 自动重连；服务端会下发全量快照
-  };
-  ws.onmessage = (ev) => {
-    let frame;
-    try { frame = JSON.parse(ev.data); } catch { return; }
-    handleFrame(frame);
-  };
-}
-
-function send(frame) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) { S.error = '连接尚未就绪，请稍候重试'; render(); return; }
-  ws.send(JSON.stringify(frame));
-}
-
-function request(frame) {
-  const id = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).slice(0, 12);
-  S.ack[id] = { at: nowMs(), frame };
-  send({ ...frame, id });
-  return id;
-}
-
-function handleFrame(frame) {
-  switch (frame.t) {
-    case 'hello':
-      S.me = { ...(S.me || {}), roomId: frame.you.roomId, memberId: frame.you.memberId };
-      applyView(frame.view);
-      S.screen = 'room';
-      break;
-    case 'snapshot':
-      applyView(frame.view);
-      break;
-    case 'event': {
-      // 事件流：按 seq 递增（缺口时请求快照兜底）
-      if (frame.seq && frame.seq <= S.lastSeq) return;
-      S.lastSeq = frame.seq || S.lastSeq;
-      if (frame.text) S.pendingTimeline.push({ seq: frame.seq, text: frame.text, kind: frame.kind, at: frame.serverTime });
-      if (frame.kind === 'match_ended') S.notice = '对局已结束，正在生成复盘…';
-      break;
-    }
-    case 'ack': {
-      const ctx = S.ack[frame.id];
-      delete S.ack[frame.id];
-      if (frame.data && frame.data.text) S.hint = frame.data.text;
-      if (frame.data && frame.data.reason) S.notice = frame.data.reason;
-      if (ctx) S.notice = noticeFor(ctx.frame, true);
-      S.error = '';
-      if (ctx && ctx.frame.t === 'guess') S.guessModal = false;
-      if (ctx && ctx.frame.t === 'revoke_key') S.keyMask = null;
-      render();
-      break;
-    }
-    case 'error': {
-      const ctx = S.ack[frame.id];
-      delete S.ack[frame.id];
-      S.error = frame.message + (frame.data && frame.data.errors
-        ? '（' + frame.data.errors.map((e) => `${e.path}: ${e.reason}`).join('；') + '）'
-        : '');
-      render();
-      break;
-    }
+  } finally {
+    pollInFlight = false;
   }
+}
+
+/** 应用服务端返回的 { view, timeline, events, seq } */
+function applyState(data) {
+  if (data.view) { S.view = data.view; S.screen = 'room'; }
+  if (Array.isArray(data.timeline)) {
+    S.pendingTimeline = data.timeline.map((t) => ({ seq: t.seq, text: t.text, kind: t.kind, at: t.at, meta: t.meta, answer: t.answer, reasonCode: t.reasonCode, source: t.source }));
+  }
+  if (typeof data.seq === 'number' && data.seq > S.lastSeq) S.lastSeq = data.seq;
+  if (data.view && data.view.room && data.view.room.status === 'settled') S.notice = '对局已结束，可以查看复盘';
   render();
 }
 
-function noticeFor(frame, ok) {
-  if (!ok) return '';
-  switch (frame.t) {
+/** 提交动作；返回服务端响应（含本次事件） */
+async function sendAction(action, opts = {}) {
+  if (!token()) { S.error = '会话已失效，请重新加入房间'; render(); return null; }
+  try {
+    const res = await fetch('/api/rooms/actions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token()}` },
+      body: JSON.stringify(action),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) { expireSession(); return null; }
+    if (!res.ok || data.ok === false) {
+      const detail = data.detail && data.detail.errors
+        ? '（' + data.detail.errors.map((e) => `${e.path}: ${e.reason}`).join('；') + '）'
+        : '';
+      S.error = (data.message || `HTTP ${res.status}`) + detail;
+      render();
+      return null;
+    }
+    S.error = '';
+    if (data.data && data.data.text) S.hint = data.data.text;
+    if (!opts.silent) S.notice = noticeFor(action);
+    if (Array.isArray(data.events) && data.events.length > 0) {
+      for (const e of data.events) if (typeof e.seq === 'number' && e.seq > S.lastSeq) S.lastSeq = e.seq;
+    }
+    await pollOnce();            // 立即刷新，自己的操作零等待
+    return data;
+  } catch (err) {
+    S.connected = false;
+    S.error = `请求失败：${err.message}`;
+    render();
+    return null;
+  }
+}
+
+/** 会话失效（令牌过期/房间销毁）：回到入口页 */
+function expireSession() {
+  clearSession();
+  stopPolling();
+  S.screen = 'entry';
+  S.view = null;
+  S.error = '会话已失效，请重新创建或加入房间';
+  render();
+}
+
+/** 兼容原有调用点：request({t:'...'}) → 对应动作 */
+function request(frame) {
+  const map = ACTIONS[frame.t];
+  if (!map) { S.error = `未知操作：${frame.t}`; render(); return null; }
+  if (frame.t === 'guess') S.guessModal = false;
+  void sendAction(map(frame));
+  return null;
+}
+
+/** 兼容原有调用点：send({t:'activity'|'heartbeat'}) */
+function send(frame) {
+  if (frame.t === 'activity' || frame.t === 'heartbeat') {
+    void sendAction({ type: frame.t, hidden: frame.hidden === true }, { silent: true });
+  }
+}
+
+function noticeFor(action) {
+  switch (action.type) {
     case 'submit': return '已提交';
     case 'hint': return '提示已发放';
     case 'vote': return '已记录你的表决';
     case 'start': return '对局开始';
     case 'config': return '参数已更新';
     case 'skip_turn': return '已跳过本轮';
+    case 'revoke_key': S.keyMask = null; return '已撤销 Key';
     default: return '';
   }
 }
 
+/** 兼容：进入房间时用一次状态快照铺满界面 */
 function applyView(view) {
   if (!view) return;
   S.view = view;
-  S.lastSeq = view.room.eventSeq;
-  if (view.timeline) S.pendingTimeline = view.timeline.map((t) => ({ seq: t.seq, text: t.text, kind: t.kind, at: t.at, meta: t.meta, answer: t.answer, reasonCode: t.reasonCode, source: t.source }));
+  S.screen = 'room';
   render();
 }
 
@@ -279,7 +332,7 @@ function bindEntry() {
         : await api('/api/rooms', { method: 'POST', body: JSON.stringify({ nickname, preset }) });
       saveSession(res.roomId, res.memberId, res.token);
       if (res.view) { S.view = res.view; S.screen = 'room'; }
-      connect();
+      startPolling();
       render();
     } catch (e) { S.error = e.message; render(); }
   };
@@ -289,7 +342,7 @@ function bindEntry() {
       const me = await api('/api/session');
       S.me = { roomId: me.roomId, memberId: me.memberId, token: token() };
       S.view = me.view; S.screen = 'room';
-      connect();
+      startPolling();
       render();
     } catch (e) { S.error = e.message; clearSession(); render(); }
   };
@@ -578,7 +631,7 @@ document.addEventListener('click', async (e) => {
       case 'btnDeclineReturn': request({ t: 'decline_return' }); break;
       case 'btnFixKey': S.keyModal = true; render(); break;
       case 'btnRevokeKey': await api('/api/credentials', { method: 'DELETE' }); S.notice = '已撤销 Key'; render(); break;
-      case 'btnLeave': clearSession(); S.screen = 'entry'; S.view = null; if (ws) ws.close(); render(); break;
+      case 'btnLeave': clearSession(); S.screen = 'entry'; S.view = null; stopPolling(); render(); break;
       case 'btnRecap': {
         const recap = await api('/api/recap');
         S.recap = recap; render();
@@ -630,15 +683,10 @@ document.addEventListener('visibilitychange', () => {
       const me = await api('/api/session');
       S.me = { roomId: me.roomId, memberId: me.memberId, token: token() };
       S.view = me.view; S.screen = 'room';
-      connect();
+      startPolling();
     } catch { clearSession(); }
   }
   render();
-  // 每 15 秒跑一次倒计时与状态刷新（服务端快照才是权威）
-  setInterval(async () => {
-    if (!S.view || !S.connected) return;
-    try { const snap = await api('/api/session'); applyView(snap.view); } catch { /* 忽略 */ }
-  }, 15000);
 })();
 </script>
 </body>
