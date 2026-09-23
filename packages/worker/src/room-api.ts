@@ -49,7 +49,7 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
 
   if (request.method === 'GET' && path === '/api/session') {
     return withRoom(env, roomId, async (runtime) => json({
-      roomId, memberId, view: runtime.view(memberId),
+      roomId, memberId, view: viewFor(runtime, memberId),
       events: [],
     }));
   }
@@ -57,7 +57,7 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
     // 前端轮询用这一个端点：一次拿到【视图快照 + 时间线 + 自 since 起的新事件 + 最新 seq】
     const since = Number(url.searchParams.get('since') ?? 0);
     return withRoom(env, roomId, async (runtime, store) => json({
-      view: runtime.view(memberId),
+      view: viewFor(runtime, memberId),
       timeline: await loadTimeline(env, roomId),
       seq: runtime.room.eventSeq,
       stateVersion: runtime.room.stateVersion,
@@ -269,6 +269,23 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
   });
 }
 
+/**
+ * 按「查看者」过滤候选题目（信息暴露面控制）：
+ *  · 房主指定模式（等待开局）：候选题**只有房主能看到** —— 成员不必看到房主在挑什么
+ *  · 投票选汤（vote 进行中）：所有人能看到候选题并投票
+ * 在**服务端**过滤而不是前端隐藏：非房主的响应里根本不包含候选题数据。
+ */
+function viewFor(runtime: RoomRuntime, memberId: string): ReturnType<RoomRuntime['view']> {
+  const view = runtime.view(memberId);   // 注意：这里必须是 runtime.view，不能是 viewFor（否则无限递归）
+  const room = runtime.room;
+  const isHost = room.hostId === memberId;
+  const voteOpen = Boolean(room.vote && room.vote.type === 'puzzle_choice' && room.vote.status === 'open');
+  if (!isHost && !voteOpen) {
+    delete (view as { candidates?: unknown }).candidates;
+  }
+  return view;
+}
+
 function ok(store: D1RoomStore, data?: unknown): Response {
   return json({ ok: true, ...(data ? { data } : {}), events: store.emittedEvents, notice: '' });
 }
@@ -361,7 +378,7 @@ async function joinAsPlayer(
   if (response.status !== 200) return { error: 'JOIN_FAILED' };
   await saveSession(env.DB, await sha256Hex(token), roomId, memberId);
 
-  const viewResponse = await withRoom(env, roomId, async (runtime) => json({ view: runtime.view(memberId) }));
+  const viewResponse = await withRoom(env, roomId, async (runtime) => json({ view: viewFor(runtime, memberId) }));
   const viewBody = await viewResponse.json() as { view?: unknown };
   return { memberId, token, view: viewBody.view ?? null };
 }

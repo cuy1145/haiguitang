@@ -436,9 +436,13 @@ function viewRoom() {
       ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
       ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
 
-      ${(v.candidates && v.candidates.length > 0 && room.status === 'waiting') ? `
+      ${(room.status === 'waiting' && !you.isHost) ? `
+      <div class="card"><div class="spread"><h3 style="margin:0">选题</h3><span class="dim">等待房主选题…</span></div>
+        <div class="dim">房主会从题库里挑一道题，或发起「投票选汤」让所有人一起选。</div></div>` : ''}
+
+      ${(you.isHost && v.candidates && v.candidates.length > 0 && room.status === 'waiting') ? `
       <div class="card"><div class="spread"><h3 style="margin:0">选题（${v.candidates.length} 道可选）</h3>
-        <span class="dim">${you.isHost ? '点「选这道」直接开局，或发起投票让成员选' : '等待房主选题'}</span></div>
+        <span class="dim">点「选这道」直接开局，或发起「投票选汤」让成员一起选</span></div>
         <div class="cands">
           ${v.candidates.map((c) => `
             <div class="cand">
