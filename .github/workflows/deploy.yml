@@ -1,13 +1,17 @@
 name: Deploy (Cloudflare Workers)
 
 # main 分支推送 → 先跑与 CI 完全相同的验证，再执行 wrangler deploy。
-# 需要的仓库 Secrets：
-#   CLOUDFLARE_API_TOKEN   —— 权限：Workers Scripts:Edit + Durable Objects:Edit（免费计划同样适用）
-#   CLOUDFLARE_ACCOUNT_ID  —— Cloudflare 账号 ID
-# 运行期密钥（不进仓库、不进配置）：
+#
+# 需要的仓库 Secrets（Settings → Secrets and variables → Actions → Secrets）：
+#   CLOUDFLARE_API_TOKEN   —— 权限：Workers Scripts:Edit + D1:Edit（D1 权限不能少，本项目状态存 D1）
+#   CLOUDFLARE_ACCOUNT_ID  —— Cloudflare 账号 ID（dash 右侧栏可见）
+# 没配这两个 Secret 时，部署任务会**明确跳过**（不是失败）——避免每次推送都收到失败邮件。
+#   secrets 上下文在 job 级 if 里不可用，所以用一个 guard job 判断后传给 deploy job。
+# 可选仓库变量（Settings → ... → Variables）：
+#   WORKER_URL             —— 例如 https://haiguitang.luowanx70636.workers.dev，配了就会做部署后健康检查
+# 运行期密钥（不进仓库、不进配置文件）：
 #   wrangler secret put MASTER_KEY   # 加密房主自备 Key 的主密钥（32 字节 base64）
-#   wrangler secret put AI_KEY       # 站点内置额度用的 Key（可选；不配则用内置模拟主持人）
-#   wrangler secret put AI_BASE_URL / AI_MODEL  （也可放在 wrangler.toml 的 [vars]，二者皆可）
+#   wrangler secret put AI_KEY       # 站点内置额度用的 Key（可选：不配也能玩，房主自备 Key 或内置模拟主持人）
 on:
   push:
     branches: [main]
@@ -38,8 +42,30 @@ jobs:
       - run: pnpm test
       - run: node scripts/selfcheck.ts
 
-  deploy:
+  # 判断 Cloudflare 凭据是否已配置；没配就跳过部署（而不是让 workflow 变红）
+  preflight:
     needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      has_credentials: ${{ steps.check.outputs.has_credentials }}
+    steps:
+      - id: check
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CF_TOKEN" ] && [ -n "$CF_ACCOUNT" ]; then
+            echo "has_credentials=true" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare 凭据已配置，继续部署。"
+          else
+            echo "has_credentials=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=已跳过自动部署::未配置 CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID。"
+            echo "配置方法见 docs/DEPLOY.md §2.3；配好后重新运行本 workflow 即可自动部署。"
+          fi
+
+  deploy:
+    needs: [verify, preflight]
+    if: needs.preflight.outputs.has_credentials == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -63,8 +89,9 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: whoami
 
-      # 说明：`wrangler deploy` 会按 wrangler.toml 里的 [[migrations]] 应用 Durable Object 迁移
-      # （new_sqlite_classes：SQLite 后端，免费计划可用）。
+      # wrangler deploy 会按 wrangler.toml 的 [assets] 上传前端、绑定 D1。
+      # 注意：D1 的**表结构迁移不会自动应用**，需要在本地显式执行一次：
+      #   npx wrangler d1 migrations apply haiguitang --remote
       - name: 部署到 Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:

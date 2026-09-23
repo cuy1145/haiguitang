@@ -1,5 +1,10 @@
 packages:
   - 'packages/*'
-allowBuilds:
-  esbuild: set this to true or false
-  workerd: set this to true or false
+
+# pnpm 11 起，构建脚本白名单的**唯一**配置位置就是这里
+# （package.json 里的 pnpm.onlyBuiltDependencies 已被忽略，只会在安装时打一条 WARN）。
+# workerd / esbuild 必须执行安装脚本才能拿到可执行二进制；未列入白名单时 pnpm 11 会
+# 直接以 ERR_PNPM_IGNORED_BUILDS 退出（CI 的 install 步骤就是这么红的）。
+onlyBuiltDependencies:
+  - esbuild
+  - workerd

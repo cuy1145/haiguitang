@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AI 海龟汤 —— 朋友间小规模联机推理游戏（部署于 Cloudflare Workers + Durable Objects）",
+  "description": "AI 海龟汤 —— 朋友间小规模联机推理游戏（部署于 Cloudflare Workers + D1）",
   "engines": {
     "node": ">=22.6"
   },
@@ -21,12 +21,6 @@
     "typecheck": "tsc -p tsconfig.json",
     "seed": "node scripts/seed-puzzles.ts",
     "verify": "node --test && node scripts/selfcheck.ts"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "workerd",
-      "esbuild"
-    ]
   },
   "dependencies": {
     "ws": "^8.18.0"
