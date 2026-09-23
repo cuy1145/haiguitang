@@ -8,6 +8,7 @@
     "node": ">=22.6"
   },
   "scripts": {
+    "cf:preflight": "node scripts/cf-preflight.ts",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy",
     "cf:tail": "wrangler tail",
@@ -36,3 +37,4 @@
     "wrangler": "^4.136.3"
   }
 }
+

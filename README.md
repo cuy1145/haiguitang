@@ -4,59 +4,76 @@
 AI 担任主持人负责判定、提示与复盘。支持单人与多人联机（房间码入局、轮流提问、超时跳过、断线重连、房主移交）。
 
 > 本仓库是《AI 海龟汤 · 分阶段提示词包》的落地实现。
-> 规划文档位于仓库**之外**的同级目录 `../产出/`（阶段 1～5 的方案、竞态清单、测试清单、阶段间矛盾检查等）。
+> 规划文档位于仓库**之外**的同级目录 `../产出/`（阶段 1～5 的方案 + **阶段 6：部署形态改为 Cloudflare 的修订**）。
 > 实现与规划不一致的地方都在 `docs/DESIGN.md` 里逐条列出并说明理由。
 
-## 快速开始（M1 本地服务器版）
+## 部署目标（已确定）
+
+**Cloudflare Workers + Durable Objects（免费计划）**，源码托管在 **GitHub**，main 分支由 Actions 自动部署。
+
+- 每个房间 = 一个 Durable Object：**平台级串行化**（取代自研的房间队列）、SQLite 内置存储、alarm 定时、WebSocket 休眠
+- 规则与编排（`@ht/core` + `packages/server/src/rooms.ts`）被两个运行时**逐字复用**，不存在第二套规则实现
+- Node 版服务端（`pnpm reference`）保留为**备份/回归夹具**，不参与生产部署
+
+**开始配置请看 [`docs/DEPLOY.md`](docs/DEPLOY.md)**（GitHub 建仓库、Cloudflare API Token、Secrets 的点选路径都写好了），
+部署前的环境自检：`pnpm cf:preflight`。迁移方案与风险清单见 [`docs/CF-MIGRATION.md`](docs/CF-MIGRATION.md)。
+
+## 快速开始
 
 ```bash
-pnpm install          # 只装 4 个依赖：ws + @types/* + typescript
-pnpm m1               # 启动本地服务器，并在浏览器打开 http://127.0.0.1:8787
+pnpm install
+pnpm cf:preflight     # 部署前置自检（只检查、不改动；并打印下一步命令）
+
+# 生产运行时（Cloudflare）——移植进行中，见 packages/worker/README.md
+pnpm cf:dev           # 本地 workerd（不需要 CF 账号）
+pnpm cf:deploy        # 部署到线上
+
+# 备份/参考实现（Node，本机可跑，用于回归验证与无网环境）
+pnpm reference        # 启动本地 Node 服务器，浏览器打开 http://127.0.0.1:8787
 ```
 
 - **不需要任何 API Key**：未配置 `AI_KEY` 时使用内置的规则主持人（离线可玩、判定确定）。
-- 想接真实模型：`cp .env.example .env`，填 `AI_BASE_URL` / `AI_MODEL` / `AI_KEY`（`.env` 已被 `.gitignore` 排除）。
-- 想让房主能提交自备 Key：在 `.env` 里配 `MASTER_KEY`（32 字节 base64；`node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`）。
-  未配置时该功能会**明确关闭**，不会退化成明文或弱加密。
-- 端口：默认 8787；未显式指定时被占用会自动 +1 尝试，显式指定（`PORT=8888 pnpm m1`）则直接报错。
-- 重置本地数据：删除 `data/`（题库会从种子重建，对局记录会丢失）。
-
-多客户端试玩：用**多个标签页 + 隐身窗口**分别以不同昵称加入同一房间码。
-调试辅助（`DEV_TOOLS=1` 且监听回环地址时）：
-`POST /debug/bot`（加一个模拟玩家）、`POST /debug/member-state`（手动设挂机/断线）、
-`POST /debug/block-ai`（模拟上游 401）、`GET /debug/state?roomId=...`（看队列/版本/额度状态）。
+- 想让房主能提交自备 Key：配 `MASTER_KEY`（32 字节 base64）。未配置时该功能**明确关闭**，不会退化成明文或弱加密。
+- 多客户端试玩：用**多个标签页 + 隐身窗口**分别以不同昵称加入同一房间码。
 
 ## 命令
 
 | 命令 | 作用 |
 |---|---|
-| `pnpm m1` | 启动本地服务器（M1 形态） |
-| `pnpm dev` | 同上，带 `--watch` 自动重启 |
-| `pnpm test` | 全部测试（核心规则 50 项 + 集成 19 项），零网络、假时钟、真实 WebSocket |
+| `pnpm cf:preflight` | 部署前置自检（环境、配置、密钥格式、移植完成度、git 状态、CF 登录） |
+| `pnpm cf:dev` / `pnpm cf:deploy` / `pnpm cf:tail` | 本地 workerd / 部署 / 线上日志 |
 | `pnpm typecheck` | 类型检查（`tsc --noEmit`） |
+| `pnpm test` | 全部测试（核心规则 50 项 + 集成 19 项），零网络、假时钟、真实 WebSocket |
+| `pnpm verify` | 测试 + 工程自检（core 零依赖扫描、密钥扫描、汤底不下发、启动烟雾） |
 | `pnpm seed` | 打印题库种子（4 道题）以供核对 |
-| `pnpm verify` | 测试 + 工程自检（零依赖扫描、密钥扫描、汤底不下发、启动烟雾） |
+| `pnpm reference` | 启动 Node 参考实现（备份形态） |
 
 ## 目录结构
 
 ```
 haiguitang/
 ├─ packages/
-│  ├─ core/            ★ 核心规则域：纯函数、零依赖、零 IO（服务端与浏览器共用同一份）
+│  ├─ core/            ★ 核心规则域：纯函数、零依赖、零 IO（两个运行时共用同一份）
 │  │  └─ src/          types / constants / text / verdict / facts / mock-host
 │  │                   room / presence / vote / turn / host / dto / reduce
-│  ├─ server/          服务端：HTTP + WebSocket + SQLite + 密钥保险箱 + AI 代理
-│  │  └─ src/          config / log / vault / store / ai / protocol / rooms / server / index
-│  │      └─ data/     题库种子（4 道示例题，含事实集与判定关键词）
-│  └─ web/public/      阶段性前端（零依赖单页；正式客户端将替换为 React + Vite）
+│  ├─ server/          房间编排 + AI 代理（与运行时无关）+ Node 适配器（备份形态）
+│  │  └─ src/          rooms / ai / ports / protocol      ← 被 worker 复用
+│  │                   config / log / vault / store / server / index  ← 仅 Node 适配器
+│  ├─ worker/          ★ 生产运行时：Cloudflare Workers + Durable Objects
+│  │  └─ src/          index（路由）/ http / vault（WebCrypto）/ log
+│  │                   store-do（DO SQLite）/ room-do（alarm + WS 休眠）/ library-do（待完成）
+│  └─ web/public/      前端（阶段性零依赖单页；正式版将替换为 React + Vite）
 ├─ tests/
 │  ├─ core/            判定口径与防越狱、回合与两条独立判定线、投票与 DTO 泄露防护
 │  ├─ integration/     真实多客户端 WebSocket + 假时钟 + 重启恢复
 │  └─ fixtures/
-├─ scripts/            selfcheck.ts / seed-puzzles.ts
-├─ data/               SQLite 与日志（.gitignore）
-├─ .env.example        配置模板（只有占位符）
-└─ docs/DESIGN.md      实现说明与「与规划的偏差」清单
+├─ scripts/            selfcheck.ts / cf-preflight.ts / seed-puzzles.ts
+├─ .github/workflows/  ci.yml（PR+push）/ deploy.yml（main 自动部署 + 健康检查）
+├─ docs/               DEPLOY.md（零基础配置指南）/ CF-MIGRATION.md（迁移方案）/ DESIGN.md
+├─ data/               Node 参考实现的 SQLite 与日志（.gitignore）
+├─ wrangler.toml       Cloudflare 配置（DO SQLite 后端 + 静态资源 + 变量）
+├─ .dev.vars.example   wrangler dev 的本地变量模板（.dev.vars 已被忽略）
+└─ .env.example        Node 参考实现的配置模板
 ```
 
 ## 六条不可放宽的红线（实现位置一目了然）
