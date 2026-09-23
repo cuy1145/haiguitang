@@ -79,7 +79,13 @@ class Client {
         }
       }
     });
-    ws.on('close', () => { this.closed = true; });
+    ws.on('close', () => {
+      this.closed = true;
+      // 连接断了就别让 request() 永远挂着：立刻用 error 帧唤醒所有等待者
+      for (const w of this.waiters.splice(0)) {
+        w.resolve({ t: 'error', id: w.id, ok: false, code: 'CLIENT_CLOSED' } as unknown as Frame);
+      }
+    });
   }
 
   static async open(url: string, token: string, name: string): Promise<Client> {
@@ -188,12 +194,27 @@ async function configure(host: Client, roomId: string, patch: Record<string, num
   assert.equal(ack.t, 'ack', `改参数失败：${JSON.stringify(ack)}`);
 }
 
-/** 开局：房主指定题目（先把每轮时长压到 15s，便于驱动超时边界） */
+/** 开局：先让所有在线玩家举手（房间规则要求全员准备，除非 force），再由房主指定题目 */
 async function startMatch(host: Client, roomId: string, speedUp = true): Promise<void> {
   if (speedUp) await configure(host, roomId, { perTurnSec: 15, graceSec: 2, maxRounds: 30 });
+  await readyAll(roomId);
   const ack = await host.request({ t: 'start', mode: 'pick' });
   assert.equal(ack.t, 'ack', `开局失败：${JSON.stringify(ack)}`);
   await settle();
+}
+
+/** 所有**仍在线**的客户端一起点「我准备好了」 */
+async function readyAll(roomId: string): Promise<void> {
+  // 注意：clients 数组是整个文件共享的，里面可能有已关闭的旧连接；
+  // 往关闭的 socket 发帧永远等不到回复 —— 所以这里只取还开着的。
+  for (const c of clients.filter((x) => !x.closed)) {
+    const ack = await c.request({ t: 'ready', ready: true });
+    assert.equal(ack.t, 'ack', `准备失败：${JSON.stringify(ack)}`);
+  }
+  const room = roomState(roomId);
+  const eligible = room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected');
+  assert.ok(eligible.length > 0, '应当至少有一个有资格的成员');
+  assert.ok(eligible.every((m) => room.ready.includes(m.id)), '所有在线成员都应当已举手');
 }
 
 /** 把回合推进到「轮到指定成员」：必要时靠超时跳过 */
@@ -520,6 +541,7 @@ test('I-22: 复盘（汤底揭晓）仅房主可见，其他成员一律 403', a
   const room = await createRoom('房主');
   const host = await Client.open(booted.url, room.token, '房主');
   const p2 = await joinRoom(room.code, '阿伟');
+  const guest = await Client.open(booted.url, p2.token, '阿伟');   // 真玩家会带一个客户端（也在准备名单里）
   await startMatch(host, room.roomId);
 
   const guestRecap = await fetch(`${booted.url}/api/recap`, { headers: { authorization: `Bearer ${p2.token}` } });
@@ -536,6 +558,84 @@ test('I-22: 复盘（汤底揭晓）仅房主可见，其他成员一律 403', a
   const body = await hostRecap.json() as { canRevealTruth: boolean };
   assert.equal(body.canRevealTruth, false, '中止对局依旧不揭晓汤底');
   host.close();
+  guest.close();
+});
+
+test('I-23: 未全员准备时开局被拒；全员举手后可开局，开局后准备状态清零', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const guest = await Client.open(booted.url, p2.token, '阿伟');
+
+  // 谁都没举手 → 拒绝
+  const denied = await host.request({ t: 'start', mode: 'pick' });
+  assert.equal(denied.t, 'error');
+  assert.equal((denied as unknown as { code: string }).code, 'NOT_ALL_READY');
+  assert.equal(roomState(room.roomId).status, 'waiting', '被拒时不得开局');
+
+  // 只有房主举手 → 仍然拒绝（别人还没准备好）
+  const readyAck = await host.request({ t: 'ready', ready: true });
+  assert.equal(readyAck.t, 'ack');
+  const stillDenied = await host.request({ t: 'start', mode: 'pick' });
+  assert.equal((stillDenied as unknown as { code: string }).code, 'NOT_ALL_READY');
+
+  // 全员举手 → 通过
+  assert.equal((await guest.request({ t: 'ready', ready: true })).t, 'ack');
+  assert.equal(roomState(room.roomId).ready.length, 2);
+  const started = await host.request({ t: 'start', mode: 'pick' });
+  assert.equal(started.t, 'ack', `全员准备后应能开局：${JSON.stringify(started)}`);
+  await settle();
+  assert.equal(roomState(room.roomId).status, 'playing');
+  assert.equal(roomState(room.roomId).ready.length, 0, '开局后准备状态必须清零');
+
+  host.close();
+  guest.close();
+});
+
+test('I-23b: 房主可 force 开局（有人没准备也能开）', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const guest = await Client.open(booted.url, p2.token, '阿伟');
+
+  await host.request({ t: 'ready', ready: true });          // 只有房主举手
+  const forced = await host.request({ t: 'start', mode: 'pick', force: true });
+  assert.equal(forced.t, 'ack', 'force 应当放行');
+  await settle();
+  assert.equal(roomState(room.roomId).status, 'playing');
+
+  host.close();
+  guest.close();
+});
+
+test('I-24: 房主可以移出玩家：会话立即失效、名单里消失、不能踢自己', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const guest = await Client.open(booted.url, p2.token, '阿伟');
+  const guestId = roomState(room.roomId).members.find((m) => m.name === '阿伟')!.id;
+
+  // 非房主不能踢人
+  const denied = await guest.request({ t: 'kick', memberId: host.memberId });
+  assert.equal(denied.t, 'error');
+  assert.equal((denied as unknown as { code: string }).code, 'NOT_HOST');
+
+  // 房主不能踢自己（要离开请走 leave，那会触发房主移交）
+  const selfKick = await host.request({ t: 'kick', memberId: host.memberId });
+  assert.equal(selfKick.t, 'error');
+
+  // 正常踢出
+  const kicked = await host.request({ t: 'kick', memberId: guestId });
+  assert.equal(kicked.t, 'ack', `踢人失败：${JSON.stringify(kicked)}`);
+  await settle();
+  assert.equal(roomState(room.roomId).members.some((m) => m.id === guestId), false, '被踢成员应从名单消失');
+
+  // 他的会话必须失效：带着旧 token 请求状态应当 401
+  const after = await fetch(`${booted.url}/api/session`, { headers: { authorization: `Bearer ${p2.token}` } });
+  assert.equal(after.status, 401, '被踢成员的会话必须被吊销');
+
+  host.close();
+  guest.close();
 });
 
 test('I-12: 进行中的对局不得提前拿到汤底；aborted 也不揭晓', async () => {

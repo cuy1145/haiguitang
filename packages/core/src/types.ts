@@ -93,6 +93,7 @@ export type ActionReject =
   | 'VOTE_NOT_ELIGIBLE'
   | 'VOTE_NOT_OPEN'
   | 'NOT_HOST'
+  | 'NOT_ALL_READY'
   | 'NOT_ALLOWED';
 
 // ---------------------------------------------------------------- 题库
@@ -230,6 +231,12 @@ export interface CoreRoom {
   puzzleId: string | null;
   /** 已被问答或提示释放的事实点 id */
   revealedFacts: string[];
+  /**
+   * 已点「我准备好了」的成员 id。
+   * 只在开局前有意义：MATCH_BEGIN 会清空，成员离开/被踢也会被移除。
+   * 房主点「开局」时，未全员准备好需要显式 force（避免有人还在倒水就开赛）。
+   */
+  ready: string[];
   hint: { tier3Used: number };
   vote: CoreVote | null;
   ai: { state: AiState; reasonCode: string | null; blockedAt: number | null };

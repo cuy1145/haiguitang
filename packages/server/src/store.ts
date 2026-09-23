@@ -117,6 +117,7 @@ export class Store {
         transfer_json TEXT NOT NULL,
         result_json TEXT,
         turn_order_json TEXT NOT NULL,
+        ready_json TEXT NOT NULL DEFAULT '[]',
         turn_index INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -315,8 +316,8 @@ export class Store {
     const tx = this.db.prepare(`
       INSERT INTO rooms(id, code, status, pause_reason, host_member_id, config_json, config_version, state_version,
                         event_seq, puzzle_id, round_no, turn_json, revealed_facts_json, hint_json, vote_json, ai_json,
-                        credit_json, transfer_json, result_json, turn_order_json, turn_index, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        credit_json, transfer_json, result_json, turn_order_json, ready_json, turn_index, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status, pause_reason = excluded.pause_reason, host_member_id = excluded.host_member_id,
         config_json = excluded.config_json, config_version = excluded.config_version,
@@ -325,7 +326,8 @@ export class Store {
         revealed_facts_json = excluded.revealed_facts_json, hint_json = excluded.hint_json,
         vote_json = excluded.vote_json, ai_json = excluded.ai_json, credit_json = excluded.credit_json,
         transfer_json = excluded.transfer_json, result_json = excluded.result_json,
-        turn_order_json = excluded.turn_order_json, turn_index = excluded.turn_index, updated_at = excluded.updated_at
+        turn_order_json = excluded.turn_order_json, ready_json = excluded.ready_json,
+        turn_index = excluded.turn_index, updated_at = excluded.updated_at
     `);
     tx.run(
       room.id, room.code, room.status, room.pauseReason, room.hostId,
@@ -334,7 +336,7 @@ export class Store {
       JSON.stringify(room.hint), room.vote ? JSON.stringify(room.vote) : null,
       JSON.stringify(room.ai), JSON.stringify(room.credit), JSON.stringify(room.transfer),
       room.result ? JSON.stringify(room.result) : null,
-      JSON.stringify(room.turnOrder), room.turnIndex, room.createdAt, room.updatedAt,
+      JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []), room.turnIndex, room.createdAt, room.updatedAt,
     );
 
     const keep = room.members.map((m) => m.id);
@@ -367,6 +369,11 @@ export class Store {
 
   setResumeTokenHash(memberId: string, hash: string | null): void {
     this.db.prepare('UPDATE members SET resume_token_hash = ? WHERE id = ?').run(hash, memberId);
+  }
+
+  /** 吊销某成员的所有会话（房主踢人时调用）：清掉续期令牌，他下一次请求就会被登出。 */
+  revokeMemberSessions(memberId: string): void {
+    this.db.prepare('UPDATE members SET resume_token_hash = NULL WHERE id = ?').run(memberId);
   }
 
   findMemberByToken(hash: string): { id: string; roomId: string } | null {
@@ -431,6 +438,7 @@ export class Store {
         eventSeq: Number(row.event_seq ?? 0),
         puzzleId: (row.puzzle_id as string | null) ?? null,
         revealedFacts: JSON.parse(String(row.revealed_facts_json ?? '[]')),
+        ready: JSON.parse(String(row.ready_json ?? '[]')),
         hint: JSON.parse(String(row.hint_json ?? '{"tier3Used":0}')),
         vote: row.vote_json ? JSON.parse(String(row.vote_json)) : null,
         ai: JSON.parse(String(row.ai_json)),

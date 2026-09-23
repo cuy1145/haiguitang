@@ -216,6 +216,17 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.savedKeyStates.set(memberId, { state, mask, formerHost: formerHost ?? prev.formerHost });
   }
 
+  /**
+   * 吊销某成员的所有会话（房主踢人时调用）。
+   * 与房间写入同事务：房间 CAS 成功才会真正删掉会话，避免"踢了人却没删掉会话"。
+   */
+  revokeMemberSessions(memberId: string): void {
+    this.pending.push({
+      sql: 'DELETE FROM sessions WHERE member_id = ? AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)',
+      bindings: [memberId, this.roomId, 0],
+    });
+  }
+
   startMatch(roomId: string, puzzleId: string, config: GameConfig, turnOrder: string[], creditSource: string, now: number): string {
     const id = `match_${roomId}_${now}`;
     this.pending.push({
@@ -342,13 +353,13 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     const statements: PendingStatement[] = [{
       sql: `UPDATE rooms SET code=?, status=?, pause_reason=?, host_member_id=?, config_json=?, config_version=?, state_version=?,
               event_seq=?, puzzle_id=?, round_no=?, turn_json=?, revealed_facts_json=?, hint_json=?, vote_json=?, ai_json=?,
-              credit_json=?, transfer_json=?, result_json=?, turn_order_json=?, turn_index=?, updated_at=?
+              credit_json=?, transfer_json=?, result_json=?, turn_order_json=?, ready_json=?, turn_index=?, updated_at=?
             WHERE id = ? AND state_version = ?`,
       bindings: [room.code, room.status, room.pauseReason, room.hostId, JSON.stringify(room.config), room.configVersion,
         newVersion, room.eventSeq, room.puzzleId, room.roundNo, JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
         JSON.stringify(room.hint), room.vote ? JSON.stringify(room.vote) : null, JSON.stringify(room.ai),
         JSON.stringify(room.credit), JSON.stringify(room.transfer), room.result ? JSON.stringify(room.result) : null,
-        JSON.stringify(room.turnOrder), room.turnIndex, room.updatedAt, room.id, this.expectedVersion],
+        JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []), room.turnIndex, room.updatedAt, room.id, this.expectedVersion],
     }];
 
     // 成员表：先删多余行，再逐行 OR REPLACE（都以新版本为条件）
@@ -468,7 +479,7 @@ function rowToRoom(row: Row): CoreRoom {
   return {
     id: String(row.id), code: String(row.code), status: String(row.status) as CoreRoom['status'],
     pauseReason: (row.pause_reason as string | null) ?? null, hostId: (row.host_member_id as string | null) ?? null,
-    members: [], turnOrder: JSON.parse(String(row.turn_order_json ?? '[]')), turnIndex: Number(row.turn_index ?? 0),
+    members: [], turnOrder: JSON.parse(String(row.turn_order_json ?? '[]')), ready: JSON.parse(String(row.ready_json ?? '[]')), turnIndex: Number(row.turn_index ?? 0),
     roundNo: Number(row.round_no ?? 1), turn: JSON.parse(String(row.turn_json)),
     config: JSON.parse(String(row.config_json)) as GameConfig, configVersion: Number(row.config_version ?? 1),
     stateVersion: Number(row.state_version ?? 0), eventSeq: Number(row.event_seq ?? 0),

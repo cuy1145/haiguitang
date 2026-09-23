@@ -33,6 +33,7 @@ export type RoomStorePort = Pick<
   | 'loadRooms'
   | 'memberKeyStates'
   | 'roomCredential'
+  | 'revokeMemberSessions'
   | 'saveGrant'
   | 'saveRoom'
   | 'saveVote'

@@ -193,7 +193,7 @@ export class RoomRuntime {
         : ev.verdict === 'partial' ? TEXT.guessPartial(name(ev.memberId), ev.hits, ev.total)
           : TEXT.guessMiss(name(ev.memberId));
       case 'match_ended': return TEXT.matchEnded(ev.result, ev.reason);
-      case 'rejected': return TEXT.submitRejected(ev.code);
+      case 'rejected': return ev.detail ?? TEXT.submitRejected(ev.code);
       default: return '';
     }
   }
@@ -268,6 +268,7 @@ export class RoomRuntime {
         members,
         hostId: nextHost,
         turnOrder: this.room.turnOrder.filter((id) => id !== memberId),
+        ready: this.room.ready.filter((id) => id !== memberId),   // 人走了，准备状态也要撤掉
         updatedAt: this.now,
         stateVersion: this.room.stateVersion + 1,
       };
@@ -275,6 +276,25 @@ export class RoomRuntime {
       this.broadcast((mid) => ({ t: 'snapshot', serverTime: this.now, view: this.view(mid) }));
       this.deps.store.audit({ action: 'member_left', roomId: this.room.id, subject: memberId });
     });
+  }
+
+  /**
+   * 房主踢人：房主不能踢自己（要离开请走「离开房间」，那会触发房主移交）。
+   * 同时吊销该成员的会话，让他下一页请求就被登出（否则他还能继续拉状态）。
+   */
+  async kickMember(hostId: string, targetId: string): Promise<Result<{ kicked: string }>> {
+    if (this.room.hostId !== hostId) return { ok: false, code: 'NOT_HOST' };
+    if (hostId === targetId) return { ok: false, code: 'NOT_ALLOWED' };
+    const target = getMember(this.room, targetId);
+    if (!target) return { ok: false, code: 'NOT_ALLOWED' };
+
+    this.deps.store.revokeMemberSessions(targetId);
+    this.deps.store.audit({ action: 'member_kicked', roomId: this.room.id, actor: hostId, subject: targetId });
+    this.deps.logger.info('member_kicked', { room_id: this.room.id, target: targetId });
+    await this.removeMember(targetId);
+    // 给房里其他人留一条可见记录（谁被移出了）
+    this.emit([{ type: 'rejected', code: 'NOT_ALLOWED', memberId: null, detail: `${target.name} 已被房主移出房间` }]);
+    return { ok: true, data: { kicked: targetId } };
   }
 
   /** 连接建立：标记在线（消息处理器必须先注册，再调用本方法）。 */
@@ -394,10 +414,38 @@ export class RoomRuntime {
     return this.buffer.filter((e) => e.seq > seq);
   }
 
+  // ---------------------------------------------------------------- 准备状态
+  /** 有资格（会阻塞开局）的成员：非旁观且在线的玩家 */
+  private readyEligible(): string[] {
+    return this.room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected').map((m) => m.id);
+  }
+
+  /** 还没举手的成员（离线/旁观不计入） */
+  private notReady(): string[] {
+    return this.readyEligible().filter((id) => !this.room.ready.includes(id));
+  }
+
+  /** 举手 / 收回。只在开局前有意义，`reduce` 已保证进行中会被忽略。 */
+  async setReady(memberId: string, ready: boolean): Promise<Result<{ ready: boolean }>> {
+    if (!getMember(this.room, memberId)) return { ok: false, code: 'NOT_ALLOWED' };
+    this.room = { ...this.room, ready: this.room.ready.filter((id) => this.room.members.some((m) => m.id === id)) };
+    return this.enqueue(() => {
+      const out = reduce(this.room, { type: 'READY_SET', memberId, ready }, this.ctx());
+      this.room = out.room;
+      this.apply(out.events);
+      return { ok: true as const, data: { ready } };
+    });
+  }
+
   // ---------------------------------------------------------------- 开局
-  async startMatch(memberId: string, mode: 'vote' | 'pick', puzzleId?: string): Promise<Result> {
+  /**
+   * 开局。房主指定 / 投票选汤都从这里走。
+   * `force=true` 表示"我知道还有人没准备，照样开"（避免有人去倒水就全队卡住）。
+   */
+  async startMatch(memberId: string, mode: 'vote' | 'pick', puzzleId?: string, force = false): Promise<Result> {
     if (this.room.hostId !== memberId) return { ok: false, code: 'NOT_HOST' };
     if (this.room.status !== 'waiting') return { ok: false, code: 'NOT_ALLOWED' };
+    if (!force && this.notReady().length > 0) return { ok: false, code: 'NOT_ALL_READY' };
     const list = this.deps.store.listPuzzles({
       ratingMax: this.room.config.ratingMax,
       difficultyMin: this.room.config.difficultyMin,

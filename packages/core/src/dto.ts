@@ -34,6 +34,8 @@ export interface PublicMember {
   keyState: 'none' | 'active' | 'suspended' | 'destroyed';
   formerHost: boolean;
   isHost: boolean;
+  /** 开局前是否已举手「我准备好了」 */
+  ready: boolean;
 }
 
 export interface PublicTurn {
@@ -89,6 +91,12 @@ export interface PublicRoom {
    */
   factTotal: number;
   requiredFactTotal: number;
+  /**
+   * 准备状态汇总：`readyCount / readyEligible`。
+   * 有资格的成员 = 非旁观且当前在线的成员（离线/旁观不阻塞开局）。
+   */
+  readyCount: number;
+  readyEligible: number;
 }
 
 export function toPublicPuzzle(p: Puzzle): PublicPuzzle {
@@ -118,7 +126,12 @@ export interface MemberKeyState {
   formerHost: boolean;
 }
 
-export function toPublicMember(m: CoreMember, key: MemberKeyState, hostId: string | null): PublicMember {
+export function toPublicMember(
+  m: CoreMember,
+  key: MemberKeyState,
+  hostId: string | null,
+  ready = false,
+): PublicMember {
   const stateLabel = m.conn === 'disconnected' ? '离线' : m.activity === 'idle' ? '挂机' : '在线';
   return {
     id: m.id,
@@ -136,6 +149,7 @@ export function toPublicMember(m: CoreMember, key: MemberKeyState, hostId: strin
     keyState: key.keyState,
     formerHost: key.formerHost,
     isHost: m.id === hostId,
+    ready,
   };
 }
 
@@ -193,7 +207,7 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
       outcome: room.turn.outcome,
       lateSubmit: room.turn.lateSubmit,
     },
-    members: room.members.map((m) => toPublicMember(m, deps.keyOf(m.id), room.hostId)),
+    members: room.members.map((m) => toPublicMember(m, deps.keyOf(m.id), room.hostId, room.ready.includes(m.id))),
     puzzle: deps.puzzle ? toPublicPuzzle(deps.puzzle) : null,
     vote: toPublicVote(room.vote, viewerId, deps.candidates.map(toPublicPuzzle)),
     ai: { ...room.ai },
@@ -205,6 +219,9 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
     // 计数（非内容）：探索度用"必需事实点"做分母，普通事实点做分子上限
     factTotal: deps.puzzle ? deps.puzzle.facts.length : 0,
     requiredFactTotal: deps.puzzle ? deps.puzzle.facts.filter((f) => f.required).length : 0,
+    // 有资格者 = 非旁观且在线的成员；离线和旁观不该把大家卡在开场前
+    readyEligible: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected').length,
+    readyCount: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected' && room.ready.includes(m.id)).length,
   };
 }
 

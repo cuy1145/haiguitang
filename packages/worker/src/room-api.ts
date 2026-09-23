@@ -249,8 +249,21 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
         return result.ok ? ok(store) : fail(result.code, store, result.detail);
       }
       case 'start': {
-        const result = await runtime.startMatch(memberId, body.mode === 'vote' ? 'vote' : 'pick', typeof body.puzzleId === 'string' ? body.puzzleId : undefined);
+        const result = await runtime.startMatch(
+          memberId,
+          body.mode === 'vote' ? 'vote' : 'pick',
+          typeof body.puzzleId === 'string' ? body.puzzleId : undefined,
+          body.force === true,
+        );
         return result.ok ? ok(store) : fail(result.code, store);
+      }
+      case 'ready': {
+        const r = await runtime.setReady(memberId, body.ready !== false);
+        return r.ok ? ok(store, r.data) : fail(r.code, store);
+      }
+      case 'kick': {
+        const r = await runtime.kickMember(memberId, String(body.memberId ?? ''));
+        return r.ok ? ok(store, r.data) : fail(r.code, store);
       }
       case 'skip_turn': { const r = await runtime.skipTurn(memberId); return r.ok ? ok(store) : fail(r.code, store); }
       case 'end_match': { const r = await runtime.endMatch(memberId); return r.ok ? ok(store) : fail(r.code, store); }

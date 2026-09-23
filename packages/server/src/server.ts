@@ -427,8 +427,20 @@ export class App {
           break;
         }
         case 'start': {
-          const result = await runtime.startMatch(memberId, frame.mode, frame.puzzleId);
+          const result = await runtime.startMatch(memberId, frame.mode, frame.puzzleId, frame.force === true);
           if (result.ok) this.reply(ws, id, true);
+          else this.reply(ws, id, false, result.code);
+          break;
+        }
+        case 'ready': {
+          const result = await runtime.setReady(memberId, frame.ready !== false);
+          if (result.ok) this.reply(ws, id, true, undefined, result.data as Record<string, unknown> | undefined);
+          else this.reply(ws, id, false, result.code);
+          break;
+        }
+        case 'kick': {
+          const result = await runtime.kickMember(memberId, String(frame.memberId ?? ''));
+          if (result.ok) this.reply(ws, id, true, undefined, result.data as Record<string, unknown> | undefined);
           else this.reply(ws, id, false, result.code);
           break;
         }

@@ -15,6 +15,8 @@ import * as host from './host.ts';
 
 export type CoreEvent =
   | { type: 'MATCH_BEGIN'; puzzleId: string }
+  /** 准备状态：玩家自己举手/收回（只在开局前有意义） */
+  | { type: 'READY_SET'; memberId: string; ready: boolean }
   | { type: 'TURN_TICK' }
   | { type: 'SUBMIT_ACCEPTED'; memberId: string }
   | { type: 'JUDGE_DONE' }
@@ -63,7 +65,19 @@ export function reduce(room: CoreRoom, event: CoreEvent, ctx: ReduceCtx): Reduce
   switch (event.type) {
     case 'MATCH_BEGIN': {
       const out = turn.beginMatch(room, event.puzzleId, ctx);
-      return { room: out.room, events: out.events };
+      // 新一局开始：清空准备状态，避免"上一局的举手"直接生效
+      return { room: { ...out.room, ready: [] }, events: out.events };
+    }
+
+    case 'READY_SET': {
+      // 对局进行中改动准备态没有意义（也会误导别人），直接忽略
+      if (room.status === 'playing') return { room, events: [] };
+      if (!room.members.some((m) => m.id === event.memberId)) return { room, events: [] };
+      if (room.ready.includes(event.memberId) === event.ready) return { room, events: [] };
+      const ready = event.ready
+        ? [...room.ready, event.memberId]
+        : room.ready.filter((id) => id !== event.memberId);
+      return { room: withRoom(room, { ready }, ctx.now), events: [] };
     }
 
     case 'TURN_TICK': {

@@ -66,7 +66,9 @@ export type ClientFrame =
   | { t: 'guess'; id?: string; text: string }
   | { t: 'vote'; id?: string; choice: string }
   | { t: 'config'; id?: string; patch: Partial<GameConfig>; expectedVersion: number }
-  | { t: 'start'; id?: string; mode: 'vote' | 'pick'; puzzleId?: string }
+  | { t: 'start'; id?: string; mode: 'vote' | 'pick'; puzzleId?: string; force?: boolean }
+  | { t: 'ready'; id?: string; ready: boolean }
+  | { t: 'kick'; id?: string; memberId: string }
   | { t: 'resume_transfer'; id?: string }
   | { t: 'return_host'; id?: string }
   | { t: 'decline_return'; id?: string }

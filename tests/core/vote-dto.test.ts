@@ -186,6 +186,33 @@ test('房主更新 Key → 解除 AI 中断并继续本轮（额度来源仍是�
   assert.deepEqual(restored.events.map((e) => e.type), ['ai_recovered']);
 });
 
+/** 准备状态：举手 / 收回 / 幂等 / 非成员无效 / 开局清零 */
+test('准备状态只在开局前有效，且开局时清零', () => {
+  const now = 1_000_000;
+  let room = makeRoom(now);
+
+  room = reduce(room, { type: 'READY_SET', memberId: 'm1', ready: true }, ctx(now)).room;
+  assert.deepEqual(room.ready, ['m1']);
+  room = reduce(room, { type: 'READY_SET', memberId: 'm2', ready: true }, ctx(now)).room;
+  assert.deepEqual(room.ready, ['m1', 'm2']);
+
+  const again = reduce(room, { type: 'READY_SET', memberId: 'm2', ready: true }, ctx(now));
+  assert.deepEqual(again.room.ready, ['m1', 'm2'], '重复举手是幂等的');
+
+  const stranger = reduce(room, { type: 'READY_SET', memberId: '不在房里', ready: true }, ctx(now));
+  assert.deepEqual(stranger.room.ready, ['m1', 'm2'], '非成员无效');
+
+  room = reduce(room, { type: 'READY_SET', memberId: 'm1', ready: false }, ctx(now)).room;
+  assert.deepEqual(room.ready, ['m2'], '可以收回');
+
+  const begun = reduce(room, { type: 'MATCH_BEGIN', puzzleId: 'p-leak' }, ctx(now)).room;
+  assert.deepEqual(begun.ready, [], '开局后准备状态清零');
+
+  // 对局进行中改动准备态被忽略
+  const during = reduce(begun, { type: 'READY_SET', memberId: 'm2', ready: true }, ctx(now));
+  assert.deepEqual(during.room.ready, [], '对局中不再接受准备状态');
+});
+
 // ---------------------------------------------------------------- DTO 泄露防护
 
 test('toPublicPuzzle 不包含汤底与事实点字段（类型层白名单投影）', () => {
