@@ -96,6 +96,7 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
       return json(recap.view);
     }, { withQuestions: true });
   }
+  if (path === '/api/credentials/test' && request.method === 'POST') return testCredential(request, env, roomId, memberId);
   if (path === '/api/credentials' && request.method === 'POST') return submitCredential(request, env, roomId, memberId);
   if (path === '/api/credentials' && request.method === 'DELETE') {
     return withRoom(env, roomId, async (runtime) => {
@@ -395,6 +396,53 @@ async function joinAsPlayer(
 }
 
 // ---------------------------------------------------------------- 凭据（房主自备 Key）
+
+/**
+ * 「测试连接」：只验证 Key / Base URL / 模型名是否可用，**不保存任何东西**。
+ *
+ * 为什么要单独有这个端点：
+ *   · 原端点把「测试」和「入库」绑在一起，失败时用户只看到一句错误，无法判断是哪一项写错了；
+ *   · 这里把真实请求地址（Base URL 自动补 /chat/completions 后的结果）、状态码分类、耗时都回给前端，
+ *     前端就能显示"✅ 通过 / ❌ 失败 + 原因"。
+ * 安全边界：仅房主可调用；Base URL 走同一套 SSRF 校验；请求体固定且极小。
+ */
+async function testCredential(request: Request, env: Env, roomId: string, memberId: string): Promise<Response> {
+  const body = await readJson(request);
+  const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : DEFAULT_HOST_MODEL;
+  const baseUrlRaw = typeof body.baseUrl === 'string' && body.baseUrl.trim() ? body.baseUrl.trim() : DEFAULT_HOST_BASE_URL;
+  if (!apiKey) return json({ ok: false, error: 'MISSING_API_KEY', message: '请先填写 API Key' }, 400);
+
+  const baseUrl = HostService.validateBaseUrl(baseUrlRaw);
+  if (!baseUrl.ok) {
+    return json({
+      ok: false, error: baseUrl.reason, message: 'Base URL 不合法（必须是 https 公网地址，且不能带 query/fragment）',
+    }, 200);   // 测试结果一律 200，用 ok 字段表达成败，前端才好展示
+  }
+  const url = HostService.chatCompletionsUrl(baseUrl.url);
+
+  return withRoom(env, roomId, async (runtime, store) => {
+    if (runtime.room.hostId !== memberId) {
+      return json({ error: 'NOT_HOST', message: '只有房主可以测试自备 Key' }, 403);
+    }
+    const host = new HostService({
+      store, logger,
+      config: {
+        enabled: true, provider: 'openai-compatible', baseUrl: baseUrl.url, model, key: apiKey,
+        timeoutMs: Number(env.AI_TIMEOUT_MS ?? 20000), maxRetries: 0,
+      },
+      siteQuotaAllows: () => true,
+    });
+    const test = await host.connectionTest({ apiKey, baseUrl: baseUrl.url, model });
+    logger.info('credential_test', { room_id: roomId, ok: test.ok, reason: test.reasonCode, latency_ms: test.latencyMs });
+    return json({
+      ok: test.ok, error: test.ok ? null : test.reasonCode, reasonCode: test.reasonCode,
+      message: test.message, latencyMs: test.latencyMs, url, model,
+      stored: false,
+    });
+  });
+}
+
 async function submitCredential(request: Request, env: Env, roomId: string, memberId: string): Promise<Response> {
   const vault = new WebCryptoVault(env.MASTER_KEY ?? null);
   if (!vault.enabled) {
@@ -416,7 +464,12 @@ async function submitCredential(request: Request, env: Env, roomId: string, memb
       siteQuotaAllows: () => true,
     });
     const test = await host.connectionTest({ apiKey, baseUrl: baseUrl.url, model });
-    if (!test.ok) return json({ error: test.reasonCode, message: test.message, latencyMs: test.latencyMs }, 400);
+    if (!test.ok) {
+      return json({
+        error: test.reasonCode, message: test.message, latencyMs: test.latencyMs,
+        url: HostService.chatCompletionsUrl(baseUrl.url), model,
+      }, 400);
+    }
 
     const member = getMember(runtime.room, memberId);
     if (!member) return json({ error: 'UNAUTHORIZED' }, 401);

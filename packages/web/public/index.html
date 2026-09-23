@@ -121,6 +121,7 @@ const S = {
   hint: '',
   recap: null,
   keyMask: null,
+  keyTest: null,
   configModal: false,
   guessModal: false,
   keyModal: false,
@@ -192,7 +193,12 @@ async function api(path, opts = {}) {
   const text = await res.text();
   let body = null;
   try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text }; }
-  if (!res.ok) throw new Error((body && (body.error || body.message)) || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error((body && (body.error || body.message)) || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.body = body;              // 保留响应体：错误码/真实请求地址等诊断信息要用
+    throw err;
+  }
   return body;
 }
 
@@ -757,6 +763,8 @@ function defaultModel() { return (S.config && S.config.defaultModel) || 'deepsee
  *   · 用 type="password" 会被 Edge/Chrome 当成登录表单，弹「是否保存密码」并介入填充，
  *     干扰输入（鼠标移开就可能被取消）。现在改用 type="text" + CSS 掩码（-webkit-text-security），
  *     再配上 autocomplete="off/new-password"、data-form-type="other" 等标记，彻底避开密码管理器。
+ *
+ * 另外：「测试连接」只验证可用性、不入库，结果直接显示成功/失败与原因（含真实请求地址与耗时）。
  */
 function keyModal() {
   const base = S.drafts.keyBase ?? defaultBaseUrl();
@@ -770,6 +778,7 @@ function keyModal() {
       <input id="keyBase" name="ht-host-endpoint" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
         spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
         value="${esc(base)}" placeholder="https://api.deepseek.com"></div>
+    <div class="dim">实际请求地址（自动补 <code>/chat/completions</code>）：<code id="keyUrl">${esc(completionsUrl(base))}</code></div>
     <div class="field"><label>模型名</label>
       <input id="keyModel" name="ht-host-model" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
         spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
@@ -781,14 +790,62 @@ function keyModal() {
     <div class="row">
       <button id="btnKeyToggle">显示 / 隐藏</button>
       <span class="dim">默认已填好 DeepSeek：Base URL <code>https://api.deepseek.com</code> · 模型 <code>deepseek-flash</code>。
-        用别家兼容服务时改成对应的地址和模型名即可。</span>
+        用别家兼容服务时改成对应地址与模型名（已经带 /chat/completions 的地址不会重复追加）。</span>
     </div>
     ${S.keyMask ? `<div class="dim" style="margin-top:8px">当前掩码：<span class="mask">${esc(S.keyMask)}</span></div>` : ''}
-    <div class="row" style="margin-top:10px"><button class="primary" id="btnKeySubmit">连接测试并提交</button>
+    <div id="keyTestBox">${keyTestBox()}</div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnKeyTest">测试连接（不入库）</button>
+      <button class="primary" id="btnKeySubmit">连接测试并提交</button>
       <button class="danger" id="btnKeyRevoke">撤销并销毁</button></div>
-    <div class="dim" style="margin-top:8px">提交失败时不会保存任何东西（服务端会立即销毁用于测试的密文）。
-      Key 只留在本页内存里，不会写入浏览器存储。</div>
+    <div class="dim" style="margin-top:8px">测试与提交失败都不会保存任何东西。Key 只留在本页内存里，不会写入浏览器存储。</div>
   </div></div>`;
+}
+
+/** Base URL → 真实请求地址（与服务端 HostService.chatCompletionsUrl 保持一致） */
+function completionsUrl(base) {
+  const b = String(base ?? '').trim().replace(/\/+$/, '');
+  if (!b) return '';
+  return b.endsWith('/chat/completions') ? b : `${b}/chat/completions`;
+}
+
+/** 测试结果面板：成功给绿色，失败给红色 + 人话原因 + 排查提示 */
+function keyTestBox() {
+  const t = S.keyTest;
+  if (!t) return '<div class="dim" style="margin-top:8px">点「测试连接」可以先只验证 Key 能不能用，不会入库、不会影响当前对局。</div>';
+  if (t.pending) return '<div class="notice" style="margin-top:8px">正在连接上游模型服务…</div>';
+  const where = `${t.url ? `<br><span class="dim">实际请求：${esc(t.url)}${t.model ? ' · 模型：' + esc(t.model) : ''}</span>` : ''}`;
+  if (t.ok) {
+    return `<div class="notice" style="margin-top:8px"><b>✅ 连接成功</b>${t.latencyMs ? `（${t.latencyMs} ms）` : ''}：${esc(t.message || '上游已正常响应')}${where}
+      ${t.reasonCode === 'RATE_LIMITED_AT_SUBMIT' ? '<br><span class="dim">当前被限流：凭证有效，但对局中调用可能失败。</span>' : ''}
+      ${t.stored === false ? '<br><span class="dim">本次只是测试，还没有入库。</span>' : ''}</div>`;
+  }
+  return `<div class="err" style="margin-top:8px"><b>❌ 连接失败</b>：${esc(t.message || '未知错误')}
+    ${t.reasonCode ? `<span class="dim">（${esc(t.reasonCode)}${t.latencyMs ? ' · ' + t.latencyMs + ' ms' : ''}）</span>` : ''}${where}
+    <br>排查建议：${esc(hintForReason(t.reasonCode))}</div>`;
+}
+
+/** 把错误码翻译成"下一步该改什么" */
+function hintForReason(code) {
+  switch (code) {
+    case 'MISSING_API_KEY': return '先把 API Key 填进第三个输入框。';
+    case 'AUTH_FAILED': return 'Key 无效或已被撤销：到服务商后台重新生成一个（注意别带上多余空格）。';
+    case 'PERMISSION_DENIED': return '该账号无权访问这个模型：换个模型名或换账号。';
+    case 'QUOTA_EXHAUSTED': return '余额/额度不足：充值或换一个 Key。';
+    case 'MODEL_OR_BASE_URL_NOT_FOUND': return '模型名或 Base URL 写错了。DeepSeek 用 https://api.deepseek.com，模型名 deepseek-flash 或 deepseek-v4-pro。';
+    case 'INVALID_REQUEST': return '上游不接受这个请求：基本是模型名不对（或该模型不支持当前参数）。';
+    case 'RATE_LIMITED_AT_SUBMIT': return '被限流了，稍等一会儿再试；凭证本身是有效的。';
+    case 'UPSTREAM_UNAVAILABLE': return '上游服务暂时不可用（5xx），稍后重试。';
+    case 'UPSTREAM_TIMEOUT': return '8 秒内没响应：检查网络/代理，或换个服务商地址。';
+    case 'NETWORK_ERROR': return '网络不通：确认地址是公网 https 且能访问。';
+    case 'BASE_URL_INVALID':
+    case 'BASE_URL_MUST_BE_HTTPS':
+    case 'BASE_URL_PRIVATE_HOST':
+    case 'BASE_URL_PRIVATE_ADDRESS':
+    case 'BASE_URL_MUST_NOT_CONTAIN_QUERY_OR_FRAGMENT':
+    case 'BASE_URL_MUST_NOT_CONTAIN_CREDENTIALS': return 'Base URL 必须是不带路径参数的 https 公网地址，例如 https://api.deepseek.com。';
+    default: return '依次确认：Base URL（https://api.deepseek.com）、模型名（deepseek-flash）、API Key 三者是否对得上。';
+  }
 }
 
 function recapModal(recap) {
@@ -847,11 +904,30 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnSkip': request({ t: 'skip_turn' }); break;
-      case 'btnKey': S.keyModal = true; render(); break;
-      case 'btnKeyClose': S.keyModal = false; delete S.drafts.keyValue; render(); break;
+      case 'btnKey': S.keyModal = true; S.keyTest = null; render(); break;
+      case 'btnKeyClose': S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; render(); break;
       case 'btnKeyToggle': {
         const el = $('#keyValue');
         if (el) el.classList.toggle('secret');
+        break;
+      }
+      case 'btnKeyTest': {
+        const baseUrl = ($('#keyBase').value || '').trim() || defaultBaseUrl();
+        const model = ($('#keyModel').value || '').trim() || defaultModel();
+        const apiKey = $('#keyValue').value;
+        S.keyTest = { pending: true, url: completionsUrl(baseUrl), model };
+        render();
+        try {
+          const res = await api('/api/credentials/test', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model }) });
+          S.keyTest = { ...res, url: res.url || completionsUrl(baseUrl), model: res.model || model };
+        } catch (err) {
+          const b = err.body || {};
+          S.keyTest = {
+            ok: false, reasonCode: b.error || `HTTP_${err.status || 'ERR'}`, message: b.message || err.message,
+            latencyMs: b.latencyMs, url: b.url || completionsUrl(baseUrl), model: b.model || model,
+          };
+        }
+        render();
         break;
       }
       case 'btnKeySubmit': {
@@ -859,16 +935,27 @@ document.addEventListener('click', async (e) => {
         const model = ($('#keyModel').value || '').trim() || defaultModel();
         const apiKey = $('#keyValue').value;                 // 只在内存中，提交后立即清空
         S.error = '';
-        const res = await api('/api/credentials', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model }) });
-        S.keyMask = res.credential.mask;
-        S.notice = '已启用自备额度（' + res.message + '）';
-        S.keyModal = false;
-        delete S.drafts.keyValue;                            // Key 绝不留在内存里
-        if ($('#keyValue')) $('#keyValue').value = '';
+        try {
+          const res = await api('/api/credentials', { method: 'POST', body: JSON.stringify({ apiKey, baseUrl, model }) });
+          S.keyMask = res.credential.mask;
+          S.notice = '已启用自备额度（' + res.message + '）';
+          S.keyTest = null;
+          S.keyModal = false;
+          delete S.drafts.keyValue;                          // Key 绝不留在内存里
+          if ($('#keyValue')) $('#keyValue').value = '';
+        } catch (err) {
+          // 提交失败时把详情留在弹窗里，方便直接看到"为什么不成"
+          const b = err.body || {};
+          S.error = err.message;
+          S.keyTest = {
+            ok: false, reasonCode: b.error || `HTTP_${err.status || 'ERR'}`, message: b.message || err.message,
+            latencyMs: b.latencyMs, url: b.url || completionsUrl(baseUrl), model: b.model || model,
+          };
+        }
         render();
         break;
       }
-      case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; delete S.drafts.keyValue; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
+      case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
       case 'btnGuess': S.guessModal = true; render(); break;
       case 'btnGuessCancel': S.guessModal = false; delete S.drafts.guessText; render(); break;
       case 'btnGuessSubmit': {
@@ -919,6 +1006,14 @@ document.addEventListener('input', (e) => {
   // 关闭弹窗或提交后立即删除，尤其 API Key 绝不落盘。
   if (t.id === 'keyBase' || t.id === 'keyModel' || t.id === 'keyValue' || t.id === 'guessText') {
     S.drafts[t.id] = t.value;
+    if (t.id === 'keyBase') {
+      const u = $('#keyUrl'); if (u) u.textContent = completionsUrl(t.value);   // 实际请求地址跟着变
+    }
+    // 改了任一字段，上一次的测试结论就作废（只更新结果面板，不动输入框）
+    if (S.keyTest && !S.keyTest.pending) {
+      S.keyTest = null;
+      const box = $('#keyTestBox'); if (box) box.innerHTML = keyTestBox();
+    }
     return;
   }
   if (t.id === 'nick' || t.id === 'code') { S.drafts[t.id] = t.value; return; }

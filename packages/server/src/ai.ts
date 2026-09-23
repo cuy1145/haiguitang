@@ -186,7 +186,7 @@ export class HostService {
     question: string,
     puzzle: Puzzle,
   ): Promise<{ ok: true; json: unknown; tokensIn: number; tokensOut: number } | { ok: false; errorClass: AiErrorClass; message: string }> {
-    const url = `${cred.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+    const url = HostService.chatCompletionsUrl(cred.baseUrl);
     const factList = puzzle.facts.map((f) => `${f.id}: ${f.text} (isTrue=${f.isTrue})`).join('\n');
     const system = [
       '你是海龟汤（情境推理游戏）的主持人。玩家只能得到「是 / 否 / 无关 / 无法回答」四类结论。',
@@ -290,7 +290,7 @@ export class HostService {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.min(8000, this.deps.config.timeoutMs));
     try {
-      const res = await fetch(`${input.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      const res = await fetch(HostService.chatCompletionsUrl(input.baseUrl), {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${input.apiKey}` },
         body: JSON.stringify({
@@ -318,6 +318,16 @@ export class HostService {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * 拼接 Chat Completions 端点：Base URL 会自动补上 `/chat/completions`。
+   * 容忍尾部斜杠；若调用方已经写全了后缀，则不重复追加（避免出现 /chat/completions/chat/completions）。
+   */
+  static chatCompletionsUrl(baseUrl: string): string {
+    const base = String(baseUrl ?? '').trim().replace(/\/+$/, '');
+    if (!base) return '';
+    return base.endsWith('/chat/completions') ? base : `${base}/chat/completions`;
   }
 
   /** 简易 Base URL 校验（SSRF 防护，见《阶段4》§2.4）：仅 https、不得含 userinfo/query/fragment、不得为内网/回环。 */
