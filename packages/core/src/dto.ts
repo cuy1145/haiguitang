@@ -83,6 +83,12 @@ export interface PublicRoom {
   result: CoreRoom['result'];
   canRevealTruth: boolean;
   revealedFacts: string[];
+  /**
+   * 本题事实点总数 / 其中"必需"条数 —— **只有计数，没有内容**。
+   * 用于给玩家显示「线索 3/8 · 探索度 42%」这类进度反馈（事实点原文永不下发）。
+   */
+  factTotal: number;
+  requiredFactTotal: number;
 }
 
 export function toPublicPuzzle(p: Puzzle): PublicPuzzle {
@@ -196,6 +202,9 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
     result: room.result ? { ...room.result } : null,
     canRevealTruth: canReveal,
     revealedFacts: [...room.revealedFacts],
+    // 计数（非内容）：探索度用"必需事实点"做分母，普通事实点做分子上限
+    factTotal: deps.puzzle ? deps.puzzle.facts.length : 0,
+    requiredFactTotal: deps.puzzle ? deps.puzzle.facts.filter((f) => f.required).length : 0,
   };
 }
 

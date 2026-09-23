@@ -141,6 +141,39 @@
   .speaker .time .t{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.02em}
   .speaker .time .l{font-size:10.5px;color:var(--fg3);letter-spacing:.08em}
 
+  /* 统计条（提问 / 线索 / 提示 / 探索度） */
+  .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .stat{
+    flex:1 1 92px;min-width:92px;border:1px solid var(--line);border-radius:var(--radius-sm);
+    padding:10px 12px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+  }
+  .stat.grow{flex:2 1 220px}
+  .stat .v{font-size:19px;font-weight:750;font-variant-numeric:tabular-nums;line-height:1.25}
+  .stat .l{font-size:11px;color:var(--fg3);letter-spacing:.06em}
+  .meter{height:8px;border-radius:99px;background:rgba(0,0,0,.45);border:1px solid var(--line);overflow:hidden}
+  .meter>i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--cyan),var(--accent));transition:width .35s ease}
+  .dots{letter-spacing:2px;color:#ffd79a;font-size:12px}
+  .dots .dim{color:var(--fg3)}
+
+  /* 汤主状态条 */
+  .engine{
+    display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px;
+    border:1px solid var(--line-2);border-left:3px solid var(--accent);border-radius:var(--radius-sm);
+    padding:10px 12px;margin-bottom:14px;background:linear-gradient(90deg,rgba(124,108,245,.14),rgba(255,255,255,.02));
+  }
+  .engine b{font-size:13px}
+  .engine button{padding:5px 10px;font-size:12px}
+
+  /* 轮到你的提醒 */
+  .your-turn{
+    border:1px solid rgba(65,214,155,.5);background:linear-gradient(90deg,rgba(65,214,155,.18),rgba(65,214,155,.05));
+    color:#c9f7e4;border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:14px;font-size:13px;font-weight:600;
+    animation:glow 1.6s ease-in-out infinite;
+  }
+  @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(65,214,155,.35)}50%{box-shadow:0 0 0 7px rgba(65,214,155,0)}}
+  .puz-src{font-size:11.5px;color:var(--fg3)}
+  .puz-src a{color:var(--cyan);text-decoration:none}
+
   .mem{
     display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:var(--radius-sm);
     border:1px solid transparent;transition:background .18s ease,border-color .18s ease;
@@ -627,6 +660,50 @@ function applyView(view) {
   render();
 }
 
+/** 复制到剪贴板（http 页面下 navigator.clipboard 不可用，回落到临时 textarea） */
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* 回落 */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const okCopy = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return okCopy;
+  } catch { return false; }
+}
+
+/**
+ * 「轮到你了」提醒：切到别的标签页时把标题闪起来，回来后立刻复原。
+ * （我们只有一个人能发言，错过回合的代价很高，所以这个提醒是值得的）
+ */
+let titleTimer = null;
+let titleBase = document.title;
+function setTitleAlert(on) {
+  if (on) {
+    titleBase = 'AI 海龟汤';
+    if (titleTimer) return;
+    let flip = false;
+    titleTimer = setInterval(() => {
+      flip = !flip;
+      document.title = flip ? '🎤 轮到你了！' : titleBase;
+    }, 900);
+    document.title = '🎤 轮到你了！';
+  } else {
+    if (titleTimer) { clearInterval(titleTimer); titleTimer = null; }
+    document.title = 'AI 海龟汤';
+  }
+}
+
 /* ============================================================================
  * 渲染
  *
@@ -694,6 +771,10 @@ function render(force = false) {
     const inRoom = Boolean(S.view && S.screen === 'room');
     chip.innerHTML = inRoom && !S.connected ? '⚠ 连接中断，正在重试…' : '⚡ Cloudflare Workers + D1';
   }
+
+  // 轮到你/没轮到你：标题栏提醒（只在自己需要动手时闪）
+  const myTurnNow = Boolean(S.view && S.screen === 'room' && S.view.you && S.view.you.canSubmit);
+  setTitleAlert(myTurnNow && document.visibilityState !== 'visible');
 }
 
 const PRESET_INFO = [
@@ -705,6 +786,9 @@ const PRESET_INFO = [
 function viewEntry() {
   const nickname = S.drafts.nick ?? (localStorage.getItem(LS_NICK) || '');
   const preset = S.preset || 'standard';
+  // 邀请链接 ?code=XXXX：点开就自动填好房号，朋友只需要再填个昵称
+  const fromLink = new URLSearchParams(location.search).get('code') || '';
+  const code = S.drafts.code ?? fromLink.toUpperCase();
   return `
   <div class="entry">
     <div class="hero">
@@ -712,10 +796,11 @@ function viewEntry() {
       <p>出题人给出一个古怪的结局（汤面），你们只能问「是不是……」，主持人回答 是 / 否 / 无关 / 无法回答。
         靠这些问题把真相拼出来 —— 汤底在结束前对所有人保密，只有房主能揭晓。</p>
     </div>
+    ${fromLink ? `<div class="notice">正在加入好友的房间 <b>${esc(fromLink.toUpperCase())}</b> —— 填个昵称点「创建 / 加入」即可。</div>` : ''}
     <div class="card">
       <h3>加入或创建房间</h3>
       <div class="field"><label>你的昵称</label><input id="nick" autocomplete="off" spellcheck="false" value="${esc(nickname)}" maxlength="12" placeholder="例如：阿伟"></div>
-      <div class="field"><label>房间码（加入已有房间，留空则新建）</label><input id="code" autocomplete="off" spellcheck="false" value="${esc(S.drafts.code ?? '')}" placeholder="6 位房间码" maxlength="8"></div>
+      <div class="field"><label>房间码（加入已有房间，留空则新建）</label><input id="code" autocomplete="off" spellcheck="false" value="${esc(code)}" placeholder="6 位房间码" maxlength="8"></div>
       <input type="hidden" id="preset" value="${esc(preset)}">
       <div style="margin-top:12px"><span class="dim">新房间的对局预设</span></div>
       <div class="modes">
@@ -788,16 +873,18 @@ function viewRoom() {
     <div>
       <div class="card"><h3>房间</h3>
         <div class="kv">
-          <div class="k">房间码</div><div><b style="font-size:17px;letter-spacing:.12em">${esc(room.code)}</b></div>
+          <div class="k">房间码</div><div><b style="font-size:19px;letter-spacing:.16em">${esc(room.code)}</b></div>
           <div class="k">状态</div><div>${esc(room.status)}${room.pauseReason ? ' · ' + esc(room.pauseReason) : ''}</div>
           <div class="k">轮次</div><div>第 ${room.roundNo} 轮 · turn_seq ${turn.seq}</div>
-          <div class="k">连接</div><div>${S.connected ? '<span class="pill live">已连接</span>' : '<span class="pill l3">断开，正在重连…</span>'}</div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="btnCopyCode" class="ghost">复制房号</button>
+          <button id="btnCopyInvite" class="ghost">复制邀请链接</button>
         </div>
         <div class="hr"></div>
         <div class="row">
           ${you.isHost ? `<button class="primary" id="btnStart">开局（房主指定）</button><button id="btnStartVote">开局（投票选汤）</button>` : ''}
           ${you.isHost ? `<button id="btnCfg">对局参数</button><button id="btnSkip">跳过本轮</button>` : ''}
-          ${you.isHost ? `<button id="btnKey">我的 API Key</button>` : ''}
           <button id="btnLeave" class="danger ghost">离开</button>
         </div>
       </div>
@@ -820,7 +907,11 @@ function viewRoom() {
       ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
       ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
 
+      ${myTurn && room.status === 'playing' ? `<div class="your-turn">🎤 轮到你发言了 —— 想好就直接问，超时会自动跳过本轮</div>` : ''}
+
       ${puzzle ? puzzleCard(puzzle, room, you) : ''}
+      ${puzzle ? statStrip(room, you) : ''}
+      ${engineBar(room, you)}
 
       ${(room.status === 'waiting' && !you.isHost) ? `
       <div class="card"><div class="spread"><h3 style="margin:0">选题</h3><span class="pill">等待房主选题…</span></div>
@@ -891,7 +982,7 @@ function puzzleCard(puzzle, room, you) {
         <div class="ptitle">《${esc(puzzle.title)}》</div>
         <div class="row">
           <span class="pill ${String(puzzle.rating).toLowerCase()}">${esc(puzzle.rating)}</span>
-          <span class="pill">难度 ${puzzle.difficulty}</span>
+          <span class="pill">难度 ${diffDots(puzzle.difficulty)}</span>
           ${puzzle.estMinutes ? `<span class="pill">约 ${puzzle.estMinutes} 分钟</span>` : ''}
         </div>
       </div>
@@ -900,6 +991,7 @@ function puzzleCard(puzzle, room, you) {
         ${(puzzle.tags || []).map((t) => `<span class="pill">${esc(t)}</span>`).join('')}
         ${(puzzle.sensitiveTags || []).map((t) => `<span class="pill l3">含：${esc(t)}</span>`).join('')}
       </div>
+      ${puzzle.attribution ? `<div class="puz-src" style="margin-top:8px">题库来源：${esc(puzzle.attribution.author)}${puzzle.attribution.url ? ` · <a href="${esc(puzzle.attribution.url)}" target="_blank" rel="noopener noreferrer">${esc(puzzle.attribution.url)}</a>` : ''}</div>` : ''}
     </div>
     <div class="hr"></div>
     <div class="actions">
@@ -924,7 +1016,7 @@ function logEntry(t, room, you) {
     return `<div class="qa${mine ? ' mine' : ''} ${esc(ans)}">
       <div class="head"><span class="who">${esc(who)}${mine ? '（你）' : ''}</span><span>第 ${t.turnSeq} 轮 · ${fmtClock(t.at)}</span></div>
       <div class="q">${esc(t.text)}</div>
-      <div class="a">主持人：<span class="verdict ${esc(ans)}">${answerLabel(t.answer)}</span>${t.reasonCode && t.reasonCode !== 'NONE' ? `<span class="dim">（${esc(t.reasonCode)}）</span>` : ''}${t.late ? '<span class="late">· 临界提交</span>' : ''}</div>
+      <div class="a">主持人：<span class="verdict ${esc(ans)}">${answerLabel(t.answer)}</span>${t.reasonCode && t.reasonCode !== 'NONE' ? `<span class="dim">（${esc(t.reasonCode)}）</span>` : ''}${t.source ? sourceTag(t.source) : ''}${t.late ? '<span class="late">· 临界提交</span>' : ''}</div>
       ${t.explain ? `<span class="explain">${esc(t.explain)}</span>` : ''}
     </div>`;
   }
@@ -953,6 +1045,79 @@ function aiBlockHint(code) {
 function hostKeyMask(room) {
   const h = room.members.find((m) => m.isHost);
   return h && h.keyMask ? h.keyMask : null;
+}
+
+/** 难度圆点（●●●○○）——比数字更直观 */
+function diffDots(n) {
+  const v = Math.max(1, Math.min(5, Number(n) || 1));
+  return `<span class="dots" title="难度 ${v}/5">${'●'.repeat(v)}<span class="dim">${'○'.repeat(5 - v)}</span></span>`;
+}
+
+/** 判定来源 → 人话标签（透明化：让玩家知道这条是谁给的） */
+function sourceTag(source) {
+  const map = { model: ['模型判定', 'accent'], cache: ['判定缓存', ''], rule: ['规则拦截', 'l2'] };
+  const [label, cls] = map[String(source)] ?? [String(source || '未知'), ''];
+  return `<span class="pill ${cls}" title="判定来源">${esc(label)}</span>`;
+}
+
+/**
+ * 统计条（参考同类产品，但这里的分母来自服务端的**必需事实点计数**）：
+ *   提问数 · 线索 X/Y · 提示用量 · 探索度
+ * 探索度 = 已解锁事实点 / 必需事实点，达到 100% 通常意味着可以揭秘了。
+ */
+function statStrip(room, you) {
+  const asked = S.questions.length;
+  const clue = room.revealedFacts ? room.revealedFacts.length : 0;
+  const total = room.factTotal || 0;
+  const need = room.requiredFactTotal || 0;
+  const pct = need > 0 ? Math.min(100, Math.round((clue / need) * 100)) : 0;
+  const hintsOn = Boolean(room.config && room.config.hintsEnabled);
+  return `
+  <div class="stats">
+    <div class="stat"><div class="v">${asked}</div><div class="l">提问</div></div>
+    <div class="stat"><div class="v">${clue}<span class="dim">/${total}</span></div><div class="l">线索</div></div>
+    <div class="stat"><div class="v">${hintsOn ? '开' : '关'}</div><div class="l">提示</div></div>
+    <div class="stat grow">
+      <div class="spread" style="margin-bottom:5px"><span class="l">探索度</span><span class="v" style="font-size:13px">${pct}%</span></div>
+      <div class="meter"><i style="width:${pct}%"></i></div>
+      <div class="dim" style="margin-top:4px">已拼出 ${clue} 条事实点${need ? ` · 关键 ${Math.min(clue, need)}/${need}` : ''}</div>
+    </div>
+  </div>`;
+}
+
+/**
+ * 「汤主」状态条：现在到底是谁在回答？（借鉴同类产品的"XX 汤主在值班"，
+ * 但这里把它和**额度来源**合并显示，因为我们的判定引擎取决于凭据而不是一个人格）。
+ */
+function engineBar(room, you) {
+  const blocked = room.ai.state === 'BLOCKED';
+  const usingHost = room.credit.mode === 'host_key';
+  const mask = hostKeyMask(room);
+  const platform = Boolean(S.config && S.config.realModelEnabled);
+  let who, tag, note;
+  if (blocked) {
+    who = '汤主罢工了'; tag = 'l3'; note = `AI 服务异常（${room.ai.reasonCode || '未知'}），对局已暂停`;
+  } else if (usingHost && mask) {
+    who = 'AI 汤主（房主自备 Key）'; tag = 'accent'; note = `凭据 ${mask} · 调用失败不会自动改用平台额度`;
+  } else if (platform) {
+    who = 'AI 汤主（平台备用额度）'; tag = 'accent'; note = '由站点额度提供，受月度上限约束';
+  } else {
+    who = '关键词汤主（内置模拟）'; tag = 'l2'; note = '只认题库里写过的说法，理解不了自然语言改写';
+  }
+  return `
+  <div class="engine">
+    <span class="dot ${blocked ? 'off' : 'active'}"></span>
+    <b>${esc(who)}</b>
+    <span class="pill ${tag}">${blocked ? '已暂停' : '在值班'}</span>
+    <span class="dim">${esc(note)}</span>
+    ${you.isHost && !blocked ? `<button id="btnKey" class="ghost" style="margin-left:auto">${mask ? '更换 / 撤销 Key' : '接通 AI 汤主'}</button>` : ''}
+  </div>`;
+}
+
+/** 房间邀请：房号 + 可分享链接（链接里带 ?code=，朋友点开自动填好） */
+function inviteText(room) {
+  const url = `${location.origin}/?code=${encodeURIComponent(room.code)}`;
+  return { url, text: `来玩 AI 海龟汤，房号 ${room.code}\n${url}` };
 }
 
 /** 成员名字首字（中文取第一个字，英文取首字母大写） */
@@ -1307,6 +1472,19 @@ document.addEventListener('click', async (e) => {
       case 'btnStart': request({ t: 'start', mode: 'pick' }); break;
       case 'pickPuzzle': request({ t: 'start', mode: 'pick', puzzleId: el.getAttribute('data-pick') }); break;
       case 'btnStartVote': request({ t: 'start', mode: 'vote' }); break;
+      case 'btnCopyCode': {
+        const okCopy = await copyText(room.code);
+        S.notice = okCopy ? `房号 ${room.code} 已复制，发给朋友即可加入` : '复制失败，请手动选中房号复制';
+        render();
+        break;
+      }
+      case 'btnCopyInvite': {
+        const inv = inviteText(room);
+        const okCopy = await copyText(inv.text);
+        S.notice = okCopy ? '邀请文案已复制（含可点开的房间链接）' : `复制失败，请手动分享：${inv.text}`;
+        render();
+        break;
+      }
       case 'btnCfg': S.configModal = true; render(); break;
       case 'btnCfgQuick': S.configModal = true; render(); break;
       case 'btnCfgClose':
@@ -1490,6 +1668,9 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('visibilitychange', () => {
   if (S.connected) send({ t: 'activity', hidden: document.visibilityState !== 'visible' });
+  // 回到页面就停止闪烁（并立刻重算一次，保证标题状态正确）
+  if (document.visibilityState === 'visible') setTitleAlert(false);
+  render();
 });
 
 /* ============================================================================
