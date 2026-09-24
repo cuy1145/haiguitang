@@ -153,13 +153,15 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
   /** 本房间的 AI 创作题目（存在 rooms.puzzle_json） */
   private customPuzzle: Puzzle | null;
   private readonly matches: RoomSnapshot['match'];
+  /** 本次请求客户端的 IP 哈希（拿不到合法 IP 或没配置密钥时为 null）。原始 IP 绝不落库。 */
+  private readonly clientIpHash: string | null;
 
   /**
    * 注意：刻意**不用** TypeScript 的"参数属性"（`constructor(private readonly db: ...)`）——
    * Node 的 type-stripping 不支持它，会导致这个文件无法被 `node --test` 直接导入
    * （Worker 侧因此一直没有测试）。手动赋值保持"零构建即可测试"。
    */
-  constructor(db: D1Database, snapshot: RoomSnapshot) {
+  constructor(db: D1Database, snapshot: RoomSnapshot, clientIpHash: string | null = null) {
     this.db = db;
     this.snapshot = snapshot;
     this.roomId = snapshot.room.id;
@@ -168,6 +170,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.creds = snapshot.credential ? [snapshot.credential] : [];
     this.matches = snapshot.match;
     this.customPuzzle = snapshot.customPuzzle;
+    this.clientIpHash = clientIpHash;
   }
 
   // ---- 读：全部走预读快照（题库走代码常量，房间自带的 AI 题目优先）
@@ -367,7 +370,9 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
       sql: `INSERT INTO audit_events(id, ts, room_id, actor, action, subject, result, ip_hash, meta_json)
             VALUES (?,?,?,?,?,?,?,?,?)`,
       bindings: [`aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, Date.now(), entry.roomId ?? this.roomId,
-        entry.actor ?? null, entry.action, entry.subject ?? null, entry.result ?? null, entry.ipHash ?? null,
+        entry.actor ?? null, entry.action, entry.subject ?? null, entry.result ?? null,
+        // 没显式给就用本次请求的 IP 哈希（Worker 每个请求新建 store，天然是请求级的）
+        entry.ipHash ?? this.clientIpHash ?? null,
         entry.meta ? JSON.stringify(entry.meta) : null],
     });
   }

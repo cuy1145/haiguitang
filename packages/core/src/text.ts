@@ -43,6 +43,33 @@ export function sanitizeChatText(input: string): string {
     .replace(/^[ \t\n]+|[ \t\n]+$/g, '');
 }
 
+/**
+ * 客户端 IP 归一化（只用于**加盐哈希**，原始 IP 绝不落库/落日志）。
+ *
+ * 处理真实世界里会遇到的几种写法：
+ *   · `::ffff:203.0.113.7`  → `203.0.113.7`（IPv4-mapped IPv6，Node 的 remoteAddress 长这样）
+ *   · `203.0.113.7:51234`   → `203.0.113.7`（带端口）
+ *   · `[2001:db8::1]:443`   → `2001:db8::1`（IPv6 方括号写法）
+ *   · 空 / `unknown` / 非 IP 字符串 → null（**不要**把它哈希成一个固定的"unknown"桶，
+ *     那会让所有缺 IP 的请求看起来像同一个人）
+ */
+export function normalizeClientIp(raw: string | null | undefined): string | null {
+  let s = String(raw ?? '').trim().toLowerCase();
+  if (!s) return null;
+  if (s === 'unknown' || s === 'null' || s === 'undefined') return null;
+  // [v6]:port
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(s);
+  if (bracketed) s = bracketed[1]!;
+  // v4:port（只在"恰好一个冒号且右侧是数字"时按端口处理，避免破坏 IPv6）
+  else if ((s.match(/:/g) ?? []).length === 1 && /:\d+$/.test(s)) s = s.slice(0, s.lastIndexOf(':'));
+  if (s.startsWith('::ffff:')) s = s.slice(7);
+  // 只接受 IPv4 / IPv6 字面量；其它一律丢弃（域名、垃圾串都不该进哈希）
+  const isV4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(s) && s.split('.').every((p) => Number(p) <= 255);
+  const isV6 = /^[0-9a-f:]+$/.test(s) && s.includes(':');
+  if (!isV4 && !isV6) return null;
+  return s;
+}
+
 /** 稳定哈希（判定缓存键用；不要求密码学强度，但要求跨进程一致）。 */
 export function stableHash(input: string): string {
   let h1 = 0x811c9dc5;

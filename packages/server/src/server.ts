@@ -20,6 +20,7 @@ import type { CoreMember, GameConfig } from '@ht/core';
 import type { ServerConfig } from './config.ts';
 import type { Logger } from './log.ts';
 import { hashIp, memberRef } from './log.ts';
+import { runWithRequestContext } from './request-context.ts';
 import type { Store } from './store.ts';
 import { Vault } from './vault.ts';
 import type { CredentialRecord } from './vault.ts';
@@ -147,13 +148,16 @@ export class App {
   private async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const ip = req.socket.remoteAddress;
+    // 客户端 IP 只以**加盐哈希**形式进审计（原始 IP 不落库、不落日志）。
+    // 用请求上下文携带：这一整个请求里的 audit() 都会自动带上它。
+    const ipHash = hashIp(ip, this.deps.config.ipHashSecret);
     try {
       if (url.pathname.startsWith('/api/')) {
-        await this.handleApi(req, res, url, ip);
+        await runWithRequestContext({ ipHash }, () => this.handleApi(req, res, url, ip));
         return;
       }
       if (url.pathname.startsWith('/debug/')) {
-        await this.handleDebug(req, res, url);
+        await runWithRequestContext({ ipHash }, () => this.handleDebug(req, res, url));
         return;
       }
       await this.serveStatic(res, url.pathname);
@@ -275,7 +279,7 @@ export class App {
     const test = await this.deps.host.connectionTest({ apiKey, baseUrl: baseUrl.url, model });
     if (!test.ok) {
       // 校验失败：立即销毁，不留下无用密文
-      this.deps.store.audit({ action: 'credential_submit_failed', roomId: runtime.room.id, subject: test.reasonCode, ipHash: hashIp(ip, 'ht') });
+      this.deps.store.audit({ action: 'credential_submit_failed', roomId: runtime.room.id, subject: test.reasonCode, ipHash: hashIp(ip, this.deps.config.ipHashSecret) });
       json(res, 400, { error: test.reasonCode, message: test.message, latencyMs: test.latencyMs });
       return;
     }
@@ -304,7 +308,7 @@ export class App {
       lastUsedAt: null,
     });
     runtime.setKeyState(auth.memberId, 'active', this.deps.vault.maskOf(apiKey));
-    this.deps.store.audit({ action: 'credential_submitted', roomId: runtime.room.id, subject: credId, result: test.reasonCode, ipHash: hashIp(ip, 'ht') });
+    this.deps.store.audit({ action: 'credential_submitted', roomId: runtime.room.id, subject: credId, result: test.reasonCode, ipHash: hashIp(ip, this.deps.config.ipHashSecret) });
     // 换上可用的 Key 后，若对局正因 AI 中断而暂停，就立刻解除暂停继续玩
     const restored = await runtime.restoreAfterKeyUpdate(auth.memberId);
     // 房主完成有效处理 → 若存在额度降级投票则立即作废（呼应《阶段4》§8.2）

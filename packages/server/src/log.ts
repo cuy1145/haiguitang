@@ -6,8 +6,9 @@
  *  - 绝不记录汤底与事实点原文（用 puzzle_id + turn_seq 关联数据库，而不是把文本写进日志）
  *  - 绝不记录 resume_token、完整 IP（只留 ip_hash）
  */
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
+import { normalizeClientIp } from '@ht/core';
 import { join } from 'node:path';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -60,8 +61,19 @@ export function redact(value: unknown, depth = 0): unknown {
   return String(value);
 }
 
-export function hashIp(ip: string | undefined, salt: string): string {
-  return createHash('sha256').update(`${salt}:${ip ?? 'unknown'}`).digest('hex').slice(0, 16);
+/**
+ * 客户端 IP → **加盐哈希**（只留 16 个十六进制字符，即 64 位）。
+ *
+ * ⚠️ 必须用 HMAC（密钥 + 域分隔），不能用 `sha256(salt + ip)` 这种"公开盐"：
+ *    IPv4 只有 2³² 个取值，拿到哈希 + 公开盐，几秒就能把整张表反查出来 —— 那样存哈希等于存明文 IP。
+ *    HMAC 的密钥来自部署密钥（Worker 用 MASTER_KEY），没有密钥就推不出对应关系。
+ * 归一化交给 core 的 normalizeClientIp()；拿不到合法 IP 时返回 null（不造"unknown"假桶）。
+ */
+export function hashIp(ip: string | null | undefined, secret: string): string | null {
+  const addr = normalizeClientIp(ip);
+  // 没有密钥就**不记**：空密钥的 HMAC 等于公开算法，IPv4 空间太小，反查毫无门槛
+  if (!addr || !String(secret ?? '').trim()) return null;
+  return createHmac('sha256', `${secret}`).update(`ht-ip-v1:${addr}`).digest('hex').slice(0, 16);
 }
 
 /** 成员引用：日志里只出现短哈希，不出现昵称与 id（降低隐私面）。 */

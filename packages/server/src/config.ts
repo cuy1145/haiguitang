@@ -16,6 +16,11 @@ export interface ServerConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   dataDir: string;
   masterKey: Buffer | null;
+  /**
+   * 客户端 IP 哈希用的密钥（审计里只留哈希，绝不留原始 IP）。
+   * 优先用 MASTER_KEY（生产一定有）；没有的话用 IP_HASH_SALT；再没有就用仅限本地开发的固定值。
+   */
+  ipHashSecret: string;
   ai: {
     provider: string;
     baseUrl: string;
@@ -90,6 +95,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     logLevel: (get('LOG_LEVEL', 'info') as ServerConfig['logLevel']),
     dataDir: resolve(cwd, get('DATA_DIR', 'data')),
     masterKey,
+    // IP 哈希密钥：优先 MASTER_KEY（生产一定有），否则 IP_HASH_SALT，
+    // 再否则用"仅本地开发"的固定值 —— 本地数据是 127.0.0.1，反查也无意义。
+    ipHashSecret: masterRaw || get('IP_HASH_SALT').trim() || 'local-dev-only-not-a-secret',
     ai: {
       provider: get('AI_PROVIDER', 'openai-compatible'),
       baseUrl,

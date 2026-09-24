@@ -27,7 +27,7 @@ import {
 } from './store-d1.ts';
 import { ConsoleLogger } from './log.ts';
 import { WebCryptoVault } from './vault.ts';
-import { generateCode, json, messageOf, newId, randomToken, readJson, sanitizeNickname, sha256Hex } from './http.ts';
+import { clientIpHashOf, generateCode, json, messageOf, newId, randomToken, readJson, sanitizeNickname, sha256Hex } from './http.ts';
 
 const logger = new ConsoleLogger('info');
 
@@ -62,15 +62,21 @@ export function siteAiConfig(env: Env): { enabled: boolean; provider: string; ba
 export async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname;
 
+  // 客户端 IP 只以**加盐哈希**形式进审计（原始 IP 绝不落库、绝不进日志）。
+  // 每个请求算一次，存进**本次请求自己的 env 副本**：Worker 里 env 对象可能被同一 isolate 的
+  // 并发请求共用，直接往上挂字段会串（这正是不能用模块级变量的原因）。
+  const ipHash = await clientIpHashOf(request, env);
+  const envForRequest: Env & { __IP_HASH__?: string | null } = { ...env, __IP_HASH__: ipHash };
+
   if (path === '/api/health' || path === '/api/config') return json({ error: 'NOT_FOUND' }, 404); // 由 index.ts 处理
 
   // ---- 无需登录 ----
-  if (request.method === 'POST' && path === '/api/rooms') return createRoom(request, env);
+  if (request.method === 'POST' && path === '/api/rooms') return createRoom(request, envForRequest);
   const joinMatch = /^\/api\/rooms\/([A-Za-z0-9]{4,8})\/join$/.exec(path);
-  if (request.method === 'POST' && joinMatch) return joinRoom(request, env, joinMatch[1]!.toUpperCase());
+  if (request.method === 'POST' && joinMatch) return joinRoom(request, envForRequest, joinMatch[1]!.toUpperCase());
 
   // ---- 需要登录（会话令牌 → 房间 + 成员）----
-  const auth = await authenticate(request, env);
+  const auth = await authenticate(request, envForRequest);
   if (!auth) return json({ error: 'UNAUTHORIZED', message: '会话无效或已过期，请重新加入房间' }, 401);
   const { roomId, memberId } = auth;
 
@@ -87,11 +93,11 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
     const chatSince = Number(url.searchParams.get('chatSince') ?? 0);
     return withRoom(env, roomId, async (runtime2, store) => {
       // 讨论消息的读路径直接在库上做（不进快照）；发送者名字从当前房间快照取
-      const chat = await fetchChat(env.DB, roomId, chatSince, 100);
+      const chat = await fetchChat(envForRequest.DB, roomId, chatSince, 100);
       const nameOf = (id: string): string => getMember(runtime2.room, id)?.name ?? '已离开的玩家';
       return json({
       view: viewFor(runtime2, memberId),
-      timeline: await loadTimeline(env, roomId),
+      timeline: await loadTimeline(envForRequest, roomId),
       // 公共提问 / 对话记录：所有人都能看到的问答流水（不含事实点、不含汤底）
       questions: publicQuestionLog(runtime2, store.listQuestions(roomId)),
       // 全员讨论区：成员自由发言，跟判定完全无关（汤底/事实点/密钥绝不进这里）
@@ -100,7 +106,7 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
       seq: runtime2.room.eventSeq,
       stateVersion: runtime2.room.stateVersion,
       events: since > 0
-        ? [...(await fetchEventsSince(env.DB, roomId, since)), ...store.emittedEvents.filter((e) => e.seq > since)]
+        ? [...(await fetchEventsSince(envForRequest.DB, roomId, since)), ...store.emittedEvents.filter((e) => e.seq > since)]
         : store.emittedEvents,
       });
     }, { withQuestions: true });
@@ -111,11 +117,11 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
       since,
       seq: runtime.room.eventSeq,
       stateVersion: runtime.room.stateVersion,
-      events: [...(await fetchEventsSince(env.DB, roomId, since)), ...store.emittedEvents.filter((e) => e.seq > since)],
+      events: [...(await fetchEventsSince(envForRequest.DB, roomId, since)), ...store.emittedEvents.filter((e) => e.seq > since)],
     }));
   }
   if (request.method === 'POST' && path === '/api/rooms/actions') {
-    return handleAction(request, env, roomId, memberId);
+    return handleAction(request, envForRequest, roomId, memberId);
   }
   if (request.method === 'GET' && path === '/api/recap') {
     return withRoom(env, roomId, async (runtime) => {
@@ -124,8 +130,8 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
       return json(recap.view);
     }, { withQuestions: true });
   }
-  if (path === '/api/credentials/test' && request.method === 'POST') return testCredential(request, env, roomId, memberId);
-  if (path === '/api/credentials' && request.method === 'POST') return submitCredential(request, env, roomId, memberId);
+  if (path === '/api/credentials/test' && request.method === 'POST') return testCredential(request, envForRequest, roomId, memberId);
+  if (path === '/api/credentials' && request.method === 'POST') return submitCredential(request, envForRequest, roomId, memberId);
   if (path === '/api/credentials' && request.method === 'DELETE') {
     return withRoom(env, roomId, async (runtime) => {
       const result = runtime.revokeKey(memberId);
@@ -154,7 +160,7 @@ async function withRoom(
     const snapshot = await loadSnapshot(env.DB, roomId, opts);
     if (!snapshot) return json({ error: 'ROOM_NOT_FOUND' }, 404);
 
-    const store = new D1RoomStore(env.DB, snapshot);
+    const store = new D1RoomStore(env.DB, snapshot, (env as Env & { __IP_HASH__?: string | null }).__IP_HASH__ ?? null);
     const site = siteAiConfig(env);
     const host = new HostService({
       store,

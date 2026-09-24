@@ -12,6 +12,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CoreMember, CoreRoom, GameConfig, Puzzle, PuzzleFact, PuzzleMeta } from '@ht/core';
 import type { CredentialRecord, CredentialState, EncryptedBlob } from './vault.ts';
+import { currentIpHash } from './request-context.ts';
 
 export const SCHEMA_VERSION = 6;
 
@@ -763,6 +764,12 @@ export class Store {
   }
 
   // ---------------------------------------------------------------- 审计
+  /**
+   * 记一条审计。
+   * `ipHash` 没显式给时，自动取**当前请求**的 IP 哈希（见 request-context.ts）——
+   * 这样"谁进出了哪个房间"这类记录天然带上来源哈希，不必在每个调用点重复传参。
+   * 原始 IP 绝不落库（只有 HMAC 后的 16 位十六进制）。
+   */
   audit(entry: { action: string; roomId?: string | null; actor?: string | null; subject?: string | null; result?: string | null; ipHash?: string | null; meta?: Record<string, unknown> }): void {
     this.db.prepare(`
       INSERT INTO audit_events(id, ts, room_id, actor, action, subject, result, ip_hash, meta_json)
@@ -770,7 +777,7 @@ export class Store {
     `).run(
       `aud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       Date.now(), entry.roomId ?? null, entry.actor ?? null, entry.action,
-      entry.subject ?? null, entry.result ?? null, entry.ipHash ?? null,
+      entry.subject ?? null, entry.result ?? null, entry.ipHash ?? currentIpHash(),
       entry.meta ? JSON.stringify(entry.meta) : null,
     );
   }
