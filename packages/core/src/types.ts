@@ -155,6 +155,15 @@ export interface GameConfig {
   guessMaxPerMember: number;
   /** 猜汤底**共用冷却**（秒）：任何人猜过一次，全房间都要等这么久才能再猜；0 = 不限 */
   guessCooldownSec: number;
+  /**
+   * 对局进行中有人进房怎么处理：
+   *  · `seated_next_round`（默认）：先排队「待入席」，申请后从下一轮起进入轮转
+   *  · `spectator_only`：只能旁观，不接受上桌申请（本局不受任何影响）
+   *  · `reject`：直接拒绝加入（朋友晚到就进不来，适合不欢迎中途打扰的局）
+   */
+  midJoinPolicy: 'seated_next_round' | 'spectator_only' | 'reject';
+  /** 待入席排队上限（0 = 不允许排队，等同 spectator_only 的观感） */
+  maxPendingSeats: number;
   /** 提示系统总开关：默认关闭（房主可在对局参数里打开）。关闭时 requestHint 一律被拒。 */
   hintsEnabled: boolean;
   hintQuotaPerMember: number;

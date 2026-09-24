@@ -63,6 +63,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
   quick: {
     perTurnSec: 30, graceSec: 3, timeoutSkip: true,
     guessEveryRounds: 2, guessMaxPerMember: 0, guessCooldownSec: 90,
+    midJoinPolicy: 'seated_next_round', maxPendingSeats: 3,
     hintsEnabled: false,
     hintQuotaPerMember: 3, hintTier3Max: 1, hintCooldownSec: 60,
     maxRounds: 15, turnOrderMode: 'join', idleSkip: true,
@@ -73,6 +74,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
   standard: {
     perTurnSec: 60, graceSec: 5, timeoutSkip: true,
     guessEveryRounds: 3, guessMaxPerMember: 0, guessCooldownSec: 180,
+    midJoinPolicy: 'seated_next_round', maxPendingSeats: 3,
     hintsEnabled: false,
     hintQuotaPerMember: 3, hintTier3Max: 1, hintCooldownSec: 120,
     maxRounds: 20, turnOrderMode: 'join', idleSkip: true,
@@ -83,6 +85,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
   casual: {
     perTurnSec: 120, graceSec: 10, timeoutSkip: true,
     guessEveryRounds: 5, guessMaxPerMember: 0, guessCooldownSec: 300,
+    midJoinPolicy: 'seated_next_round', maxPendingSeats: 3,
     hintsEnabled: false,
     hintQuotaPerMember: 5, hintTier3Max: 2, hintCooldownSec: 240,
     maxRounds: 30, turnOrderMode: 'join', idleSkip: false,
@@ -114,6 +117,8 @@ export const CONFIG_SCHEMA: readonly ConfigFieldSpec[] = [
   // 共用冷却才是猜汤底的节奏控制器；每人上限默认 0=不限（房主想要防刷可自己调大）
   { key: 'guessCooldownSec', label: '猜汤底共用冷却（秒，0=不限）', type: 'int', min: 0, max: 1800, afterStart: 'free', effective: 'immediate' },
   { key: 'guessMaxPerMember', label: '每人猜汤底次数上限（0=不限）', type: 'int', min: 0, max: 20, afterStart: 'increase-only', effective: 'immediate' },
+  { key: 'midJoinPolicy', label: '对局中进房的人怎么处理', type: 'enum', values: ['seated_next_round', 'spectator_only', 'reject'], afterStart: 'free', effective: 'immediate' },
+  { key: 'maxPendingSeats', label: '待入席排队上限', type: 'int', min: 0, max: 10, afterStart: 'free', effective: 'immediate' },
   { key: 'hintsEnabled', label: '启用提示（默认关闭）', type: 'bool', afterStart: 'free', effective: 'immediate' },
   { key: 'hintQuotaPerMember', label: '每人提示次数（T1+T2）', type: 'int', min: 0, max: 10, afterStart: 'increase-only', effective: 'immediate' },
   { key: 'hintTier3Max', label: 'T3 关键提示（每局共享）', type: 'int', min: 0, max: 3, afterStart: 'increase-only', effective: 'immediate' },

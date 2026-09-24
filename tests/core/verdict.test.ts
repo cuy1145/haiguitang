@@ -218,6 +218,12 @@ test('参数校验：越界、跨字段、只允许增大、锁定项', () => {
   assert.equal(validateConfig({ hintQuotaPerMember: 1, hintTier3Max: 2 }).ok, false);
   assert.equal(validateConfig({ difficultyMin: 4, difficultyMax: 2 }).ok, false);
   assert.equal(validateConfig({ perTurnSec: 90, graceSec: 5 }).ok, true);
+  // 对局中进房策略：枚举只接受三个值；排队上限必须是有界整数（两者都是新功能的口径）
+  assert.equal(validateConfig({ midJoinPolicy: 'seated_next_round' }).ok, true);
+  // 故意传非法值：运行时要拒（类型层这里必须显式绕过，正是为了测这种"客户端乱传"的情况）
+  assert.equal(validateConfig({ midJoinPolicy: '随便写' as unknown as 'reject' }).ok, false, '枚举非法值必须整批拒绝');
+  assert.equal(validateConfig({ maxPendingSeats: 3 }).ok, true);
+  assert.equal(validateConfig({ maxPendingSeats: 99 }).ok, false, '排队上限越界要被拒');
 
   const dec = validateConfigChange(DEFAULT_CONFIG, { maxRounds: 3 }, true);
   assert.equal(dec.ok, false);

@@ -623,6 +623,64 @@ test('I-23c: 房主不需要举手，也不会被算进"还差几个人"', async
   guest.close();
 });
 
+test('I-30: 房主可设「对局中进房」策略：拒绝 / 只允许旁观 / 排队（默认）', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const g2 = await Client.open(booted.url, p2.token, '阿伟');
+  await startMatch(host, room.roomId);                        // 进入 playing
+
+  const joinAs = (nickname: string) => fetch(`${booted.url}/api/rooms/${room.code}/join`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ nickname }),
+  });
+
+  // ① reject：直接拒绝，并给出人话原因
+  await configure(host, room.roomId, { midJoinPolicy: 'reject' });
+  const denied = await joinAs('早退者');
+  assert.equal(denied.status, 409, '拒绝策略下不该放进来');
+  const deniedBody = await denied.json() as { error: string; message?: string };
+  assert.equal(deniedBody.error, 'MID_JOIN_REJECTED');
+  assert.ok(String(deniedBody.message).includes('不接受中途加入'), `要给出人能看懂的原因：${deniedBody.message}`);
+
+  // ② spectator_only：能进房，但只是旁观、没有排队资格
+  await configure(host, room.roomId, { midJoinPolicy: 'spectator_only' });
+  const specRes = await joinAs('旁观者');
+  assert.equal(specRes.status, 200);
+  const spec = await specRes.json() as { token: string; memberId: string };
+  await settle();
+  let row = roomState(room.roomId).members.find((m) => m.id === spec.memberId)!;
+  assert.equal(row.role, 'spectator');
+  assert.equal(row.pendingSeat === true, false, '只允许旁观时不该获得排队资格');
+  assert.equal(roomState(room.roomId).turnOrder.includes(spec.memberId), false);
+  // 旁观者也不能"申请上桌"
+  const specClient = await Client.open(booted.url, spec.token, '旁观者');
+  const specAck = await specClient.request({ t: 'ready', ready: true });
+  assert.equal(specAck.t, 'error', '旁观者不能申请上桌');
+  // 房主视图里"待入席人数"应当是 0
+  const view = (await (await fetch(`${booted.url}/api/session`, { headers: { authorization: `Bearer ${room.token}` } })).json() as { view: { room: { pendingSeatCount: number } } }).view;
+  assert.equal(view.room.pendingSeatCount, 0);
+
+  // ③ maxPendingSeats=0：排队被关掉，降级为纯旁观（不报错、也不排队）
+  await configure(host, room.roomId, { midJoinPolicy: 'seated_next_round', maxPendingSeats: 0 });
+  const noQueue = await joinAs('没位子的人');
+  assert.equal(noQueue.status, 200);
+  const nq = await noQueue.json() as { memberId: string };
+  await settle();
+  row = roomState(room.roomId).members.find((m) => m.id === nq.memberId)!;
+  assert.equal(row.pendingSeat === true, false, '排队上限为 0 时不排队');
+  assert.equal(row.role, 'spectator');
+
+  // ④ 恢复排队：这次应当能拿到待入席资格
+  await configure(host, room.roomId, { maxPendingSeats: 3 });
+  const queued = await joinAs('排队的人');
+  const q = await queued.json() as { memberId: string };
+  await settle();
+  row = roomState(room.roomId).members.find((m) => m.id === q.memberId)!;
+  assert.equal(row.pendingSeat, true, '恢复上限后应当能排队');
+
+  host.close(); g2.close(); specClient.close();
+});
+
 test('I-29: 对局进行中进房 = 待入席：不占轮转；申请后到下一轮才参与', async () => {
   const room = await createRoom('房主');
   const host = await Client.open(booted.url, room.token, '房主');

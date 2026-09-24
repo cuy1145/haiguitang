@@ -206,7 +206,7 @@ export class App {
       }
       const runtime = this.registry.create(base, now);
       const joined = await this.joinRoom(runtime, nickname, false);
-      if ('error' in joined) { json(res, 409, { error: joined.error }); return; }
+      if ('error' in joined) { json(res, 409, { error: joined.error, message: messageOf(joined.error) }); return; }
       this.deps.logger.info('room_created', { room_id: runtime.room.id, member_ref: memberRef(joined.member.id), ip_hash: hashIp(ip, 'ht') });
       json(res, 200, { roomId: runtime.room.id, code: runtime.room.code, memberId: joined.member.id, token: joined.token, view: runtime.view(joined.member.id) });
       return;
@@ -220,7 +220,7 @@ export class App {
       const nickname = sanitizeNickname(body.nickname);
       const spectator = body.spectator === true && runtime.room.config.allowSpectator;
       const result = await this.joinRoom(runtime, nickname, spectator);
-      if ('error' in result) { json(res, 409, { error: result.error }); return; }
+      if ('error' in result) { json(res, 409, { error: result.error, message: messageOf(result.error) }); return; }
       json(res, 200, { roomId: runtime.room.id, code: runtime.room.code, memberId: result.member.id, token: result.token, view: runtime.view(result.member.id) });
       return;
     }
@@ -523,7 +523,7 @@ export class App {
 
     if (url.pathname === '/debug/bot' && req.method === 'POST') {
       const joined = await this.joinRoom(runtime, sanitizeNickname(body.nickname ?? '模拟玩家'), false, true);
-      if ('error' in joined) { json(res, 409, { error: joined.error }); return; }
+      if ('error' in joined) { json(res, 409, { error: joined.error, message: messageOf(joined.error) }); return; }
       this.deps.store.audit({ action: 'debug_bot_added', roomId, subject: joined.member.id });
       json(res, 200, { ok: true, memberId: joined.member.id });
       return;
@@ -600,10 +600,13 @@ export class App {
     const playerId = this.deps.newId('p');
     const token = randomBytes(32).toString('base64url');
     const now = this.deps.now();
-    // 对局进行中进房 → 待入席（排队）：不占轮转、不占玩家位，申请后到下一轮才参与
+    // 对局进行中进房 → 按房主的 midJoinPolicy 处理（见 GameConfig 注释）
+    const policy = room.config.midJoinPolicy ?? 'seated_next_round';
     const midMatch = room.status === 'playing' && !spectator;
+    if (midMatch && policy === 'reject') return { error: 'MID_JOIN_REJECTED' };
+    const pendingMax = Math.max(0, Number(room.config.maxPendingSeats ?? PLATFORM.midJoinPendingMax));
     const pendingCount = room.members.filter((m) => m.pendingSeat === true).length;
-    const asPending = midMatch && pendingCount < PLATFORM.midJoinPendingMax;
+    const asPending = midMatch && policy === 'seated_next_round' && pendingCount < pendingMax;
     const member: CoreMember = {
       id: memberId, playerId, name: nickname, isBot,
       role: spectator ? 'spectator' : (room.members.length === 0 ? 'host' : (midMatch ? 'spectator' : 'member')),

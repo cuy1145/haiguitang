@@ -406,7 +406,7 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   ).run();
 
   const joined = await joinAsPlayer(env, roomId, nickname, false, true);
-  if ('error' in joined) return json({ error: joined.error }, 409);
+  if ('error' in joined) return json({ error: joined.error, message: messageOf(joined.error) }, 409);
   return json({ roomId, code, memberId: joined.memberId, token: joined.token, view: joined.view });
 }
 
@@ -417,7 +417,7 @@ async function joinRoom(request: Request, env: Env, code: string): Promise<Respo
   const nickname = sanitizeNickname(body.nickname);
   const spectator = body.spectator === true;
   const joined = await joinAsPlayer(env, roomId, nickname, spectator, false);
-  if ('error' in joined) return json({ error: joined.error }, 409);
+  if ('error' in joined) return json({ error: joined.error, message: messageOf(joined.error) }, 409);
   return json({ roomId, code, memberId: joined.memberId, token: joined.token, view: joined.view });
 }
 
@@ -441,14 +441,21 @@ async function joinAsPlayer(
     if (room.status === 'settled' || room.status === 'destroyed') { failure = 'ROOM_CLOSED'; return json({ error: 'ROOM_CLOSED' }, 409); }
 
     /**
-     * 对局进行中进房 → **待入席**（排队），不占轮转也不占玩家位：
-     * 他先以旁观身份在场，点「申请下一轮上桌」后，等到轮次 wrap 才转正参与轮转。
-     * 排队超过上限（PLATFORM.midJoinPendingMax）就只能纯旁观（pendingSeat=false），
-     * 前端据 pendingSeat 提示"排队已满，你以旁观身份在场"。
+     * 对局进行中进房 → 按房主设置的 midJoinPolicy 处理：
+     *   · seated_next_round（默认）：先排队「待入席」，申请后到下一轮才转正进轮转
+     *   · spectator_only：只能旁观，不接受上桌申请
+     *   · reject：直接拒绝
+     * 排队超过 maxPendingSeats 时降级为纯旁观（pendingSeat=false），前端据此提示。
      */
+    const policy = room.config.midJoinPolicy ?? 'seated_next_round';
     const midMatch = room.status === 'playing' && !spectator;
+    if (midMatch && policy === 'reject') {
+      failure = 'MID_JOIN_REJECTED';
+      return json({ error: 'MID_JOIN_REJECTED', message: '这一局已经开始了，房主设置为本局不接受中途加入，等下一局再来。' }, 409);
+    }
+    const pendingMax = Math.max(0, Number(room.config.maxPendingSeats ?? PLATFORM.midJoinPendingMax));
     const pendingCount = room.members.filter((m) => m.pendingSeat === true).length;
-    const asPending = midMatch && pendingCount < PLATFORM.midJoinPendingMax;
+    const asPending = midMatch && policy === 'seated_next_round' && pendingCount < pendingMax;
 
     const member: CoreMember = {
       id: memberId, playerId, name: nickname, isBot: false,

@@ -374,6 +374,8 @@ function viewDive() {
     </div>
   </div>
 
+    ${pendingSeatCard(r, you)}
+
   ${puzzle ? `
   <div class="pod" style="margin-top:14px">
     <h3 class="ttl">海面 · 汤面 <small>${esc(puzzle.title)} · 难度 ${puzzle.difficulty}/5 · ${esc(puzzle.rating)}</small></h3>
@@ -426,6 +428,26 @@ function viewDive() {
 
 function stateWord(r) {
   return { waiting: '待下潜', playing: '下潜中', suspended: '暂停加压', settled: '已返回海面', destroyed: '已废弃' }[r.status] || r.status;
+}
+
+/** 待入席（对局进行中进房的人）：先排队，申请后从下一轮起进入轮转 */
+function pendingSeatCard(r, you) {
+  const me = (r.members || []).find((m) => m.id === you.memberId);
+  if (!me || me.pendingSeat !== true) return '';
+  const asked = me.seatRequested === true;
+  const perTurn = Number((r.config && r.config.perTurnSec) || 60);
+  const players = (r.members || []).filter((m) => m.role !== 'spectator').length || 1;
+  return `
+  <div class="pod" style="margin-bottom:14px">
+    <h3 class="ttl">待入席 <small>本局已在下潜中</small></h3>
+    <div class="dim">你进来时这一潜已经开始了，所以先在水面待命：能看到全部公开信息，不占用轮转顺序。
+      ${asked ? `已申请上桌——本局进入下一轮时你会被正式排进轮转（约 ${Math.max(1, Math.round((perTurn * players) / 60))} 分钟）。`
+              : '点下面的按钮申请：从下一轮起排进轮转，不会抢掉别人的提问机会。'}</div>
+    <div class="row" style="margin-top:10px">
+      <button class="${asked ? '' : 'go'}" id="btnSeatQuick">${asked ? '取消申请（继续待命）' : '申请下一轮上桌'}</button>
+      <span class="chip ${asked ? 'on' : ''}">${asked ? '已申请' : '待命'}</span>
+    </div>
+  </div>`;
 }
 
 /** 声呐上的回波点：按已解锁事实点摆一圈 */
@@ -496,7 +518,7 @@ function crew(v, readyLeft) {
           ${m.conn === 'disconnected' ? '<span class="chip off">失联</span>' : m.activity === 'idle' ? '<span class="chip off">静止</span>' : ''}
           ${active ? '<span class="chip on">发射中</span>' : ''}
         </div>
-        <div class="mt">深度分 ${m.score}</div>
+        <div class="mt">${m.pendingSeat === true ? (m.seatRequested ? '待入席 · 已申请' : '待入席') : `深度分 ${m.score}`}</div>
       </div>`;
     }).join('')}
   </div>`;
@@ -556,6 +578,11 @@ function bind() {
   on('btnGuessBack', () => { S.modal = null; render(true); });
   on('btnGuessGo', doGuess);
   on('btnReady', () => void send({ type: 'ready', ready: !readyOf(S.view) }));
+  // 待入席者：同一个 ready 动作，语义是"申请下一轮上桌"
+  on('btnSeatQuick', () => {
+    const me = S.view.room.members.find((m) => m.id === S.view.you.memberId) || {};
+    void send({ type: 'ready', ready: me.seatRequested !== true });
+  });
   on('btnVote', () => void send({ type: 'start', mode: 'vote' }));
   on('btnEnd', () => { if (confirm('结束这次下潜？汤底不会公示。')) void send({ type: 'end_match' }); });
   on('btnNext', () => void send({ type: 'next_round' }));

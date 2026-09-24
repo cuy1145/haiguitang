@@ -129,6 +129,7 @@ export function messageOf(code: string): string {
     case 'ROOM_NOT_FOUND': return '房间不存在或已被清理。';
     case 'ROOM_CLOSED': return '房间已经结束，不能再加入了。';
     case 'ROOM_FULL': return '房间人数已满。';
+    case 'MID_JOIN_REJECTED': return '这一局已经开始了，房主设置为本局不接受中途加入，等下一局再来。';
     case 'UNAUTHORIZED': return '会话无效或已过期，请重新加入房间。';
     case 'CONFLICT': return '房间状态刚被别的操作更新，请重试一次。';
     case 'UNKNOWN_ACTION': return '未知操作（客户端与服务端版本可能不一致）。';

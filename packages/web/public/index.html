@@ -1674,6 +1674,13 @@ function cfgModal(room) {
     ${num('hintTier3Max', 'T3 提示（每局共享）', 0, 3)}
     ${num('hintCooldownSec', '提示冷却（秒）', 0, 600)}
     ${num('maxRounds', '总回合上限（轮）', 1, 60)}
+    <div class="field"><label>对局中进房的人怎么处理</label>
+      <select data-cfg="midJoinPolicy">
+        <option value="seated_next_round" ${cur('midJoinPolicy') === 'seated_next_round' ? 'selected' : ''}>排队待入席（默认）：申请后从下一轮起上桌</option>
+        <option value="spectator_only" ${cur('midJoinPolicy') === 'spectator_only' ? 'selected' : ''}>只能旁观（本局不接受上桌）</option>
+        <option value="reject" ${cur('midJoinPolicy') === 'reject' ? 'selected' : ''}>拒绝加入（等下一局）</option>
+      </select></div>
+    ${num('maxPendingSeats', '待入席排队上限（人）', 0, 10)}
     ${num('candidateCount', '候选题数量', 3, 5)}
     ${num('voteDurationSec', '投票时长（秒）', 30, 600)}
     ${bool('timeoutSkip', '超时自动跳过')}
@@ -1978,7 +1985,10 @@ document.addEventListener('click', async (e) => {
         const patch = {};
         document.querySelectorAll('[data-cfg]').forEach((input) => {
           const k = input.getAttribute('data-cfg');
-          patch[k] = input.type === 'checkbox' ? input.checked : Number(input.value);
+          // 三类控件：勾选框给 boolean、下拉框给字符串（如 midJoinPolicy）、数字框给 int
+          patch[k] = input.type === 'checkbox' ? input.checked
+            : input.tagName === 'SELECT' ? String(input.value)
+            : Number(input.value);
         });
         const res = await sendAction({ type: 'config', patch, expectedVersion: room.configVersion });
         if (res) {

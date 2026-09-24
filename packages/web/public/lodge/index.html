@@ -360,6 +360,7 @@ function viewRoom() {
         <div class="dim">${you.isHost ? '从下面的「今日菜单」里挑一道，或者让全桌投票。' : '等汤主开锅。'}</div></div>`}
 
       ${r.status === 'waiting' ? menu(v) : ''}
+      ${pendingSeatCard(r, you)}
       ${r.status === 'settled' && !r.truth ? `
       <div class="card fold"><h3 class="ttl">这锅没揭底 <small>${esc(r.result ? r.result.result : '')}</small></h3>
         <div class="dim">${you.isHost ? '汤底还在锅底。想看复盘请用旧版界面，或直接开下一锅。' : '只有汤主能揭开它。'}</div>
@@ -404,7 +405,7 @@ function viewRoom() {
               ${m.role === 'spectator' ? '<span class="mark">旁听</span>' : ''}
               ${m.conn === 'disconnected' ? '<span class="mark off">走了</span>' : m.activity === 'idle' ? '<span class="mark off">发呆</span>' : ''}
             </div>
-            <div class="mt">${m.score} 分</div>
+            <div class="mt">${m.pendingSeat === true ? (m.seatRequested ? '待入席 · 已申请' : '待入席') : `${m.score} 分`}</div>
           </div>`).join('')}
         ${missing(v, missReady)}
       </div>
@@ -412,8 +413,27 @@ function viewRoom() {
   </div>`;
 }
 
-function pinRow(got, need) {
-  const n = Math.max(need || 0, got, 1);
+/** 待入席（对局进行中进房的人）：先排队，申请后从下一轮起进入轮转 */
+function pendingSeatCard(r, you) {
+  const me = (r.members || []).find((m) => m.id === you.memberId);
+  if (!me || me.pendingSeat !== true) return '';
+  const asked = me.seatRequested === true;
+  const perTurn = Number((r.config && r.config.perTurnSec) || 60);
+  const players = (r.members || []).filter((m) => m.role !== 'spectator').length || 1;
+  const eta = Math.max(1, Math.round((perTurn * players) / 60));
+  return `<div class="card fold">
+    <h3 class="ttl">待入席 <small>这锅已经开熬了</small></h3>
+    <div class="dim">你来晚了一步，这锅已经开了，所以先在外间候着：能看到全部公开信息，不占提问顺序。
+      ${asked ? `已经跟汤主说过了——本锅进入下一轮就给你添副碗筷（约 ${eta} 分钟）。`
+              : '跟汤主说一声，就能从下一轮起入席，不会抢掉别人的发问机会。'}</div>
+    <div class="row" style="margin-top:10px">
+      <button class="${asked ? '' : 'ask-btn'}" id="btnSeatQuick">${asked ? '算了，继续候着' : '申请下一轮入席'}</button>
+      <span class="mark ${asked ? 'on' : ''}">${asked ? '已申请' : '候着'}</span>
+    </div>
+  </div>`;
+}
+
+function pinRow(got, need) {  const n = Math.max(need || 0, got, 1);
   let out = '';
   for (let i = 0; i < Math.min(n, 12); i++) out += `<span class="pin${i < got ? '' : ' empty'}"></span>`;
   return out;
@@ -495,6 +515,11 @@ function bind() {
   on('btnGuessBack', () => { S.modal = null; render(true); });
   on('btnGuessGo', doGuess);
   on('btnReady', () => void send({ type: 'ready', ready: !(S.view.room.members.find((m) => m.id === S.view.you.memberId) || {}).ready }));
+  // 待入席者：同一个 ready 动作，语义是"申请下一轮上桌"
+  on('btnSeatQuick', () => {
+    const me = S.view.room.members.find((m) => m.id === S.view.you.memberId) || {};
+    void send({ type: 'ready', ready: me.seatRequested !== true });
+  });
   on('btnVote', () => void send({ type: 'start', mode: 'vote' }));
   on('btnEnd', () => { if (confirm('收锅结束这局？汤底不会揭封。')) void send({ type: 'end_match' }); });
   on('btnNext', () => void send({ type: 'next_round' }));
