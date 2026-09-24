@@ -306,6 +306,15 @@ export interface JudgeResult {
    * 只要过不了泄露检查，就整条丢掉、只留裸的"是/否"（宁缺勿滥，绝不冒险提示）。
    */
   explain?: string | null;
+  /**
+   * 诊断用：模型**原本**给出的 answer，只在它与最终 answer 不一致时才填（否则为 null）。
+   *
+   * 为什么要有它：模型只负责把问题映射到事实点，结论由事实表裁决（decideFromFacts）。
+   * 于是会偶发"模型命中了一条成立的事实点、却按自己的理解答否"——
+   * 最终结论被改写成「是」，而模型那句 explain 是按它自己的「否」写的。
+   * 不留痕的话，事后只看记录无法区分"模型判错"和"系统判错"。
+   */
+  answerModel?: AnswerEnum | null;
 }
 
 export interface GuessResult {

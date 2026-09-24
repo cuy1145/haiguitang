@@ -275,6 +275,60 @@ test('G9x: 出题路径的截断错误也单独分类（不再混进 SCHEMA_INVA
 });
 
 
+test('G13: 模型判 no 却命中成立的事实点 → 结论以事实表为准（yes），且不会留下「否——」的自相矛盾说明', async () => {
+  // 线上真实出现过的一条记录：问题「他是否是顺手把钥匙放到沙发下的」，
+  // 模型返回 answer=no + explain="否——…与事实不符。"，matched_fact_ids=["f2"]，
+  // 而 f2 是成立的事实点 → 事实表复核改判 yes，模型那句「否——」被原样留着，
+  // 公共记录就变成「主持人：是 … 否——…与事实不符」。
+  const stub = stubFetch(JSON.stringify({
+    answer: 'no', reason_code: 'NONE', matched_fact_ids: ['f1'],
+    explain: '否——你问的『从监狱出来』与事实不符。',
+  }));
+  try {
+    const host = makeHost(3000, 0);
+    const checked = checkAndNormalizePuzzle(JSON.parse(VALID_PUZZLE), { idPrefix: 'g' });
+    assert.equal(checked.ok, true);
+    const puzzle = checked.ok ? checked.puzzle : null;
+    const out = await host.judge({
+      roomId: 'r1', matchId: null, turnSeq: 1, question: '他是不是刚从监狱出来？', puzzle: puzzle!,
+      credential: { apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', provider: 'openai-compatible' },
+    });
+    assert.equal(out.kind, 'ok', out.kind === 'error' ? `${out.errorClass}: ${out.message}` : '');
+    if (out.kind !== 'ok') return;
+    // ① 结论以事实表为准：f1 成立 → yes
+    assert.equal(out.result.answer, 'yes');
+    // ② 模型原本的答案被留痕（否则事后无法判断是模型判错还是系统判错）
+    assert.equal(out.result.answerModel, 'no');
+    // ③ 说反了的那句必须丢掉（rooms.ts 会用 contextExplain 兜一句）
+    assert.equal(out.result.explain, null);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('G14: 模型与事实表结论一致时不留痕（answerModel=null），说明句照常保留', async () => {
+  const stub = stubFetch(JSON.stringify({
+    answer: 'yes', reason_code: 'NONE', matched_fact_ids: ['f1'],
+    explain: '是——只针对你问的『监狱』这一句。',
+  }));
+  try {
+    const host = makeHost(3000, 0);
+    const checked = checkAndNormalizePuzzle(JSON.parse(VALID_PUZZLE), { idPrefix: 'g' });
+    const puzzle = checked.ok ? checked.puzzle : null;
+    const out = await host.judge({
+      roomId: 'r1', matchId: null, turnSeq: 1, question: '他是不是刚从监狱出来？', puzzle: puzzle!,
+      credential: { apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', provider: 'openai-compatible' },
+    });
+    assert.equal(out.kind, 'ok', out.kind === 'error' ? `${out.errorClass}: ${out.message}` : '');
+    if (out.kind !== 'ok') return;
+    assert.equal(out.result.answer, 'yes');
+    assert.equal(out.result.answerModel ?? null, null, '没有分歧就不该留痕');
+    assert.equal(out.result.explain, '是——只针对你问的『监狱』这一句。');
+  } finally {
+    stub.restore();
+  }
+});
+
 test('G6: generateFacts 只补事实点（用于导入网上收集的题目）', async () => {
   const stub = stubFetch(JSON.stringify({
     facts: [

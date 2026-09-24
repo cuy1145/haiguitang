@@ -5,6 +5,7 @@
  *   ① audit_events   —— 谁在什么时候做了什么（含被拒原因、AI 中断、踢人、AI 出题）
  *   ② usage_counters —— 当月调用量（host=房主自备 Key / site=平台额度 / mock=内置模拟）
  *   ③ questions      —— 每一条提问与判定（判定来源、是否临界提交、补充说明）
+ *   ③a/③b            —— 判定体检：结论被事实表改写过的记录 / 说明与结论自相矛盾的记录（后者应恒为 0 行）
  *   ④ credentials    —— 房主自备 Key 的状态与掩码（**永远看不到明文**）
  *   ⑤ room_events    —— 房间时间线（系统事件、阶段切换）
  *
@@ -41,6 +42,14 @@ const QUERIES: Array<{ title: string; sql: string }> = [
   {
     title: '③ 提问与判定记录（source=判定来源）',
     sql: `SELECT datetime(created_at/1000,'unixepoch','localtime') AS at, substr(room_id,1,14) AS room, turn_seq, answer, coalesce(reason_code,'-') AS reason, source, late, substr(text,1,26) AS question, coalesce(explain,'') AS explain FROM questions ORDER BY created_at DESC LIMIT ${limit}`,
+  },
+  {
+    title: '③a 判定体检：结论被事实表改写过的记录（answer_model=模型原本的答案）',
+    sql: "SELECT datetime(created_at/1000,'unixepoch','localtime') AS at, substr(room_id,1,14) AS room, turn_seq, answer_model AS model_said, answer AS final, coalesce(matched_json,'[]') AS matched, substr(text,1,26) AS question, coalesce(explain,'') AS explain FROM questions WHERE answer_model IS NOT NULL ORDER BY created_at DESC LIMIT 50",
+  },
+  {
+    title: '③b 判定体检：说明句与结论自相矛盾（正常应为 0 行）',
+    sql: "SELECT datetime(created_at/1000,'unixepoch','localtime') AS at, substr(room_id,1,14) AS room, turn_seq, answer, substr(text,1,26) AS question, explain FROM questions WHERE (answer='yes' AND explain LIKE '否%') OR (answer='no' AND explain LIKE '是%') OR (answer IN ('irrelevant','unanswerable') AND (explain LIKE '是%' OR explain LIKE '否%')) ORDER BY created_at DESC LIMIT 50",
   },
   {
     title: '④ 房主自备凭据（只有掩码，无明文）',

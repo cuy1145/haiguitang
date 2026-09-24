@@ -37,6 +37,11 @@ export interface QuestionRecord {
   matchedFactIds: string[];
   /** 「是 / 否」时可选的一句补充说明（已过泄露检查；没有就是 null） */
   explain?: string | null;
+  /**
+   * 诊断用：模型**原本**给出的 answer，只在被事实表改写时才非 null。
+   * 有了它才能事后回答"这条记录是模型判错还是系统判错"。
+   */
+  answerModel?: string | null;
   createdAt: number;
 }
 
@@ -194,6 +199,8 @@ export class Store {
         late INTEGER NOT NULL DEFAULT 0,
         matched_json TEXT NOT NULL,
         explain TEXT,
+        -- 模型原本给出的 answer（仅当被事实表改写时写入，用于事后判定体检）
+        answer_model TEXT,
         client_submit_id TEXT,
         created_at INTEGER NOT NULL,
         UNIQUE(room_id, turn_seq),
@@ -307,6 +314,8 @@ export class Store {
     // v1 → v2：questions 增加 explain（「是/否」后的可选补充说明）。
     // 建表语句已经带上该列；对已存在的旧库这里补一次，失败（列已存在）忽略。
     try { this.db.exec('ALTER TABLE questions ADD COLUMN explain TEXT'); } catch { /* 已存在 */ }
+    // v5 → v6：questions 增加 answer_model（模型原本的答案，仅在被事实表改写时写入）
+    try { this.db.exec('ALTER TABLE questions ADD COLUMN answer_model TEXT'); } catch { /* 已存在 */ }
     // v2 → v3：rooms 增加猜汤底共用冷却的截止时间（0 = 当前可猜）
     try { this.db.exec('ALTER TABLE rooms ADD COLUMN guess_cooldown_until INTEGER NOT NULL DEFAULT 0'); } catch { /* 已存在 */ }
     // v3 → v4：members 增加待入席排队字段（对局进行中进房的人先排队）
@@ -517,19 +526,27 @@ export class Store {
 
   // ---------------------------------------------------------------- 提问 / 对局
   insertQuestion(q: QuestionRecord): void {
-    // explain 兼容旧库：列不存在时回落为不带该列的插入（Node 参考实现里库是本地文件）
+    // explain / answer_model 兼容旧库：列不存在时逐级回落（Node 参考实现里库是本地文件）
     try {
       this.db.prepare(`
-        INSERT INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, answer_model, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(room_id, turn_seq) DO NOTHING
-      `).run(q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, q.createdAt);
+      `).run(q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, q.answerModel ?? null, q.createdAt);
     } catch {
-      this.db.prepare(`
-        INSERT INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(room_id, turn_seq) DO NOTHING
-      `).run(q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.createdAt);
+      try {
+        this.db.prepare(`
+          INSERT INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(room_id, turn_seq) DO NOTHING
+        `).run(q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, q.createdAt);
+      } catch {
+        this.db.prepare(`
+          INSERT INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(room_id, turn_seq) DO NOTHING
+        `).run(q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.createdAt);
+      }
     }
   }
 
@@ -580,6 +597,7 @@ export class Store {
       late: Number(r.late) === 1,
       matchedFactIds: JSON.parse(String(r.matched_json ?? '[]')),
       explain: r.explain === null || r.explain === undefined ? null : String(r.explain),
+      answerModel: r.answer_model === null || r.answer_model === undefined ? null : String(r.answer_model),
       createdAt: Number(r.created_at),
     }));
   }

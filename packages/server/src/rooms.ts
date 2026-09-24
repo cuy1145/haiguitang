@@ -9,7 +9,7 @@
  */
 import {
   PLATFORM, PROMPT_VERSION, assertNoLeak, canSubmit, checkAndNormalizePuzzle, emptyRoom, getMember, hintsExhausted,
-  isLeaky, judgeGuess, contextExplain, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
+  isLeaky, judgeGuess, coherentExplain, contextExplain, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
   transferGate, validateConfigChange,
 } from '@ht/core';
 import type {
@@ -685,14 +685,14 @@ export class RoomRuntime {
       this.judging.delete(turnSeq);
       if (outcome.kind === 'ok') {
         const result = outcome.result;
-        // 每条判定都带一句结合提问语境的说明：模型给了就用模型的（已过泄露/引导式清洗），
-        // 没给（规则拦截、判定缓存命中、内置模拟主持人）就用玩家自己的问法兜一句。
-        const explain = result.explain ?? contextExplain(result.answer, text);
+        // 每条判定都带一句结合提问语境的说明：模型给了就用模型的（已过泄露/引导式/自相矛盾清洗），
+        // 没给（规则拦截、判定缓存命中、内置模拟主持人）或者给的与结论相反 → 就用玩家自己的问法兜一句。
+        const explain = coherentExplain(result.explain, result.answer) ?? contextExplain(result.answer, text);
         const q: QuestionRecord = {
           id: this.deps.newId('q'), roomId: this.room.id, matchId: this.matchId, turnSeq,
           memberId, text, answer: result.answer, reasonCode: result.reasonCode, source: result.source,
           late: this.room.turn.lateSubmit, matchedFactIds: result.matchedFactIds,
-          explain, createdAt: Date.now(),
+          explain, answerModel: result.answerModel ?? null, createdAt: Date.now(),
         };
         this.deps.store.insertQuestion(q);
         const before = this.room.revealedFacts.length;

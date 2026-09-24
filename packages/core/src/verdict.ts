@@ -220,6 +220,7 @@ export function validateJudgeOutput(raw: unknown, ctx: JudgeValidationCtx): Judg
  *   · ≤ EXPLAIN_MAX_CHARS 字，且不得是问句（避免反问式提示）
  *   · 不得与汤底共享 8-gram、不得近似抄写事实点原文（isLeaky）
  *   · 不得出现引导式措辞（"接近了/再想想/注意…"）—— 那是提示，不是说明
+ *   · 不得与 answer 自相矛盾（「否——…」配 answer=yes）
  */
 export function sanitizeExplain(raw: unknown, answer: AnswerEnum, ctx: JudgeValidationCtx): string | null {
   if (typeof raw !== 'string') return null;
@@ -229,7 +230,42 @@ export function sanitizeExplain(raw: unknown, answer: AnswerEnum, ctx: JudgeVali
   if (/[?？]$/.test(text)) return null;
   if (GUIDING_PHRASE.test(text)) return null;
   if (isLeaky(text, ctx.truth, ctx.facts)) return null;
+  // 模型自己把结论说反了（answer=yes 却写「否——…」）：这句话不能用
+  if (explainConflictsWithAnswer(text, answer)) return null;
   return text;
+}
+
+/**
+ * 说明句里"结论性开头"的识别。
+ *
+ * 只认**明确下结论**的写法（「是——…」「否——…」「对的，…」「不是：…」），
+ * 不碰「你问的『X』在本题设定里没有提到」这类中性说明 —— 后者没有下结论，谈不上说反。
+ */
+const EXPLAIN_VERDICT = /^[\s（(【\[]*(是|否|对的|不对|不是)\s*[—\-–－:：,，]/;
+const VERDICT_ANSWER: Record<string, AnswerEnum> = {
+  是: 'yes', 对的: 'yes', 否: 'no', 不对: 'no', 不是: 'no',
+};
+
+/** 说明句的结论性开头是否与 answer 相反。 */
+export function explainConflictsWithAnswer(explain: string, answer: AnswerEnum): boolean {
+  const m = EXPLAIN_VERDICT.exec(String(explain ?? ''));
+  if (!m) return false;
+  return VERDICT_ANSWER[m[1]!] !== answer;
+}
+
+/**
+ * 过滤"说反了"的说明句：返回 null 表示调用方应改用 {@link contextExplain} 兜底。
+ *
+ * 存在的理由（线上真实出现过的一条记录）：
+ * 模型返回 `answer=no` + `explain="否——你问的『…』与事实不符。"`，同时命中了**成立**的事实点；
+ * 事实表复核把结论改成了「是」，但那句 explain 是模型按自己的「否」写的，于是玩家看到
+ * 「主持人：是 … 否——…与事实不符」。结论以事实表为准，说反了的那句必须丢掉。
+ */
+export function coherentExplain(explain: unknown, answer: AnswerEnum): string | null {
+  if (typeof explain !== 'string') return null;
+  const text = explain.trim();
+  if (!text) return null;
+  return explainConflictsWithAnswer(text, answer) ? null : text;
 }
 
 /** 引导式措辞：这些是"提示"，不是"说明"，一律丢弃（丢了还有兜底句，不会让玩家看到空说明）。 */
@@ -255,15 +291,21 @@ export function contextExplain(answer: AnswerEnum, question: string): string {
   }
 }
 
-/** 从玩家的问题里抠一个短话题（只用于回指问题本身；剥掉"是不是/吗"这类疑问外壳） */
+/**
+ * 从玩家的问题里抠一个短话题（只用于回指问题本身；剥掉"是不是/吗"这类疑问外壳）。
+ *
+ * 疑问外壳**直接删掉**（不是换成空格）：换成空格会留下「他 是顺手把钥匙放到沙发」这种
+ * 带豁口的回指句（线上真实出现过这类兜底句），删掉才读得顺。
+ * 上限 14 字：常见问句（含「他是…的」这类收尾）刚好能整句保留，不会被截在半截词上。
+ */
 export function topicFromQuestion(question: string): string {
   let s = normalize(question)
     .replace(/^(请问|那么|所以|那|嗯|我想问|想问)+/g, '')
-    .replace(/(是不是|是否|有没有|会不会|能不能|可不可以|是不是说|吗|呢|吧)/g, ' ')
+    .replace(/(是不是|是否|有没有|会不会|能不能|可不可以|是不是说|吗|呢|吧)/g, '')
     .replace(/[?？。！!，,、；;：:（）()「」『』"'“”]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  if (s.length > 12) s = s.slice(0, 12);
+  if (s.length > 14) s = s.slice(0, 14);
   return s;
 }
 

@@ -106,6 +106,7 @@ export async function loadSnapshot(db: D1Database, roomId: string, opts: { withQ
         reasonCode: String(r.reason_code), source: String(r.source), late: Number(r.late) === 1,
         matchedFactIds: JSON.parse(String(r.matched_json ?? '[]')),
         explain: r.explain === null || r.explain === undefined ? null : String(r.explain),
+        answerModel: r.answer_model === null || r.answer_model === undefined ? null : String(r.answer_model),
         createdAt: Number(r.created_at),
       });
     }
@@ -251,9 +252,9 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
   insertQuestion(q: QuestionRecord): void {    if (this.knownQuestions.some((x) => x.turnSeq === q.turnSeq)) return;
     this.knownQuestions.push(q);
     this.pending.push({
-      sql: `INSERT OR IGNORE INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, client_submit_id, created_at)
-            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, null, q.createdAt, this.roomId, VERSION_PLACEHOLDER],
+      sql: `INSERT OR IGNORE INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, answer_model, client_submit_id, created_at)
+            SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
+      bindings: [q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, q.answerModel ?? null, null, q.createdAt, this.roomId, VERSION_PLACEHOLDER],
     });
   }
 

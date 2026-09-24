@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  analyzeInput, contextExplain, decideFromFacts, EXPLAIN_MAX_CHARS, isLeaky, preflight, sanitizeExplain, topicFromQuestion, validateJudgeOutput,
+  analyzeInput, coherentExplain, contextExplain, decideFromFacts, EXPLAIN_MAX_CHARS, explainConflictsWithAnswer, isLeaky, preflight, sanitizeExplain, topicFromQuestion, validateJudgeOutput,
 } from '../../packages/core/src/verdict.ts';
 import { mockJudge } from '../../packages/core/src/mock-host.ts';
 import { matchFactsByKeys, judgeGuess, pickHintFact, hintsExhausted } from '../../packages/core/src/facts.ts';
@@ -138,6 +138,38 @@ test('explain：引导式措辞（接近了/再想想/注意…）一律丢弃 �
     assert.equal(v.ok, true, '丢弃说明不该让判定失败');
     assert.equal(v.ok === true && v.result.explain, null, `应当丢弃：${bad}`);
   }
+});
+
+test('explain 自洽性：说明句说反了（「否——…」配 answer=yes）必须丢掉，改由 contextExplain 兜底', () => {
+  const f = analyzeInput('他以前出过海吗？').features;
+  const ctx = { truth: puzzle.truth.truth, facts: leakFacts, features: f };
+  // ① 模型自己就写反了：answer=no 却写「是——…」→ 这一句丢掉，判定保留
+  const selfContradiction = validateJudgeOutput(
+    { answer: 'no', reason_code: 'NONE', matched_fact_ids: ['f6'], explain: '是——你问的『下毒』在本题设定里成立。' },
+    ctx,
+  );
+  assert.equal(selfContradiction.ok, true, '丢说明不该让判定失败');
+  assert.equal(selfContradiction.ok === true && selfContradiction.result.explain, null);
+
+  // ② 事实表改写结论后的收口（线上真实那一条）：模型判 no、命中成立的事实点 → 最终 yes，
+  //    模型那句「否——…」与最终结论相反 → coherentExplain 必须返回 null（rooms.ts 再用兜底句补上）
+  assert.equal(coherentExplain('否——你问的『顺手把钥匙放到沙发下』与事实不符。', 'yes'), null);
+  assert.equal(coherentExplain('是——只针对你问的这一句。', 'yes'), '是——只针对你问的这一句。');
+  assert.equal(coherentExplain('否——你问的『照片里的人』在本题设定里不出现。', 'no'), '否——你问的『照片里的人』在本题设定里不出现。');
+
+  // ③ 别误杀中性说明：没有"下结论"的句子一律放行
+  for (const okText of [
+    '你问的『钥匙有很多』在本题设定里没有提到。',
+    '没有提到这件事。',
+    '这个问题要求列举，没法用是/否回答。',
+    '不是问的是否存在，而是范围。',   // 「不是」后面没有结论分隔符 → 不算下结论
+  ]) {
+    assert.equal(coherentExplain(okText, 'irrelevant'), okText, `中性说明不该被丢：${okText}`);
+  }
+  // ④ 结论相反的中性答案也要拦（irrelevant / unanswerable 配「是——/否——」同样矛盾）
+  assert.equal(coherentExplain('是——你问的这件事成立。', 'irrelevant'), null);
+  assert.equal(coherentExplain('否——这件事不成立。', 'unanswerable'), null);
+  assert.equal(explainConflictsWithAnswer('（是）——只针对你问的这一句。', 'yes'), false);
 });
 
 test('contextExplain：模型没给说明时，用玩家自己的问法兜一句（结合语境、不给方向）', () => {

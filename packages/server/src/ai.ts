@@ -10,7 +10,7 @@
  *  - 输出不合规/泄露 → 拒收并降级为"规则裁决"（不涉及额度）
  */
 import {
-  PROMPT_VERSION, REASON_CODES, analyzeInput, decideFromFacts, isLeaky, preflight, sharedNgram,
+  PROMPT_VERSION, REASON_CODES, analyzeInput, coherentExplain, decideFromFacts, isLeaky, preflight, sharedNgram,
   similarity, stableHash, validateJudgeOutput,
 } from '@ht/core';
 import type { AnswerEnum, JudgeResult, Puzzle, ReasonCode } from '@ht/core';
@@ -199,7 +199,24 @@ export class HostService {
       const finalAnswer = validation.result.answer === 'unanswerable' || validation.result.answer === 'irrelevant'
         ? validation.result.answer
         : authoritative;
-      const result: JudgeResult = { ...validation.result, answer: finalAnswer };
+      // 复核改写了结论时：
+      //  ① 模型那句 explain 是按**它自己的**结论写的，留着就会出现「主持人：是 / 否——…与事实不符」，
+      //     所以先做一致性过滤（丢掉后由 rooms.ts 用 contextExplain 兜一句）；
+      //  ② 把"模型原本判什么"留痕（answerModel），否则事后无法区分是模型判错还是系统判错。
+      const overridden = validation.result.answer !== finalAnswer;
+      const finalExplain = coherentExplain(validation.result.explain, finalAnswer);
+      if (overridden) {
+        this.deps.logger.warn('judge_answer_overridden', {
+          room_id: req.roomId, turn_seq: req.turnSeq,
+          model_answer: validation.result.answer, final_answer: finalAnswer,
+          matched_fact_ids: validation.result.matchedFactIds.join(','),
+          explain_dropped: Boolean(validation.result.explain) && finalExplain === null,
+        });
+      }
+      const result: JudgeResult = {
+        ...validation.result, answer: finalAnswer, explain: finalExplain,
+        answerModel: overridden ? validation.result.answer : null,
+      };
 
       this.deps.store.putVerdict({ ...parts, answer: result.answer, reasonCode: result.reasonCode, matchedFactIds: result.matchedFactIds, hitCount: 0, createdAt: Date.now() });
       this.deps.onCall?.({ source: 'model', ok: true, latencyMs, tokensIn: call.tokensIn, tokensOut: call.tokensOut });
