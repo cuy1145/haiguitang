@@ -444,6 +444,12 @@ export class App {
           else this.reply(ws, id, false, result.code);
           break;
         }
+        case 'create_ai_puzzle': {
+          const result = await runtime.createAiPuzzle(memberId);
+          if (result.ok) this.reply(ws, id, true, undefined, result.data as Record<string, unknown> | undefined);
+          else this.reply(ws, id, false, result.code, result.detail as Record<string, unknown> | undefined);
+          break;
+        }
         case 'resume_transfer': {
           const result = await runtime.resumeTransfer(memberId);
           this.reply(ws, id, result.ok, result.ok ? undefined : result.code);

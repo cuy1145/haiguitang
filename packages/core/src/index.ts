@@ -22,4 +22,5 @@ export * from './vote.ts';
 export * from './turn.ts';
 export * from './host.ts';
 export * from './dto.ts';
+export * from './puzzle-check.ts';
 export * from './reduce.ts';

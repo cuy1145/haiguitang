@@ -69,6 +69,7 @@ export type ClientFrame =
   | { t: 'start'; id?: string; mode: 'vote' | 'pick'; puzzleId?: string; force?: boolean }
   | { t: 'ready'; id?: string; ready: boolean }
   | { t: 'kick'; id?: string; memberId: string }
+  | { t: 'create_ai_puzzle'; id?: string }
   | { t: 'resume_transfer'; id?: string }
   | { t: 'return_host'; id?: string }
   | { t: 'decline_return'; id?: string }

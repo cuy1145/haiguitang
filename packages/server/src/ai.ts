@@ -191,6 +191,133 @@ export class HostService {
     return mockJudge(question, { facts: puzzle.facts, puzzleId: puzzle.id });
   }
 
+  // ---------------------------------------------------------------- 出题（AI 创作 / 补事实点）
+  /**
+   * 让模型**创作**一道完整的新题（房主的「AI 创作」选项）。
+   *
+   * 与判定的区别：判定只做"问题 → 事实点映射"，这里要产出题面/汤底/事实点表三件套。
+   * 事实点表最关键（它决定后续判定质量），所以提示词把"事实点怎么写"讲得很细；
+   * 产出后由 core 的 checkAndNormalizePuzzle() 统一校验，不通过就整题作废、绝不入库。
+   */
+  async generatePuzzle(
+    cred: { apiKey: string; baseUrl: string; model: string; provider: string },
+    opts: { ratingMax?: 'L1' | 'L2' | 'L3'; difficultyMin?: number; difficultyMax?: number; avoidTitles?: string[] } = {},
+  ): Promise<{ ok: true; raw: unknown; latencyMs: number } | { ok: false; errorClass: AiErrorClass; message: string }> {
+    const system = [
+      '你是一位海龟汤（情境推理游戏）出题人。请创作一道**全新的、自洽的**中文海龟汤，并给出严格 JSON。',
+      '',
+      '【什么是好的海龟汤】',
+      '· 汤面：一段反常、诡异、缺少关键前提的小场景（10–200 字），读起来必须让人想问"为什么"。',
+      '· 汤底：一句话能讲清但读者想不到的真相（10–400 字），必须能解释汤面里每一个反常之处。',
+      '· **封闭世界**：真相只用到汤面里出现过的人、物、场景；不要引入汤面完全没提到的角色或地点。',
+      '· 不许靠谐音、错别字、语言歧义、超自然力量、梦境幻觉作为唯一谜底（那属于脑筋急转弯，不是海龟汤）。',
+      '',
+      '【事实点表怎么写（最重要）】',
+      '· 3–6 条原子事实，每条 2–40 字，只写"是/否"能判断的单一命题；不要写整段推理。',
+      '· id 依次 f1, f2, f3…；tier 是揭示层级：1=表层（谁在哪做什么），2=中层（动机/关系），3=核心反转。',
+      '· isTrue=true 表示这条在本题真相里成立；最多 2 条 isTrue=false 的"否定型"事实（用来让玩家排除常见误猜）。',
+      '· required=true 的会进入"必需集"，玩家揭秘命中它们才算解出：请给 2–4 条，且都必须是 isTrue=true。',
+      '· keys 是**玩家可能说出口**的 1–6 个短词（关键词兜底判定用），例如 ["灯塔","灯灭了","船难"]。',
+      '· 事实点文本**不得与汤面重复**：汤面是题面，事实点是答案的组成部分。',
+      '',
+      '【输出格式（严格 JSON，不要任何多余文字）】',
+      '{"title":"≤12 字标题","surface":"汤面","truth":"汤底","difficulty":1-5,"rating":"L1|L2|L3",',
+      ' "tags":["本格","反转"],"sensitiveTags":["死亡"],"estMinutes":20,',
+      ' "facts":[{"id":"f1","text":"…","isTrue":true,"tier":1,"required":true,"keys":["…"]}]}',
+      '',
+      '【内容红线】不得出现真实人物姓名、政治敏感内容、色情内容、可供模仿的危险操作。',
+      '可以有悬疑与死亡元素（这是体裁的一部分），但不要血腥猎奇的细节描写。',
+      opts.ratingMax ? `· 内容分级上限：${opts.ratingMax}（L1 最温和、L3 可含较强惊悚）` : '',
+      opts.difficultyMin !== undefined ? `· 难度请落在 ${opts.difficultyMin}–${opts.difficultyMax} 之间` : '',
+      opts.avoidTitles && opts.avoidTitles.length > 0 ? `· 不要与这些已有标题雷同：${opts.avoidTitles.slice(0, 20).join('、')}` : '',
+      '',
+      '现在开始：先在心里选定"一句话真相"，再倒推汤面，最后拆事实点。只输出 JSON。',
+    ].filter(Boolean).join('\n');
+    return this.callJson(cred, system, '请创作一道全新的海龟汤。', 1200);
+  }
+
+  /**
+   * 给**已有**的汤面 + 汤底补出事实点表（把网上收集来的题目接进我们的判定引擎）。
+   * 只补事实点、不改动原题文字，这样爬来的题保留原貌，同时能被判定使用。
+   */
+  async generateFacts(
+    cred: { apiKey: string; baseUrl: string; model: string; provider: string },
+    input: { surface: string; truth: string },
+  ): Promise<{ ok: true; raw: unknown; latencyMs: number } | { ok: false; errorClass: AiErrorClass; message: string }> {
+    const system = [
+      '你是海龟汤题库的结构化助手。用户给你一道已有的海龟汤（汤面 + 汤底），',
+      '你要把它拆成**事实点表**，供"是/否"判定使用。**不要改写汤面与汤底**。',
+      '',
+      '要求：',
+      '· 3–8 条原子事实，每条 2–40 字，只写单一命题；id 依次 f1, f2, f3…',
+      '· tier：1=表层事实，2=中层动机/关系，3=核心反转。',
+      '· isTrue=true 表示汤底里成立；请额外给 1–2 条 isTrue=false 的常见误猜方向。',
+      '· required=true 给 2–4 条且必须 isTrue=true：这些是"解开本题必须命中的关键点"。',
+      '· keys：每条给 1–6 个玩家可能说出口的短关键词。',
+      '· 事实点文本不得与汤面原文重复。',
+      '',
+      '输出严格 JSON：{"facts":[{"id":"f1","text":"…","isTrue":true,"tier":1,"required":true,"keys":["…"]}]}',
+      '',
+      '【汤面】', input.surface,
+      '【汤底】', input.truth,
+    ].join('\n');
+    return this.callJson(cred, system, '请输出事实点表 JSON。', 900);
+  }
+
+  /**
+   * 通用的「要求模型返回严格 JSON」调用（创作 / 补事实点共用）。
+   * 与判定共用同一套超时、错误分类，以及能容忍围栏与截断的 JSON 解析。
+   */
+  private async callJson(
+    cred: { apiKey: string; baseUrl: string; model: string; provider: string },
+    system: string,
+    user: string,
+    maxTokens: number,
+  ): Promise<{ ok: true; raw: unknown; latencyMs: number } | { ok: false; errorClass: AiErrorClass; message: string }> {
+    const started = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.deps.config.timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(HostService.chatCompletionsUrl(cred.baseUrl), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${cred.apiKey}` },
+        body: JSON.stringify(buildJsonBody(cred, system, user, maxTokens)),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      const e = err as Error;
+      return { ok: false, errorClass: e.name === 'AbortError' ? 'CONNECT_TIMEOUT' : 'CONN_RESET', message: e.message };
+    } finally {
+      clearTimeout(timer);
+    }
+    const latencyMs = Date.now() - started;
+    if (!res.ok) {
+      if (res.status === 401) return { ok: false, errorClass: 'HTTP_401', message: '鉴权失败（API Key 无效）' };
+      if (res.status === 402) return { ok: false, errorClass: 'HTTP_402', message: '额度耗尽' };
+      if (res.status === 429) return { ok: false, errorClass: 'HTTP_429', message: '上游限流' };
+      if (res.status === 400) return { ok: false, errorClass: 'HTTP_400', message: '请求参数错误（检查模型名）' };
+      if (res.status === 404) return { ok: false, errorClass: 'HTTP_404', message: '模型或 Base URL 不存在' };
+      if (res.status >= 500) return { ok: false, errorClass: 'HTTP_5XX', message: `上游错误 ${res.status}` };
+      return { ok: false, errorClass: 'UNKNOWN', message: `未预期的状态码 ${res.status}` };
+    }
+    let data: unknown;
+    try { data = await res.json(); } catch { return { ok: false, errorClass: 'SCHEMA_INVALID', message: '响应不是 JSON' }; }
+    const obj = data as { choices?: Array<{ message?: { content?: string; refusal?: string } }> };
+    if (obj.choices?.[0]?.message?.refusal) return { ok: false, errorClass: 'PROVIDER_REFUSAL', message: '上游拒绝回答（内容策略）' };
+    const content = obj.choices?.[0]?.message?.content ?? '';
+    const jsonText = extractJsonObject(content);
+    if (!jsonText) {
+      return { ok: false, errorClass: 'SCHEMA_INVALID', message: `模型没有返回可解析的 JSON（${leakSafePreview(content, '', 120)}）` };
+    }
+    try {
+      return { ok: true, raw: JSON.parse(jsonText), latencyMs };
+    } catch {
+      return { ok: false, errorClass: 'SCHEMA_INVALID', message: '模型输出的 JSON 无法解析' };
+    }
+  }
+
   /** 单次模型调用（含超时、错误分类、响应解析）。 */
   private async callModel(
     cred: { apiKey: string; baseUrl: string; model: string; provider: string },
@@ -508,6 +635,33 @@ export function buildJudgeBody(
   if (isDeepSeekHost(cred.baseUrl)) {
     body.thinking = { type: 'disabled' };
     body.reasoning_effort = 'low';   // 双保险：即使上游忽略 thinking，也不让它按 high 思考
+  }
+  return body;
+}
+
+/**
+ * 通用的 JSON 请求体（判定 / 出题 / 补事实点共用同一套参数策略）。
+ * 与 buildJudgeBody 一样：对 DeepSeek 关闭思考模式，避免思维链把输出预算吃光。
+ */
+export function buildJsonBody(
+  cred: { baseUrl: string; model: string },
+  system: string,
+  user: string,
+  maxTokens: number,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: cred.model,
+    temperature: 0.8,          // 出题需要一点创造性（判定那边固定 0）
+    max_tokens: maxTokens,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+  };
+  if (isDeepSeekHost(cred.baseUrl)) {
+    body.thinking = { type: 'disabled' };
+    body.reasoning_effort = 'low';
   }
   return body;
 }

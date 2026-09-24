@@ -6,8 +6,18 @@
  * 事实点 keys 仅供内置模拟主持人使用；接入真实模型后由模型做语义映射。
  */
 import type { Puzzle } from '@ht/core';
+import { collectedPuzzles } from './collected-puzzles.ts';
 
+/**
+ * 手写题库 + 导入题库。
+ * `collected-puzzles.ts` 由 `pnpm import:puzzles` 生成（默认是空数组，见该文件头部说明）；
+ * 导入的每一道题都经过与 AI 创作相同的坏题检测，且带出处/许可信息。
+ */
 export function seedPuzzles(): Puzzle[] {
+  return [...handWritten(), ...collectedPuzzles()];
+}
+
+function handWritten(): Puzzle[] {
   return [
     {
       id: 'p1',

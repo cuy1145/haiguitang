@@ -293,6 +293,58 @@ pnpm cf:tail
 
 ---
 
+## 5.1 怎么看后台记录（出问题先看这里）
+
+按「从快到慢」的顺序：
+
+```powershell
+# ① 实时日志（最常用）：判定来源、AI 中断、AI 出题、踢人、清理都会打在这里
+pnpm cf:tail
+#    关注这几条：
+#      judge_result              — 判定成功（含 credit_source: host_key / site_fallback）
+#      judge_call_failed         — 上游调用失败（errorClass：HTTP_401 / HTTP_429 / CONNECT_TIMEOUT…）
+#      judge_output_parse_failed — 模型没给出可解析 JSON（带 finish_reason 与预览；预览已过汤底泄露检查）
+#      ai_puzzle_created / ai_puzzle_rejected — 房主 AI 出题的结果
+#      member_kicked             — 房主移出玩家
+
+# ② 历史记录速查（一次看完审计/用量/提问/凭据/时间线）
+pnpm audit              # 走线上 D1
+pnpm audit --local      # 走本地 wrangler dev 的库
+pnpm audit --tail 50    # 多看几行
+pnpm audit --sql        # 只打印 SQL，自己拿去改着查
+```
+
+Cloudflare 面板里对应位置：
+
+| 想看什么 | 位置 |
+|---|---|
+| 实时/最近日志 | Workers & Pages → `haiguitang` → **Logs** |
+| 请求量与错误率 | Workers & Pages → `haiguitang` → **Metrics** |
+| 数据库内容 | Storage & Databases → **D1** → `haiguitang` → **Console**（可直接写 SQL）|
+| 定时任务 | Workers & Pages → `haiguitang` → Settings → **Trigger Events → Cron** |
+| 运行期密钥 | Workers & Pages → `haiguitang` → Settings → **Variables**（只看得到名字）|
+| CI/CD 执行 | GitHub → **Actions** → 选 workflow → 点进 job 看步骤日志 |
+
+最常用的三条 SQL（也可以直接粘进 D1 Console）：
+
+```sql
+-- 最近发生了什么（含被拒原因、AI 中断、踢人、AI 出题）
+SELECT datetime(ts/1000,'unixepoch','localtime') AS at, action, subject, result, room_id
+FROM audit_events ORDER BY ts DESC LIMIT 30;
+
+-- 这个月用了多少额度（site=平台额度 / host=房主自备 / mock=内置模拟）
+SELECT period, scope, calls, blocked_count, grants_count FROM usage_counters ORDER BY period DESC;
+
+-- 每一次提问与判定（source 告诉你这条是模型/缓存/规则给的）
+SELECT datetime(created_at/1000,'unixepoch','localtime') AS at, room_id, turn_seq, answer, source, late, text, explain
+FROM questions ORDER BY created_at DESC LIMIT 30;
+```
+
+> 汤底与密钥**永远不会**出现在日志或这些表里：日志里的模型输出预览会先过泄露检查（与汤底重合就整段打码），
+> 凭据表里只有掩码（形如 `sk-****8191`）与指纹。
+
+---
+
 ## 6. 我需要你提供的信息（都不含密钥）
 
 1. GitHub 仓库地址（形如 `https://github.com/你/haiguitang`）——用于我帮你核对 remote 与 Actions 配置

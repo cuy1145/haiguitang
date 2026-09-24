@@ -35,6 +35,8 @@ export interface RoomSnapshot {
   usage: { siteCalls: number; hostCalls: number };
   verdicts: Map<string, VerdictCacheRow>;
   questions: QuestionRecord[];
+  /** 房主用 AI 现写的那道题（存在 rooms.puzzle_json 里）；getPuzzle 会优先返回它 */
+  customPuzzle: Puzzle | null;
 }
 
 interface PendingStatement { sql: string; bindings: unknown[] }
@@ -111,7 +113,20 @@ export async function loadSnapshot(db: D1Database, roomId: string, opts: { withQ
     usage,
     verdicts,
     questions,
+    customPuzzle: parseCustomPuzzle(roomRow.puzzle_json),
   };
+}
+
+/** rooms.puzzle_json → Puzzle（解析失败一律当作"没有自定义题目"，绝不影响开局） */
+function parseCustomPuzzle(raw: unknown): Puzzle | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Puzzle;
+    if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string' && Array.isArray(parsed.facts)) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- ② 请求级仓储（同步读 + 缓冲写）
@@ -123,6 +138,8 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
   private readonly savedKeyStates = new Map<string, { state: string; mask: string | null; formerHost: boolean }>();
   private readonly knownQuestions: QuestionRecord[];
   private readonly creds: CredentialRecord[];
+  /** 本房间的 AI 创作题目（存在 rooms.puzzle_json） */
+  private customPuzzle: Puzzle | null;
   private readonly matches: RoomSnapshot['match'];
 
   constructor(private readonly db: D1Database, readonly snapshot: RoomSnapshot) {
@@ -131,10 +148,19 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.knownQuestions = [...snapshot.questions];
     this.creds = snapshot.credential ? [snapshot.credential] : [];
     this.matches = snapshot.match;
+    this.customPuzzle = snapshot.customPuzzle;
   }
 
-  // ---- 读：全部走预读快照（题库走代码常量）
-  getPuzzle(id: string): Puzzle | null { return PUZZLE_BY_ID.get(id) ?? null; }
+  // ---- 读：全部走预读快照（题库走代码常量，房间自带的 AI 题目优先）
+  getPuzzle(id: string): Puzzle | null {
+    if (this.customPuzzle && this.customPuzzle.id === id) return this.customPuzzle;
+    return PUZZLE_BY_ID.get(id) ?? null;
+  }
+
+  /** 房主用 AI 现写的题：只写本房间的 rooms.puzzle_json，不污染全局题库 */
+  saveRoomPuzzle(puzzle: Puzzle): void {
+    this.customPuzzle = puzzle;
+  }
 
   listPuzzles(filter?: { ratingMax?: 'L1' | 'L2' | 'L3'; difficultyMin?: number; difficultyMax?: number; tags?: string[] }): Puzzle[] {
     const rank: Record<string, number> = { L1: 1, L2: 2, L3: 3 };
@@ -353,13 +379,15 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     const statements: PendingStatement[] = [{
       sql: `UPDATE rooms SET code=?, status=?, pause_reason=?, host_member_id=?, config_json=?, config_version=?, state_version=?,
               event_seq=?, puzzle_id=?, round_no=?, turn_json=?, revealed_facts_json=?, hint_json=?, vote_json=?, ai_json=?,
-              credit_json=?, transfer_json=?, result_json=?, turn_order_json=?, ready_json=?, turn_index=?, updated_at=?
+              credit_json=?, transfer_json=?, result_json=?, turn_order_json=?, ready_json=?, puzzle_json=?, turn_index=?, updated_at=?
             WHERE id = ? AND state_version = ?`,
       bindings: [room.code, room.status, room.pauseReason, room.hostId, JSON.stringify(room.config), room.configVersion,
         newVersion, room.eventSeq, room.puzzleId, room.roundNo, JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
         JSON.stringify(room.hint), room.vote ? JSON.stringify(room.vote) : null, JSON.stringify(room.ai),
         JSON.stringify(room.credit), JSON.stringify(room.transfer), room.result ? JSON.stringify(room.result) : null,
-        JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []), room.turnIndex, room.updatedAt, room.id, this.expectedVersion],
+        JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []),
+        this.customPuzzle ? JSON.stringify(this.customPuzzle) : null,
+        room.turnIndex, room.updatedAt, room.id, this.expectedVersion],
     }];
 
     // 成员表：先删多余行，再逐行 OR REPLACE（都以新版本为条件）

@@ -8,8 +8,8 @@
  *  4. 定时器只"投递任务"，绝不直接改状态
  */
 import {
-  PLATFORM, PROMPT_VERSION, assertNoLeak, canSubmit, emptyRoom, getMember, hintsExhausted,
-  isLeaky, judgeGuess, pickHintFact, pickNewHost, reduce, toPublicPuzzle, toPublicRoom,
+  PLATFORM, PROMPT_VERSION, assertNoLeak, canSubmit, checkAndNormalizePuzzle, emptyRoom, getMember, hintsExhausted,
+  isLeaky, judgeGuess, pickHintFact, pickNewHost, reduce, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
   transferGate, validateConfigChange,
 } from '@ht/core';
 import type {
@@ -439,8 +439,58 @@ export class RoomRuntime {
 
   // ---------------------------------------------------------------- 开局
   /**
+   * 房主用 AI 现写一道题：调模型创作 → **统一校验** → 存为本房间的自定义题目。
+   * 不通过校验就整题作废（不写库、不开局），并把这题的问题原样回给房主。
+   *
+   * 这道题只属于当前房间（Worker 写 rooms.puzzle_json、Node 写 puzzles 表），
+   * 因此它既能被 `currentPuzzle()` 解析，也不会污染全局题库。
+   */
+  async createAiPuzzle(memberId: string): Promise<Result<{ puzzleId: string; title: string; surface: string; warnings: string[] }>> {
+    if (this.room.hostId !== memberId) return { ok: false, code: 'NOT_HOST' };
+    if (this.room.status === 'playing') return { ok: false, code: 'NOT_ALLOWED' };
+
+    const credential = await this.resolveCredential();
+    if (!credential) return { ok: false, code: 'AI_UNAVAILABLE' };
+
+    const result = await this.deps.host.generatePuzzle!(credential, {
+      ratingMax: this.room.config.ratingMax,
+      difficultyMin: this.room.config.difficultyMin,
+      difficultyMax: this.room.config.difficultyMax,
+      avoidTitles: this.deps.store.listPuzzles().slice(0, 30).map((p) => p.title),
+    });
+    if (!result.ok) {
+      this.deps.logger.warn('ai_puzzle_failed', { room_id: this.room.id, code: result.errorClass });
+      this.deps.store.bumpUsage('host', Date.now(), 0, 0, 1);
+      return { ok: false, code: result.errorClass as ActionReject };
+    }
+
+    const checked = checkAndNormalizePuzzle(result.raw, {
+      idPrefix: 'ai',
+      ratingMax: this.room.config.ratingMax,
+      difficultyMin: this.room.config.difficultyMin,
+      difficultyMax: this.room.config.difficultyMax,
+    });
+    if (!checked.ok) {
+      this.deps.store.audit({ action: 'ai_puzzle_rejected', roomId: this.room.id, actor: memberId, subject: summarizePuzzleIssues(checked.issues) });
+      return { ok: false, code: 'PUZZLE_INVALID', detail: checked.issues };
+    }
+
+    // 防止与已有题目撞 id（理论上哈希很难撞，但撞了会让 getPuzzle 解析到别的题）
+    let puzzle = checked.puzzle;
+    if (this.deps.store.getPuzzle(puzzle.id)) puzzle = { ...puzzle, id: `${puzzle.id}-${Date.now().toString(36).slice(-4)}` };
+
+    this.deps.store.saveRoomPuzzle(puzzle);
+    this.deps.store.bumpUsage('host', Date.now(), 0, 1);
+    this.deps.store.audit({ action: 'ai_puzzle_created', roomId: this.room.id, actor: memberId, subject: puzzle.id });
+    this.deps.logger.info('ai_puzzle_created', { room_id: this.room.id, puzzle_id: puzzle.id, facts: puzzle.facts.length });
+    this.persist();
+    return { ok: true, data: { puzzleId: puzzle.id, title: puzzle.title, surface: puzzle.surface, warnings: checked.warnings } };
+  }
+
+  /**
    * 开局。房主指定 / 投票选汤都从这里走。
    * `force=true` 表示"我知道还有人没准备，照样开"（避免有人去倒水就全队卡住）。
+   * `puzzleId` 允许是**本房间的 AI 题目**（不在筛选出的题库列表里也算数）。
    */
   async startMatch(memberId: string, mode: 'vote' | 'pick', puzzleId?: string, force = false): Promise<Result> {
     if (this.room.hostId !== memberId) return { ok: false, code: 'NOT_HOST' };
@@ -454,7 +504,10 @@ export class RoomRuntime {
     if (list.length === 0) return { ok: false, code: 'NOT_ALLOWED' };
 
     if (mode === 'pick') {
-      const chosen = puzzleId ? list.find((p) => p.id === puzzleId) : list[Math.floor(this.deps.rand() * list.length)];
+      const custom = puzzleId ? this.deps.store.getPuzzle(puzzleId) : null;
+      const chosen = puzzleId
+        ? (list.find((p) => p.id === puzzleId) ?? (custom && custom.id === puzzleId ? custom : undefined))
+        : list[Math.floor(this.deps.rand() * list.length)];
       if (!chosen) return { ok: false, code: 'NOT_ALLOWED' };
       return this.enqueue(() => {
         if (this.room.status !== 'waiting') return { ok: false as const, code: 'NOT_ALLOWED' as ActionReject };

@@ -83,6 +83,8 @@ export type SubmitReject =
 export type ActionReject =
   | SubmitReject
   | 'HINTS_DISABLED'
+  | 'AI_UNAVAILABLE'
+  | 'PUZZLE_INVALID'
   | 'HINT_COOLDOWN'
   | 'HINT_QUOTA_EXHAUSTED'
   | 'HINT_TIER3_EXHAUSTED'

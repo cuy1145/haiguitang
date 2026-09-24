@@ -20,6 +20,8 @@
     "test:core": "node --test --test-name-pattern='.*' tests/core",
     "typecheck": "tsc -p tsconfig.json",
     "seed": "node scripts/seed-puzzles.ts",
+    "audit": "node scripts/audit.ts",
+    "import:puzzles": "node scripts/import-puzzles.ts",
     "verify": "node --test && node scripts/selfcheck.ts"
   },
   "dependencies": {

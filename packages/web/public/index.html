@@ -364,9 +364,13 @@ const S = {
   questions: [],                        // 公共提问记录（来自 questions 表，所有人都能看到）
   log: [],                              // 合并后的公共对话记录（提问 + 系统事件，按时间排序）
   logPinned: true,                      // 用户是否停在记录底部（是则新消息自动滚到底）
-  renderPending: false,                 // 输入期间被推迟的渲染（输入结束后补一次）
+  renderPending: false,                 // 输入/拖拽期间被推迟的渲染（操作结束后补一次）
+  lastFingerprint: '',                  // 上次渲染对应的状态指纹（相同就不再碰 DOM）
   preset: 'standard',                   // 入口页选中的对局预设
   keyProvider: 'deepseek',              // 自备 Key 的提供方预设
+  aiPuzzle: null,                       // AI 创作状态：{pending} | {puzzleId,title,surface,warnings} | {error,issues}
+  lastFailDetail: null,                 // 上一次动作失败时的 detail（供具体功能展示细节）
+  lastFailMessage: '',
   drafts: {},                            // 弹窗输入的临时值：只在本页内存里，重渲染不丢；关闭即清
   serverOffset: 0,                      // 服务端时钟 - 本机时钟（计时用服务端时间为准）
   hint: '',
@@ -480,6 +484,7 @@ const ACTIONS = {
   decline_return: () => ({ type: 'decline_return' }),
   ready: (f) => ({ type: 'ready', ready: f.ready !== false }),
   kick: (f) => ({ type: 'kick', memberId: f.memberId }),
+  create_ai_puzzle: () => ({ type: 'create_ai_puzzle' }),
   reenable_key: (f) => ({ type: 'reenable_key', yes: f.yes === true }),
   revoke_key: () => ({ type: 'revoke_key' }),
   skip_turn: () => ({ type: 'skip_turn' }),
@@ -490,7 +495,9 @@ function startPolling() {
   if (!token()) return;
   stopPolling();
   startTicker();
-  pollTimer = setInterval(() => { void pollOnce(); }, 1800);
+  // 1.2 秒一轮：4 人玩 30 分钟约 6000 次请求，远低于免费额度（10 万/天），
+  // 但别人动作的传播延迟从 ~0.9s 降到 ~0.6s。配合"状态没变就不重渲染"，开销可忽略。
+  pollTimer = setInterval(() => { void pollOnce(); }, 1200);
   hbTimer = setInterval(() => { void sendAction({ type: 'heartbeat', hidden: document.visibilityState !== 'visible' }, { silent: true }); }, 20000);
   void pollOnce();
 }
@@ -523,7 +530,10 @@ async function pollOnce() {
 }
 
 /** 应用服务端返回的 { view, timeline, questions, events, seq } */
-function applyState(data) {
+function applyState(data) { applyViewPayload(data); }
+
+/** 把一份服务端载荷铺进本地状态（轮询与动作响应共用同一条路径） */
+function applyViewPayload(data) {
   if (data.view) {
     S.view = data.view;
     S.screen = 'room';
@@ -547,6 +557,9 @@ function applyState(data) {
   }
   S.log = buildLog(S.questions, S.pendingTimeline);
   if (typeof data.seq === 'number' && data.seq > S.lastSeq) S.lastSeq = data.seq;
+  if (Array.isArray(data.events)) {
+    for (const e of data.events) if (typeof e.seq === 'number' && e.seq > S.lastSeq) S.lastSeq = e.seq;
+  }
   if (data.view && data.view.room && data.view.room.status === 'settled') S.notice = '对局已结束，可以查看复盘';
   render();
 }
@@ -561,7 +574,10 @@ function buildLog(questions, timeline) {
   return [...qs, ...evs].sort((a, b) => (a.at - b.at) || ((a.seq || 0) - (b.seq || 0)));
 }
 
-/** 提交动作；返回服务端响应（含本次事件） */
+/**
+ * 提交动作；**响应里直接带回最新视图**，所以自己的操作零额外往返（以前要再轮询一次）。
+ * 失败时返回 null，并把错误显示出来。
+ */
 async function sendAction(action, opts = {}) {
   if (!token()) { S.error = '会话已失效，请重新加入房间'; render(); return null; }
   try {
@@ -577,16 +593,17 @@ async function sendAction(action, opts = {}) {
         ? '（' + data.detail.errors.map((e) => `${e.path}: ${e.reason}`).join('；') + '）'
         : '';
       S.error = (data.message || `HTTP ${res.status}`) + detail;
+      S.lastFailDetail = data.detail ?? null;      // 供具体功能展示细节（例如坏题检测的逐条原因）
+      S.lastFailMessage = data.message || '';
       render();
       return null;
     }
     S.error = '';
     if (data.data && data.data.text) S.hint = data.data.text;
     if (!opts.silent) S.notice = noticeFor(action);
-    if (Array.isArray(data.events) && data.events.length > 0) {
-      for (const e of data.events) if (typeof e.seq === 'number' && e.seq > S.lastSeq) S.lastSeq = e.seq;
-    }
-    await pollOnce();            // 立即刷新，自己的操作零等待
+    // 响应自带 view/questions/seq → 直接应用，省掉一次往返
+    if (data.view) applyViewPayload(data);
+    else await pollOnce();
     return data;
   } catch (err) {
     S.connected = false;
@@ -717,37 +734,76 @@ function setTitleAlert(on) {
  *    输入结束后（失焦或停手 700ms）再补一次渲染，把期间收到的状态追上。
  *    另外仍显式保住：焦点/光标位置、S.drafts 回填的输入值、对话记录是否贴底。
  * ==========================================================================*/
-function isEditing() {
+/**
+ * 是否"用户正在操作"：输入中 / 鼠标按着拖动 / 有文字选区。
+ *
+ * 轮询每 1.2 秒回一次，期间**绝不动 DOM**：
+ *   · 输入中（含中文输入法组字）→ 输入框被替换会打断组字
+ *   · 鼠标按着拖动（选中文字、拖滚动条）→ 节点被替换会打断拖拽与选区，表现为"闪一下"
+ *   · 有选区 → 重渲染会清掉选区，用户会以为点错了
+ */
+function isBusy() {
+  if (pointerDown) return true;
   const a = document.activeElement;
-  if (!a || !a.tagName) return false;
-  const editable = a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable === true;
-  return editable && $('#app').contains(a);
+  if (a && a.tagName) {
+    const editable = a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable === true;
+    if (editable && $('#app').contains(a)) return true;
+  }
+  try {
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && String(sel).length > 0) return true;
+  } catch { /* 忽略 */ }
+  return false;
 }
+
+let pointerDown = false;
 
 let deferredRenderTimer = null;
 function scheduleDeferredRender() {
   if (deferredRenderTimer) clearTimeout(deferredRenderTimer);
   deferredRenderTimer = setTimeout(() => {
     deferredRenderTimer = null;
-    if (S.renderPending && !isEditing()) render(true);
+    if (S.renderPending && !isBusy()) render(true);
   }, 700);
 }
 
-/** 输入结束（失焦）后补渲染；延迟一点，避免把正要点击的按钮提前替换掉 */
+/** 操作结束（失焦 / 松开鼠标）后补渲染；延迟一点，避免把正要点击的按钮提前替换掉 */
 function flushDeferredRender() {
   setTimeout(() => {
-    if (S.renderPending && !isEditing()) render(true);
+    if (S.renderPending && !isBusy()) render(true);
   }, 250);
+}
+
+/**
+ * 状态指纹：只有它变了才重渲染。
+ *
+ * 这是消除"闪烁"的关键 —— 轮询大多数时候拿到的是**完全一样**的状态，
+ * 以前每次都会把整个 innerHTML 换掉：CSS 动画（呼吸光晕、脉冲）从头播放、
+ * 悬停过渡被打断、拖拽/选区被清掉，看起来就是屏幕在闪。
+ */
+function stateFingerprint() {
+  const t = S.keyTest;
+  return JSON.stringify([
+    S.screen, S.connected, S.notice, S.error, S.hint,
+    S.configModal, S.guessModal, S.keyModal,
+    S.keyMask, t ? [t.pending === true, t.ok === true, t.reasonCode, t.message, t.url] : null,
+    S.recap ? 1 : 0,
+    S.view, S.questions, S.log.length, S.pendingTimeline.length,
+    S.preset, S.keyProvider,
+    S.drafts.ask, S.drafts.guessText, S.drafts.keyBase, S.drafts.keyModel, S.drafts.nick, S.drafts.code,
+    Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).map((k) => [k, S.drafts[k]]),
+  ]);
 }
 
 function render(force = false) {
   const app = $('#app');
-  if (!force && isEditing()) {
-    S.renderPending = true;
-    scheduleDeferredRender();
-    return;
-  }
+  if (!app.firstChild) force = true;                 // 首次渲染必须画
+  if (!force && isBusy()) { S.renderPending = true; scheduleDeferredRender(); return; }
+
+  const fingerprint = stateFingerprint();
+  if (!force && fingerprint === S.lastFingerprint) return;   // 状态没变：一个字节都不动
   S.renderPending = false;
+  S.lastFingerprint = fingerprint;
 
   const active = document.activeElement;
   const keep = active && active.id && app.contains(active) && typeof active.selectionStart === 'number'
@@ -936,9 +992,11 @@ function viewRoom() {
       ${puzzle ? statStrip(room, you) : ''}
       ${engineBar(room, you)}
 
+      ${(you.isHost && room.status === 'waiting') ? aiPuzzleCard(room, you) : ''}
+
       ${(room.status === 'waiting' && !you.isHost) ? `
       <div class="card"><div class="spread"><h3 style="margin:0">选题</h3><span class="pill">等待房主选题…</span></div>
-        <div class="dim">房主会从题库里挑一道题，或发起「投票选汤」让所有人一起选。</div></div>` : ''}
+        <div class="dim">房主可以自己挑一道、让大家投票选，或者让 AI 现写一道新题。</div></div>` : ''}
 
       ${(you.isHost && v.candidates && v.candidates.length > 0 && room.status === 'waiting') ? `
       <div class="card"><div class="spread"><h3 style="margin:0">选题（${v.candidates.length} 道可选）</h3>
@@ -1070,8 +1128,47 @@ function startBlockedBy(room) {
   return Math.max(0, (room.readyEligible || 0) - (room.readyCount || 0));
 }
 
-/** 房主 Key 掩码（没有则返回 null） */
-function hostKeyMask(room) {
+/**
+ * 「AI 创作」卡片（仅房主、且只有开局前）。
+ *
+ * 流程：点「生成新题」→ 服务端让模型写整道题（汤面/汤底/事实点表）→
+ * **统一坏题检测**（关键事实点是否泄露在汤面里、结构、长度、违禁词…）→
+ * 通过后存为本房间的自定义题目 → 房主看着预览决定「就用这道开局」或「重新生成」。
+ * 不通过就把具体问题列给房主看（不会静默失败）。
+ */
+function aiPuzzleCard(room, you) {
+  const st = S.aiPuzzle;
+  const canUse = Boolean(st && st.puzzleId) && room.status === 'waiting';
+  const model = (S.drafts.keyModel ?? defaultModel());
+  return `
+  <div class="card">
+    <div class="spread" style="margin-bottom:10px">
+      <h3 style="margin:0">AI 创作 <span class="dim">房主专用</span></h3>
+      <span class="pill accent">${esc(model)}</span>
+    </div>
+    <div class="dim" style="margin-bottom:10px">
+      让模型按当前题目分级（${esc(room.config.ratingMax)}）与难度区间（${room.config.difficultyMin}–${room.config.difficultyMax}）现写一道新题。
+      生成后会先过一遍坏题检测：汤面不得泄露关键事实点、事实点结构要能判定、不得含违禁内容 —— 不通过会直接告诉你哪里不合格。
+      生成的题只属于本房间，不会进公共题库。
+    </div>
+    <div class="row">
+      <button class="primary" id="btnAiPuzzle" ${st && st.pending ? 'disabled' : ''}>${st && st.pending ? '模型正在出题…' : (st && st.puzzleId ? '重新生成一道' : '生成新题')}</button>
+      ${canUse ? `<button id="btnAiStart">就用这道开局</button>` : ''}
+      ${st && st.error ? `<span class="pill l3">${esc(st.error)}</span>` : ''}
+    </div>
+    ${st && st.issues && st.issues.length ? `
+      <div class="err" style="margin-top:12px">这题没通过坏题检测（已作废，不会入库）：<br>
+        ${st.issues.slice(0, 6).map((i) => `· ${esc(i.path)}：${esc(i.reason)}`).join('<br>')}</div>` : ''}
+    ${st && st.puzzleId ? `
+      <div class="puzzle" style="margin-top:12px">
+        <div class="spread"><div class="ptitle">《${esc(st.title)}》</div><span class="pill live">已通过检测</span></div>
+        <div class="surface">${esc(st.surface)}</div>
+        ${st.warnings && st.warnings.length ? `<div class="dim" style="margin-top:8px">提示：${st.warnings.map((w) => esc(w)).join('；')}</div>` : ''}
+      </div>` : ''}
+  </div>`;
+}
+
+/** 房主 Key 掩码（没有则返回 null） */function hostKeyMask(room) {
   const h = room.members.find((m) => m.isHost);
   return h && h.keyMask ? h.keyMask : null;
 }
@@ -1524,6 +1621,31 @@ document.addEventListener('click', async (e) => {
     if (reenable) { S.error = ''; request({ t: 'reenable_key', yes: reenable === 'yes' }); return; }
     if (pickPuzzle) { S.error = ''; request({ t: 'start', mode: 'pick', puzzleId: pickPuzzle }); return; }
     switch (id) {
+      case 'btnAiPuzzle': {
+        S.aiPuzzle = { pending: true };
+        render();
+        const res = await sendAction({ type: 'create_ai_puzzle' }, { silent: true });
+        if (res && res.data && res.data.puzzleId) {
+          S.aiPuzzle = { ...res.data };
+          S.notice = `AI 出了一道《${res.data.title}》，已通过坏题检测`;
+        } else if (res) {
+          S.aiPuzzle = null;
+        } else {
+          // sendAction 已把错误放进 S.error；这里把"坏题检测逐条原因"也带上
+          const issues = Array.isArray(S.lastFailDetail) ? S.lastFailDetail : (S.lastFailDetail && S.lastFailDetail.issues) || [];
+          S.aiPuzzle = { error: S.lastFailMessage || S.error || '生成失败', issues };
+        }
+        render();
+        break;
+      }
+      case 'btnAiStart': {
+        const st = S.aiPuzzle;
+        if (!st || !st.puzzleId) break;
+        const waiting = startBlockedBy(room);
+        if (waiting > 0 && !confirm(`还有 ${waiting} 人没准备，仍然开始？`)) break;
+        request({ t: 'start', mode: 'pick', puzzleId: st.puzzleId, ...(waiting > 0 ? { force: true } : {}) });
+        break;
+      }
       case 'btnReady': {
         const me = room ? room.members.find((m) => m.id === (S.view.you ? S.view.you.memberId : '')) : null;
         const next = !(me && me.ready);
@@ -1714,6 +1836,14 @@ document.addEventListener('focusout', (e) => {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) flushDeferredRender();
 });
+
+// 鼠标按着（选中文字 / 拖滚动条 / 拖拽）期间冻结重渲染，松手后再补一次 —— 消除拖动时的闪烁
+document.addEventListener('mousedown', () => { pointerDown = true; }, true);
+document.addEventListener('mouseup', () => { pointerDown = false; flushDeferredRender(); }, true);
+document.addEventListener('dragend', () => { pointerDown = false; flushDeferredRender(); }, true);
+document.addEventListener('mouseleave', () => { pointerDown = false; }, true);
+// 选区变化也算"用户在操作"（双击选词、Shift+方向键选字）
+document.addEventListener('selectionchange', () => { if (isBusy()) S.renderPending = true; });
 
 // 提供方下拉：选了就把 Base URL / 模型名填成预设值（直接改 DOM，不整页重渲染，
 // 否则正在编辑的 Key 输入框会被替换掉）

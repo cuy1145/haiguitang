@@ -221,32 +221,55 @@ async function withRoom(
 async function handleAction(request: Request, env: Env, roomId: string, memberId: string): Promise<Response> {
   const body = await readJson(request);
   const type = String(body.type ?? '');
+  // withQuestions：动作响应里要带上"公共记录"，否则刚提交的问题要等下一次轮询才出现
   return withRoom(env, roomId, async (runtime, store) => {
     const now = Date.now();
+    /**
+     * 统一的成功/失败响应：**把最新视图一并带回**。
+     * 客户端拿到的响应就能直接渲染 → 自己的操作零额外往返（原先要多发一次 ?since= 轮询）。
+     */
+    const viewNow = () => viewFor(runtime, memberId);
+    const okWithView = (data?: unknown) => json({
+      ok: true,
+      ...(data ? { data } : {}),
+      events: store.emittedEvents,
+      notice: '',
+      view: viewNow(),
+      seq: runtime.room.eventSeq,
+      stateVersion: runtime.room.stateVersion,
+      questions: publicQuestionLog(runtime, store.listQuestions(roomId)),
+    });
+    const failWithView = (code: string, detail?: unknown) => json({
+      ok: false, error: code, message: messageOf(code),
+      ...(detail ? { detail } : {}), events: store.emittedEvents,
+      view: viewNow(), seq: runtime.room.eventSeq,
+      questions: publicQuestionLog(runtime, store.listQuestions(roomId)),
+    }, 400);
+
     switch (type) {
       case 'heartbeat':
       case 'activity':
         await runtime.reportSignal(memberId, type === 'activity' ? 'activity' : 'heartbeat', body.hidden === true);
-        return ok(store);
+        return okWithView();
       case 'submit': {
         const result = await runtime.submit(memberId, String(body.text ?? ''), String(body.clientSubmitId ?? newId('sub')), Number(body.turnSeq ?? -1));
-        return result.ok ? ok(store) : fail(result.code, store);
+        return result.ok ? okWithView() : failWithView(result.code);
       }
       case 'hint': {
         const result = await runtime.requestHint(memberId, Number(body.tier ?? 1) as 1 | 2 | 3);
-        return result.ok ? ok(store, result.data) : fail(result.code, store);
+        return result.ok ? okWithView(result.data) : failWithView(result.code);
       }
       case 'guess': {
         const result = await runtime.submitGuess(memberId, String(body.text ?? ''));
-        return result.ok ? ok(store, result.data) : fail(result.code, store);
+        return result.ok ? okWithView(result.data) : failWithView(result.code);
       }
       case 'vote': {
         const result = await runtime.castVote(memberId, String(body.choice ?? 'abstain'));
-        return result.ok ? ok(store) : fail(result.code, store);
+        return result.ok ? okWithView() : failWithView(result.code);
       }
       case 'config': {
         const result = await runtime.updateConfig(memberId, (body.patch ?? {}) as Partial<GameConfig>, Number(body.expectedVersion ?? -1));
-        return result.ok ? ok(store) : fail(result.code, store, result.detail);
+        return result.ok ? okWithView() : failWithView(result.code, result.detail);
       }
       case 'start': {
         const result = await runtime.startMatch(
@@ -255,26 +278,30 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
           typeof body.puzzleId === 'string' ? body.puzzleId : undefined,
           body.force === true,
         );
-        return result.ok ? ok(store) : fail(result.code, store);
+        return result.ok ? okWithView() : failWithView(result.code);
+      }
+      case 'create_ai_puzzle': {
+        const r = await runtime.createAiPuzzle(memberId);
+        return r.ok ? okWithView(r.data) : failWithView(r.code, r.detail);
       }
       case 'ready': {
         const r = await runtime.setReady(memberId, body.ready !== false);
-        return r.ok ? ok(store, r.data) : fail(r.code, store);
+        return r.ok ? okWithView(r.data) : failWithView(r.code);
       }
       case 'kick': {
         const r = await runtime.kickMember(memberId, String(body.memberId ?? ''));
-        return r.ok ? ok(store, r.data) : fail(r.code, store);
+        return r.ok ? okWithView(r.data) : failWithView(r.code);
       }
-      case 'skip_turn': { const r = await runtime.skipTurn(memberId); return r.ok ? ok(store) : fail(r.code, store); }
-      case 'end_match': { const r = await runtime.endMatch(memberId); return r.ok ? ok(store) : fail(r.code, store); }
-      case 'resume_transfer': { const r = await runtime.resumeTransfer(memberId); return r.ok ? ok(store) : fail(r.code, store); }
-      case 'return_host': { const r = await runtime.returnHost(memberId); return r.ok ? ok(store) : fail(r.code, store); }
-      case 'decline_return': { const r = await runtime.declineReturn(memberId); return r.ok ? ok(store) : fail(r.code, store); }
+      case 'skip_turn': { const r = await runtime.skipTurn(memberId); return r.ok ? okWithView() : failWithView(r.code); }
+      case 'end_match': { const r = await runtime.endMatch(memberId); return r.ok ? okWithView() : failWithView(r.code); }
+      case 'resume_transfer': { const r = await runtime.resumeTransfer(memberId); return r.ok ? okWithView() : failWithView(r.code); }
+      case 'return_host': { const r = await runtime.returnHost(memberId); return r.ok ? okWithView() : failWithView(r.code); }
+      case 'decline_return': { const r = await runtime.declineReturn(memberId); return r.ok ? okWithView() : failWithView(r.code); }
       case 'reenable_key': {
         const r = await runtime.reenableKey(memberId, body.yes === true);
-        return r.ok ? ok(store, r.data) : fail(r.code, store);
+        return r.ok ? okWithView(r.data) : failWithView(r.code);
       }
-      case 'revoke_key': { const r = runtime.revokeKey(memberId); return r.ok ? ok(store) : fail(r.code, store); }
+      case 'revoke_key': { const r = runtime.revokeKey(memberId); return r.ok ? okWithView() : failWithView(r.code); }
       case 'leave': {
         await runtime.removeMember(memberId);
         // 最后一名成员离开 → 视为过期房间，随请求直接清理（含密钥密文），不留残留数据
@@ -285,13 +312,13 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
           logger.info('room_purged_on_leave', { room_id: roomId });
           return json({ ok: true, purged: true, events: [] });
         }
-        return ok(store);
+        return okWithView();
       }
       default:
         return json({ error: 'UNKNOWN_ACTION', type, message: `未知动作：${type}` }, 400);
     }
     void now;
-  });
+  }, { withQuestions: true });
 }
 
 /**

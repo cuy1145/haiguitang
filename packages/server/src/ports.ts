@@ -36,6 +36,7 @@ export type RoomStorePort = Pick<
   | 'revokeMemberSessions'
   | 'saveGrant'
   | 'saveRoom'
+  | 'saveRoomPuzzle'
   | 'saveVote'
   | 'setMemberKeyState'
   | 'startMatch'
@@ -44,9 +45,11 @@ export type RoomStorePort = Pick<
 /** 日志端口：Node 写 JSONL 文件，CF 写 console（Workers Logs / Tail）。 */
 export type LoggerPort = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>;
 
-/** AI 主持人端口：判定 + 连接测试；`realModelEnabled` 决定是走模型还是内置模拟主持人。 */
+/** AI 主持人端口：判定 + 连接测试 + 出题；`realModelEnabled` 决定是走模型还是内置模拟主持人。 */
 export type HostPort = Pick<HostService, 'judge' | 'connectionTest' | 'ruleFallback'> & {
   readonly realModelEnabled: boolean;
+  /** 出题（AI 创作）。可选：没有真实模型时调用方会先挡掉 */
+  generatePuzzle?: HostService['generatePuzzle'];
 };
 
 /** 判定缓存端口（可选的第二落点：CF 上每房一个 DO，缓存天然按房间隔离）。 */

@@ -282,6 +282,15 @@ export class Store {
     `).run(puzzle.id, JSON.stringify(meta), JSON.stringify(truth), JSON.stringify(facts), puzzle.reviewStatus, now);
   }
 
+  /**
+   * 保存一道房间级的自定义题目（房主的 AI 创作）。
+   * Node 版有独立的 puzzles 表，直接 upsert 进去即可（与静态题库同源、同接口）。
+   * Worker 版没有 puzzles 表（题库是编译进包的常量），它把题目写进 rooms.puzzle_json。
+   */
+  saveRoomPuzzle(puzzle: Puzzle): void {
+    this.upsertPuzzle(puzzle);
+  }
+
   getPuzzle(id: string): Puzzle | null {
     const row = this.db.prepare('SELECT * FROM puzzles WHERE id = ?').get(id) as Record<string, string> | undefined;
     if (!row) return null;
