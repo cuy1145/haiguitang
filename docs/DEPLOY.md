@@ -425,6 +425,49 @@ git reset --hard <上一个好提交> && git push --force   # 谨慎使用
 
 ---
 
+**在 Cloudflare 面板里改密钥（点法）**：
+
+1. 打开 <https://dash.cloudflare.com/> 并登录（用当初建 Worker 的那个账号）
+2. 左侧栏找 **Compute (Workers)** → 里面的 **Workers & Pages**
+   （旧版界面直接叫 **Workers & Pages**，在左侧栏中部）
+3. 点进 Worker 名字：**`haiguitang`**
+4. 顶部标签切到 **Settings**（设置）
+5. 在 Settings 页往下找 **Variables and Secrets**（旧版叫 *Environment Variables* / *Variables*）
+6. 点 **+ Add** / **Add variable**：
+   - **Type** 选 **Secret**（密钥，保存后不可读）
+   - **Name** 填 `AI_KEY`（或 `AI_BASE_URL` / `AI_MODEL` / `MASTER_KEY`）
+   - **Value** 粘贴值
+7. 点 **Save** / **Deploy**（面板会生成一个新版本；提示 Deploy 就确认一次，立即生效）
+
+> 想「改」已存在的密钥：密钥**只能覆盖、不能读回**（列表里只显示名字）。
+> 再点一次 **+ Add**，填**同名**并保存，就会覆盖旧值。
+
+**更省事的做法（推荐）**：直接在本机终端执行，不用在面板里找菜单：
+
+```powershell
+npx wrangler secret put AI_KEY          # 回车后粘贴值（不回显、不进命令历史）
+npx wrangler secret put AI_BASE_URL     # https://api.deepseek.com
+npx wrangler secret put AI_MODEL        # deepseek-flash
+npx wrangler secret list                # 只列名字，看不到值
+```
+
+**三个注意事项**：
+
+- ⚠️ **别改 `MASTER_KEY`**：它用来加密房主自备的 API Key，一换，房里已存的 Key 全部解不开（房主得重新提交）。
+- ✅ **`git push` 重新部署不会删掉密钥**（加密密钥是独立的），所以面板/CLI 配过就一直有效。
+- ⚠️ 面板里加的**明文变量（Type=Text）**会被 `wrangler.toml` 的 `[vars]` 覆盖 ——
+  非敏感的开关请写进 `wrangler.toml`，只有密钥才放面板/CLI。
+
+**改完怎么确认生效**：
+
+```powershell
+curl https://haiguitang.luowanx70636.workers.dev/api/config   # realModelEnabled 应为 true
+pnpm cf:tail        # 实时日志里看 judge_result 的 credit_source
+pnpm audit          # 历史记录：usage_counters 里能看到 site/host 用量
+```
+
+---
+
 ## 6. 我需要你提供的信息（都不含密钥）
 
 1. GitHub 仓库地址（形如 `https://github.com/你/haiguitang`）——用于我帮你核对 remote 与 Actions 配置
