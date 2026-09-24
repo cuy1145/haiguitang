@@ -19,13 +19,33 @@ export interface PuzzleCheckIssue { path: string; reason: string }
 const BANNED = ['习近平', '共产党', '六四', '台独', '法轮功', '儿童色情', '强奸', '幼女', '自杀教程', '制毒', '炸弹制作'];
 
 /**
- * 「体裁跑偏」关键词：不是违禁，但会让题目变成另一种东西，或观感很差。
- *   超自然/灵异：谜底是鬼、恶魔、诅咒 → 玩家没法用"是/否"推出，客观上不可解；
- *   猎奇血腥：眼球、掏空、内脏… → 朋友局里容易引起不适（我们的分级上限也压不住）。
- * 这两类在导入时必须拦掉（AI 创作的提示词里已经明确禁止，这里是运行时兜底）。
+ * 「体裁跑偏」与「内容不适」关键词：不是违禁，但会让题目变成另一种东西，或观感很差。
+ * 分组是为了给出**可读的原因**（也方便日后按房间分级开关）。
+ *
+ * 实测依据：拿 HuggingFace 上 2 万道 AI 生成的题库跑一遍，这几类是主要污染源。
  */
-const SUPERNATURAL = ['恶魔', '鬼魂', '恶灵', '诅咒', '附体', '僵尸', '吸血鬼', '巫术', '灵魂被', '超能力', '外星人', '穿越到', '转世', '投胎'];
-const GORE = ['眼球', '挖出', '掏空', '内脏', '肠子', '脑浆', '血浆', '肢解', '碎尸', '尸体被', '割下', '啃食'];
+const CONTENT_RULES: Array<{ label: string; reason: string; words: string[] }> = [
+  {
+    label: '超自然',
+    reason: '谜底靠超自然/灵异 —— 玩家无法用"是/否"推出来',
+    words: ['恶魔', '鬼魂', '恶灵', '诅咒', '附体', '僵尸', '吸血鬼', '巫术', '灵魂被', '超能力', '外星人', '穿越到', '转世', '投胎', '通灵', '驱魔'],
+  },
+  {
+    label: '性暴力/虐待',
+    reason: '涉及性暴力、虐待或囚禁 —— 朋友局里非常不合适',
+    words: ['强奸', '性侵', '猥亵', '恋童', '幼女', '轮奸', '囚禁', '绑架', '拐卖', '虐待', '家暴', '虐杀', '折磨致死', '剥皮', '割喉', '碎尸', '肢解', '分尸'],
+  },
+  {
+    label: '猎奇血腥',
+    reason: '猎奇血腥描写 —— 不适合朋友局',
+    words: ['眼球', '挖出', '掏空', '内脏', '肠子', '脑浆', '血浆', '啃食', '尸体被', '割下'],
+  },
+  {
+    label: '科幻/灾难',
+    reason: '谜底是科幻或超自然灾难 —— 破坏了"封闭世界"（真相只能用汤面里出现过的东西解释）',
+    words: ['激光分解', '外星生物', '平行宇宙', '时空穿越', '机器人统治', '人工智能觉醒', '丧尸', '基因变异', '克隆人', '核爆', '世界末日'],
+  },
+];
 
 const LIMITS = {
   title: [2, 24] as const,
@@ -152,11 +172,9 @@ export function checkAndNormalizePuzzle(
   for (const word of BANNED) {
     if (allText.includes(word)) fail('$', `命中违禁/高风险关键词：${word}`);
   }
-  for (const word of SUPERNATURAL) {
-    if (allText.includes(word)) fail('$', `谜底靠超自然/灵异（"${word}"）——这类题目玩家无法用是/否推出来`);
-  }
-  for (const word of GORE) {
-    if (allText.includes(word)) fail('$', `猎奇血腥描写（"${word}"）——不适合朋友局`);
+  for (const rule of CONTENT_RULES) {
+    const hit = rule.words.find((w) => allText.includes(w));
+    if (hit) fail('$', `${rule.reason}（"${hit}"）`);
   }
 
   if (issues.length > 0) return { ok: false, issues };
@@ -242,10 +260,14 @@ export function screenPuzzleText(input: { surface: unknown; truth: unknown }): {
   if (len(truth) < LIMITS.truth[0]) issues.push({ path: 'truth', reason: `清洗后汤底只剩 ${len(truth)} 字（太短）` });
   if (len(truth) > LIMITS.truth[1]) issues.push({ path: 'truth', reason: `清洗后汤底 ${len(truth)} 字，超过 ${LIMITS.truth[1]} 字` });
   const all = `${surface}\n${truth}`;
-  for (const w of BANNED) if (all.includes(w)) issues.push({ path: '$', reason: `命中违禁关键词：${w}` });
-  for (const w of SUPERNATURAL) if (all.includes(w)) issues.push({ path: '$', reason: `谜底靠超自然/灵异（"${w}"）` });
-  for (const w of GORE) if (all.includes(w)) issues.push({ path: '$', reason: `猎奇血腥（"${w}"）` });
+  for (const w of BANNED) if (all.includes(w)) issues.push({ path: '$', reason: `命中违禁关键词` });
+  for (const rule of CONTENT_RULES) {
+    if (rule.words.some((w) => all.includes(w))) issues.push({ path: '$', reason: rule.reason });
+  }
   return { ok: issues.length === 0, issues, surface, truth };
 }
+
+/** 内容风险分组名（供体检报告归类统计；与 CONTENT_RULES 一一对应） */
+export const CONTENT_RULE_LABELS = CONTENT_RULES.map((r) => r.label);
 
 export type { AnswerEnum };
