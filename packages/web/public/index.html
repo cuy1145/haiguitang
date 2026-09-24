@@ -777,18 +777,22 @@ function flushDeferredRender() {
 /**
  * 状态指纹：只有它变了才重渲染。
  *
- * 这是消除"闪烁"的关键 —— 轮询大多数时候拿到的是**完全一样**的状态，
- * 以前每次都会把整个 innerHTML 换掉：CSS 动画（呼吸光晕、脉冲）从头播放、
- * 悬停过渡被打断、拖拽/选区被清掉，看起来就是屏幕在闪。
+ * ⚠️ 这里**必须剔除每轮都在变的字段**（`room.serverTime`）：时间戳每 1.2 秒变一次，
+ * 一旦进指纹，指纹就永远不同，"状态没变就不动 DOM"直接失效 ——
+ * 表现就是整个页面（尤其是弹窗）每 1.2 秒重建一次、入场动画反复重播 = **闪回**。
+ * 倒计时不走这里：它由 tickUi() 直接改 `data-deadline` 元素的文本，不需要重渲染。
  */
 function stateFingerprint() {
   const t = S.keyTest;
+  const view = S.view
+    ? { ...S.view, room: S.view.room ? { ...S.view.room, serverTime: 0 } : S.view.room }
+    : null;
   return JSON.stringify([
     S.screen, S.connected, S.notice, S.error, S.hint,
     S.configModal, S.guessModal, S.keyModal,
     S.keyMask, t ? [t.pending === true, t.ok === true, t.reasonCode, t.message, t.url] : null,
     S.recap ? 1 : 0,
-    S.view, S.questions, S.log.length, S.pendingTimeline.length,
+    view, S.questions, S.log.length, S.pendingTimeline.length,
     S.preset, S.keyProvider,
     S.drafts.ask, S.drafts.guessText, S.drafts.keyBase, S.drafts.keyModel, S.drafts.nick, S.drafts.code,
     Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).map((k) => [k, S.drafts[k]]),
@@ -811,6 +815,9 @@ function render(force = false) {
     : null;
   const oldLog = $('#log');
   const pinned = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 48) : S.logPinned;
+  // 弹窗内部可能被滚动过（Key 弹窗、参数弹窗内容多），重渲染后要还原，否则会"跳回顶部"
+  const oldModal = document.querySelector('.modal');
+  const modalScroll = oldModal ? oldModal.scrollTop : 0;
 
   if (!S.view || S.screen === 'entry') { app.innerHTML = viewEntry(); bindEntry(); }
   else app.innerHTML = viewRoom();
@@ -824,6 +831,10 @@ function render(force = false) {
   }
   const log = $('#log');
   if (log) { log.scrollTop = pinned ? log.scrollHeight : Math.min(log.scrollTop, log.scrollHeight); S.logPinned = pinned; }
+  if (modalScroll > 0) {
+    const modal = document.querySelector('.modal');
+    if (modal) modal.scrollTop = modalScroll;
+  }
 
   // 顶部连接状态（不在房间时不显示连接问题）
   const chip = document.getElementById('connChip');
