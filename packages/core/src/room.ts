@@ -68,6 +68,7 @@ export function emptyRoom(id: string, code: string, config: CoreRoom['config'], 
     turnOrder: [],
     turnIndex: 0,
     roundNo: 1,
+    matchNo: 0,
     turn: {
       seq: 0, memberId: null, phase: 'IDLE',
       startedAt: 0, deadlineAt: 0, graceDeadlineAt: 0, outcome: null, lateSubmit: false,

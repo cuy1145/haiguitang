@@ -251,6 +251,12 @@ export interface CoreRoom {
   turnOrder: string[];
   turnIndex: number;
   roundNo: number;
+  /**
+   * 本房间已经**开始过**的局数（0 = 还没开过局）。
+   * 与 `roundNo`（当前这局的第几轮）不同：下一局开局时 +1，且不会因为回到选题而清零。
+   * 讨论区用它画「第 N 局开始」分隔线（设计稿 §12.8）。
+   */
+  matchNo: number;
   turn: CoreTurn;
   config: GameConfig;
   configVersion: number;

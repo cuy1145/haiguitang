@@ -233,15 +233,15 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
 
   /**
    * 全员讨论区：追加一条消息（与房间写入同事务）。
-   * `chat_seq` 由 SQL 里的 MAX+1 原子计算，并用 (room_id, client_message_id) 唯一约束保证幂等
+   * `chat_seq` 由 SQL 里的 MAX+1 原子计算，并用 (room_id, member_id, client_message_id) 唯一约束保证幂等
    * —— 网络重试不会写出重复消息。守卫仍挂在房间 state_version 上：房间被清理就不写了。
    */
   appendChat(msg: ChatRecord): void {
     this.pending.push({
-      sql: `INSERT OR IGNORE INTO room_chat(id, room_id, chat_seq, member_id, text, client_message_id, created_at)
-            SELECT ?, ?, (SELECT COALESCE(MAX(chat_seq), 0) + 1 FROM room_chat WHERE room_id = ?), ?, ?, ?, ?
+      sql: `INSERT OR IGNORE INTO room_chat(id, room_id, chat_seq, member_id, text, client_message_id, match_no, created_at)
+            SELECT ?, ?, (SELECT COALESCE(MAX(chat_seq), 0) + 1 FROM room_chat WHERE room_id = ?), ?, ?, ?, ?, ?
             WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [msg.id, msg.roomId, msg.roomId, msg.memberId, msg.text, msg.clientMessageId, msg.createdAt, this.roomId, VERSION_PLACEHOLDER],
+      bindings: [msg.id, msg.roomId, msg.roomId, msg.memberId, msg.text, msg.clientMessageId, msg.matchNo, msg.createdAt, this.roomId, VERSION_PLACEHOLDER],
     });
   }
 
@@ -405,11 +405,11 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     const keyStates = keyStatesOverride ?? this.savedKeyStates;
     const statements: PendingStatement[] = [{
       sql: `UPDATE rooms SET code=?, status=?, pause_reason=?, host_member_id=?, config_json=?, config_version=?, state_version=?,
-              event_seq=?, puzzle_id=?, round_no=?, turn_json=?, revealed_facts_json=?, hint_json=?, vote_json=?, ai_json=?,
+              event_seq=?, puzzle_id=?, round_no=?, match_no=?, turn_json=?, revealed_facts_json=?, hint_json=?, vote_json=?, ai_json=?,
               credit_json=?, transfer_json=?, result_json=?, turn_order_json=?, ready_json=?, puzzle_json=?, guess_cooldown_until=?, turn_index=?, updated_at=?
             WHERE id = ? AND state_version = ?`,
       bindings: [room.code, room.status, room.pauseReason, room.hostId, JSON.stringify(room.config), room.configVersion,
-        newVersion, room.eventSeq, room.puzzleId, room.roundNo, JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
+        newVersion, room.eventSeq, room.puzzleId, room.roundNo, room.matchNo ?? 0, JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
         JSON.stringify(room.hint), room.vote ? JSON.stringify(room.vote) : null, JSON.stringify(room.ai),
         JSON.stringify(room.credit), JSON.stringify(room.transfer), room.result ? JSON.stringify(room.result) : null,
         JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []),
@@ -538,7 +538,7 @@ function rowToRoom(row: Row): CoreRoom {
     pauseReason: (row.pause_reason as string | null) ?? null, hostId: (row.host_member_id as string | null) ?? null,
     members: [], turnOrder: JSON.parse(String(row.turn_order_json ?? '[]')), ready: JSON.parse(String(row.ready_json ?? '[]')), turnIndex: Number(row.turn_index ?? 0),
     guessCooldownUntil: Number(row.guess_cooldown_until ?? 0),
-    roundNo: Number(row.round_no ?? 1), turn: JSON.parse(String(row.turn_json)),
+    roundNo: Number(row.round_no ?? 1), matchNo: Number(row.match_no ?? 0), turn: JSON.parse(String(row.turn_json)),
     config: JSON.parse(String(row.config_json)) as GameConfig, configVersion: Number(row.config_version ?? 1),
     stateVersion: Number(row.state_version ?? 0), eventSeq: Number(row.event_seq ?? 0),
     puzzleId: (row.puzzle_id as string | null) ?? null, revealedFacts: JSON.parse(String(row.revealed_facts_json ?? '[]')),
@@ -555,12 +555,12 @@ function rowToRoom(row: Row): CoreRoom {
  */
 export async function fetchChat(db: D1Database, roomId: string, sinceSeq = 0, limit = 200): Promise<ChatRecord[]> {
   const res = await db.prepare(
-    'SELECT id, room_id, chat_seq, member_id, text, client_message_id, created_at FROM room_chat WHERE room_id = ? AND chat_seq > ? ORDER BY chat_seq LIMIT ?',
+    'SELECT id, room_id, chat_seq, member_id, text, client_message_id, match_no, created_at FROM room_chat WHERE room_id = ? AND chat_seq > ? ORDER BY chat_seq LIMIT ?',
   ).bind(roomId, sinceSeq, limit).all<Row>();
   return (res.results ?? []).map((r) => ({
     id: String(r.id), roomId: String(r.room_id), chatSeq: Number(r.chat_seq),
     memberId: String(r.member_id), text: String(r.text),
-    clientMessageId: String(r.client_message_id), createdAt: Number(r.created_at),
+    clientMessageId: String(r.client_message_id), matchNo: Number(r.match_no ?? 0), createdAt: Number(r.created_at),
   }));
 }
 

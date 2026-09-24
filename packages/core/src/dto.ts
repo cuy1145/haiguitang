@@ -82,6 +82,8 @@ export interface PublicRoom {
   eventSeq: number;
   serverTime: number;
   roundNo: number;
+  /** 本房间已经开始的局数（0 = 还没开过局）：讨论区分隔线用它（§12.8） */
+  matchNo: number;
   turn: PublicTurn;
   members: PublicMember[];
   puzzle: PublicPuzzle | null;
@@ -135,11 +137,16 @@ export interface PublicChatMessage {
   text: string;
   /** 发送者的客户端消息 ID：前端据此去重（网络重试/乐观显示） */
   clientMessageId: string;
+  /**
+   * 发这条消息时房间已经开始的局数（0 = 还没开过局）。
+   * 前端据此在局与局之间插一条「第 N 局开始」分隔线（设计稿 §12.8）。
+   */
+  matchNo: number;
   createdAt: number;
 }
 
 export function toPublicChat(
-  m: { id: string; chatSeq: number; memberId: string; text: string; clientMessageId: string; createdAt: number },
+  m: { id: string; chatSeq: number; memberId: string; text: string; clientMessageId: string; matchNo?: number; createdAt: number },
   memberNameOf: (memberId: string) => string,
 ): PublicChatMessage {
   return {
@@ -149,6 +156,7 @@ export function toPublicChat(
     memberName: memberNameOf(m.memberId),
     text: m.text,
     clientMessageId: m.clientMessageId,
+    matchNo: m.matchNo ?? 0,
     createdAt: m.createdAt,
   };
 }
@@ -259,6 +267,7 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
     eventSeq: room.eventSeq,
     serverTime: deps.serverTime,
     roundNo: room.roundNo,
+    matchNo: room.matchNo,
     turn: {
       seq: room.turn.seq,
       memberId: room.turn.memberId,

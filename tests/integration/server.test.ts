@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { boot, type BootedApp } from '../../packages/server/src/index.ts';
-import { PLATFORM } from '../../packages/core/src/index.ts';
+import { PLATFORM, toPublicChat } from '../../packages/core/src/index.ts';
 
 let booted: BootedApp;
 let dataDir: string;
@@ -706,6 +706,50 @@ test('I-31: 全员讨论区：谁都能发、不进判定、限长限频幂等�
   assert.ok(all.every((m) => typeof m.text === 'string' && m.text.length <= PLATFORM.chatMaxLen), '长度都在上限内');
 
   host.close(); g2.close(); specClient.close();
+});
+
+test('I-32: 讨论区跨局分隔线：每条消息带"发它时的局号"（设计稿 §12.8）', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const g2 = await Client.open(booted.url, p2.token, '阿伟');
+
+  // ① 开局前：局号 0（等待/选题阶段，前端不打分隔线）
+  const pre = await host.request({ t: 'chat', text: '开局前先说一句', clientMessageId: 'sep-pre' });
+  const preMsg = (pre as unknown as { data?: { message?: { matchNo?: number } } }).data?.message;
+  assert.equal(preMsg?.matchNo, 0, '还没开过局 → 局号 0');
+  assert.equal(roomState(room.roomId).matchNo, 0, '房间局号从 0 开始');
+
+  // ② 第一局：局号 1
+  await startMatch(host, room.roomId);
+  assert.equal(roomState(room.roomId).matchNo, 1, '开局一次 → 局号 1');
+  await g2.request({ t: 'chat', text: '第一局的讨论', clientMessageId: 'sep-m1' });
+  await settle();
+  let rows = booted.store.listChat(room.roomId, 0);
+  assert.equal(rows.find((m) => m.clientMessageId === 'sep-m1')?.matchNo, 1, '第一局的消息记局号 1');
+
+  // ③ 回到选题再开第二局：局号 2（且不会因为"回到选题"清零 —— roundNo 会清，局号不能清）
+  const ended = await host.request({ t: 'end_match' });
+  assert.equal(ended.t, 'ack', `结束对局失败：${JSON.stringify(ended)}`);
+  await settle();
+  const reopened = await host.request({ t: 'next_round' });
+  assert.equal(reopened.t, 'ack', `回到选题失败：${JSON.stringify(reopened)}`);
+  await settle();
+  assert.equal(roomState(room.roomId).matchNo, 1, '回到选题时局号保持不变（只是没在打）');
+  await startMatch(host, room.roomId);
+  assert.equal(roomState(room.roomId).matchNo, 2, '第二局 → 局号 2');
+  await g2.request({ t: 'chat', text: '第二局的讨论', clientMessageId: 'sep-m2' });
+  await settle();
+
+  rows = booted.store.listChat(room.roomId, 0);
+  const seq = rows.map((m) => `${m.chatSeq}:${m.matchNo}`).join(',');
+  assert.equal(seq, '1:0,2:1,3:2', `局号必须逐条落在消息上，实际=${seq}`);
+  // 公开展示的投影里也要带局号（前端就靠它画线），且不带任何汤底/事实点
+  const view = booted.store.listChat(room.roomId, 0).map((m) => toPublicChat(m, () => '某人'));
+  assert.deepEqual(view.map((m) => m.matchNo), [0, 1, 2], '公开投影里带局号');
+  assert.ok(!JSON.stringify(view).includes('汤底'), '讨论投影里不该出现任何判定内部信息');
+
+  host.close(); g2.close();
 });
 
 test('I-30: 房主可设「对局中进房」策略：拒绝 / 只允许旁观 / 排队（默认）', async () => {

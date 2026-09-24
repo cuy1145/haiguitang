@@ -325,6 +325,9 @@
     border-color:rgba(243,185,95,.34)}
   .chat .msg .who{font-size:10.5px;color:var(--fg3);margin-bottom:2px}
   .chat .msg .txt{white-space:pre-wrap;word-break:break-word;line-height:1.6}
+  /* 跨局分隔线：居中的细线 + 小字，和消息便笺明显区分（§12.8） */
+  .chat .chatsep{display:flex;align-items:center;gap:8px;margin:2px 0;color:var(--fg3);font-size:11px;white-space:nowrap}
+  .chat .chatsep::before,.chat .chatsep::after{content:'';flex:1 1 auto;height:1px;background:var(--line)}
   .chatcard .row input{flex:1 1 auto;min-width:0}
   .chatcard .counter{font-size:11px;color:var(--fg3);white-space:nowrap;align-self:center}
   .chatcard .badge{display:inline-block;min-width:16px;padding:0 4px;margin-left:5px;border-radius:999px;
@@ -547,7 +550,18 @@ function isVisible(el) {
 function chatListHtml() {
   const meId = S.view && S.view.you ? S.view.you.memberId : '';
   const msgs = S.chat.slice(-80);
-  return msgs.length ? msgs.map((m) => chatEntry(m, meId)).join('') : '<div class="empty">还没人说话。想商量就打个招呼。</div>';
+  if (!msgs.length) return '<div class="empty">还没人说话。想商量就打个招呼。</div>';
+  // 跨局分隔线（§12.8）：局号变化时插一条「第 N 局开始」，让旧消息仍可查、但一眼看得出分界。
+  // 0 = 还没开过局（等待/选题阶段）不打线；第一条就属于第 N 局时也要打，否则看不出从哪局开始。
+  const parts = [];
+  let prevMatch = null;
+  for (const m of msgs) {
+    const mn = m.matchNo || 0;
+    if (mn !== prevMatch && mn >= 1) parts.push(`<div class="chatsep"><span>第 ${mn} 局开始</span></div>`);
+    prevMatch = mn;
+    parts.push(chatEntry(m, meId));
+  }
+  return parts.join('');
 }
 /** 讨论卡片右上角：未读提示 / 「有 N 条新消息 ↓」入口（§12.7） */
 function chatPillHtml() {
@@ -2346,7 +2360,8 @@ async function sendChat() {
   // 用户会以为没发出去而重复点。chatSeq 用哨兵值，服务端真值回来后原地替换。
   S.chat.push({
     id: 'local:' + clientMessageId, chatSeq: CHAT_LOCAL_SEQ, memberId: meId, memberName: meName,
-    text, clientMessageId, createdAt: Date.now() + (S.serverOffset || 0), pending: true,
+    text, clientMessageId, matchNo: (S.view && S.view.room ? S.view.room.matchNo : 0) || 0,
+    createdAt: Date.now() + (S.serverOffset || 0), pending: true,
   });
   S.chatDraft = '';
   countChatUnread();

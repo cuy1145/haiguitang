@@ -67,8 +67,9 @@ export function reduce(room: CoreRoom, event: CoreEvent, ctx: ReduceCtx): Reduce
   switch (event.type) {
     case 'MATCH_BEGIN': {
       const out = turn.beginMatch(room, event.puzzleId, ctx);
-      // 新一局开始：清空准备状态，避免"上一局的举手"直接生效
-      return { room: { ...out.room, ready: [] }, events: out.events };
+      // 新一局开始：清空准备状态，避免"上一局的举手"直接生效；
+      // 局号 +1（讨论区靠它区分「第 N 局开始」，见 §12.8）
+      return { room: { ...out.room, ready: [], matchNo: room.matchNo + 1 }, events: out.events };
     }
 
     case 'READY_SET': {

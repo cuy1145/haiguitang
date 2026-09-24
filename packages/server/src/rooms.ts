@@ -825,6 +825,8 @@ export class RoomRuntime {
       memberId,
       text: clean,
       clientMessageId,
+      // 局号：只用于前端画「第 N 局开始」分隔线（0 = 还没开过局）
+      matchNo: this.room.matchNo,
       // 用房间时钟（生产环境就是 Date.now()；测试里是假时钟，这样限流窗口可被精确验证）
       createdAt: now,
     };
