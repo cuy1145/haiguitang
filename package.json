@@ -12,6 +12,8 @@
     "cf:verify": "node scripts/verify-deploy.ts",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy",
+    "cf:migrate": "wrangler d1 migrations apply haiguitang --remote",
+    "cf:migrate:local": "wrangler d1 migrations apply haiguitang --local",
     "cf:tail": "wrangler tail",
     "cf:secret:master": "wrangler secret put MASTER_KEY",
     "cf:secret:ai": "wrangler secret put AI_KEY",

@@ -9,7 +9,7 @@
  */
 import {
   PLATFORM, PROMPT_VERSION, assertNoLeak, canSubmit, checkAndNormalizePuzzle, emptyRoom, getMember, hintsExhausted,
-  isLeaky, judgeGuess, coherentExplain, contextExplain, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
+  isLeaky, judgeGuess, coherentExplain, contextExplain, finalExplain, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
   transferGate, validateConfigChange,
 } from '@ht/core';
 import type {
@@ -686,8 +686,10 @@ export class RoomRuntime {
       if (outcome.kind === 'ok') {
         const result = outcome.result;
         // 每条判定都带一句结合提问语境的说明：模型给了就用模型的（已过泄露/引导式/自相矛盾清洗），
-        // 没给（规则拦截、判定缓存命中、内置模拟主持人）或者给的与结论相反 → 就用玩家自己的问法兜一句。
-        const explain = coherentExplain(result.explain, result.answer) ?? contextExplain(result.answer, text);
+        // 没给（规则拦截、判定缓存命中、内置模拟主持人）就用玩家自己的问法兜一句。
+        // finalExplain 是唯一出口：它还会把「你问的『X』在本题设定里没有提到」这类**样板说明**丢掉
+        // （"无关"这个结论本身就把这句话说完了，重复一遍只会把有信息的说明淹掉）。
+        const explain = finalExplain(result, text);
         const q: QuestionRecord = {
           id: this.deps.newId('q'), roomId: this.room.id, matchId: this.matchId, turnSeq,
           memberId, text, answer: result.answer, reasonCode: result.reasonCode, source: result.source,

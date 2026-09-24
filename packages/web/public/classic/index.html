@@ -1105,6 +1105,9 @@ function render(force = false) {
     : null;
   const oldLog = $('#log');
   const pinned = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 48) : S.logPinned;
+  // 先抄下旧位置的 scrollTop：下面 innerHTML 一换，#log 是全新节点（scrollTop=0），
+  // 再读 log.scrollTop 只能读到 0 → "没贴底"时每次重渲染都被拉回记录最上面。
+  const logScrollBefore = oldLog ? oldLog.scrollTop : 0;
   // 讨论列表同理：重渲染前先记住"是不是停在底部"和滚动位置。
   // ⚠️ 不可见时（手机上面板没打开）**不能**当成停在底部 —— 否则会把人没看过的消息算成已读。
   const oldChat = $('#chatLog');
@@ -1132,7 +1135,11 @@ function render(force = false) {
     }
   }
   const log = $('#log');
-  if (log) { log.scrollTop = pinned ? log.scrollHeight : Math.min(log.scrollTop, log.scrollHeight); S.logPinned = pinned; }
+  // 公共记录：贴在底部 → 跟随最新；往上翻 → 原样还原到用户看的那一行
+  if (log) {
+    log.scrollTop = pinned ? log.scrollHeight : Math.min(logScrollBefore, log.scrollHeight);
+    S.logPinned = pinned;
+  }
   // 讨论列表：停在底部 → 跟随到底；往上翻 → 保持原位置（新消息只提示，不强行拉走）
   const chatLog = $('#chatLog');
   if (chatLog) {

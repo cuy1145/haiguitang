@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  analyzeInput, coherentExplain, contextExplain, decideFromFacts, EXPLAIN_MAX_CHARS, explainConflictsWithAnswer, isLeaky, preflight, sanitizeExplain, topicFromQuestion, validateJudgeOutput,
+  analyzeInput, coherentExplain, contextExplain, decideFromFacts, EXPLAIN_MAX_CHARS, explainConflictsWithAnswer, finalExplain, isBoilerplateExplain, isLeaky, preflight, sanitizeExplain, topicFromQuestion, validateJudgeOutput,
 } from '../../packages/core/src/verdict.ts';
 import { mockJudge } from '../../packages/core/src/mock-host.ts';
 import { matchFactsByKeys, judgeGuess, pickHintFact, hintsExhausted } from '../../packages/core/src/facts.ts';
@@ -170,6 +170,26 @@ test('explain 自洽性：说明句说反了（「否——…」配 answer=yes�
   assert.equal(coherentExplain('是——你问的这件事成立。', 'irrelevant'), null);
   assert.equal(coherentExplain('否——这件事不成立。', 'unanswerable'), null);
   assert.equal(explainConflictsWithAnswer('（是）——只针对你问的这一句。', 'yes'), false);
+});
+
+test('finalExplain：样板说明（"本题设定里没有提到"）不再重复一遍结论', () => {
+  const q = '他的钥匙有很多吧吗';
+  // ① 模型给的就是样板句 + irrelevant → 这一行不带说明（「无关」已经把这句说完了）
+  assert.equal(isBoilerplateExplain('你问的『钥匙有很多』在本题设定里没有提到。'), true);
+  assert.equal(isBoilerplateExplain('你问的「钥匙有很多」在本题设定里没有出现。'), true);
+  assert.equal(isBoilerplateExplain('你问的『沙发和钥匙』在本题设定里确有联系。'), false);
+  assert.equal(finalExplain({ answer: 'irrelevant', explain: '你问的『钥匙有很多』在本题设定里没有提到。' }, q), null);
+  // ② 模型压根没给说明（规则拦截/缓存/模拟主持人）+ irrelevant → 兜底句也不必给（同样是重复）
+  assert.equal(finalExplain({ answer: 'irrelevant', explain: null }, q), null);
+  // ③ 有信息量的说明照常保留
+  assert.equal(
+    finalExplain({ answer: 'yes', explain: '是——你问的『沙发和钥匙』在本题设定里确有联系。' }, q),
+    '是——你问的『沙发和钥匙』在本题设定里确有联系。',
+  );
+  // ④ 是/否 的样板句换成兜底句（至少点明结论管的是问题里的哪一部分）
+  assert.equal(finalExplain({ answer: 'yes', explain: '你问的『钥匙』在本题设定里没有提到。' }, q), `是——只针对你问的「${topicFromQuestion(q)}」。`);
+  // ⑤ 说反了的说明还是先被丢掉（与 coherentExplain 同一套规则）
+  assert.equal(finalExplain({ answer: 'yes', explain: '否——你问的『钥匙』与事实不符。' }, q), `是——只针对你问的「${topicFromQuestion(q)}」。`);
 });
 
 test('contextExplain：模型没给说明时，用玩家自己的问法兜一句（结合语境、不给方向）', () => {

@@ -292,6 +292,44 @@ export function contextExplain(answer: AnswerEnum, question: string): string {
 }
 
 /**
+ * 样板说明：只是把结论换句话重说一遍、**不含任何增量信息**的句子。
+ *
+ * 典型就是「你问的『X』在本题设定里没有提到。」—— 而「无关」这个结论本身说的就是
+ * "本题没有这个要素"，两句话是同一件事；记录里连着几行都是它，只会把真正有信息的说明淹掉。
+ * 这里只认"本题设定里 + 没有提到/出现/提及"这一族，不碰有实际内容的说明。
+ */
+const BOILERPLATE_EXPLAIN = /(本题设定|本局设定|本故事|题目设定|这个题)[^。]{0,8}(没有|未|不)(提到|出现|提及|涉及|存在)/;
+
+/** 是否属于"把结论重说一遍"的样板说明。 */
+export function isBoilerplateExplain(explain: string): boolean {
+  return BOILERPLATE_EXPLAIN.test(String(explain ?? ''));
+}
+
+/**
+ * 一条判定最终展示/落库的说明句（**唯一出口**）。
+ *
+ * 优先级与取舍：
+ *  1. 模型给了说明、且过了清洗（泄露/引导式/自相矛盾）→ 用它；
+ *  2. 但如果是**样板说明**（"本题设定里没有提到"这类），丢掉：
+ *     · `irrelevant`：与「无关」这个结论完全重复 → 这一行干脆不带说明（少一句废话）；
+ *     · 其他结论：改用兜底句（例如「是——只针对你问的『X』。」），至少点明结论的范围；
+ *  3. 模型没给（规则拦截 / 判定缓存命中 / 内置模拟主持人）→ `irrelevant` 仍然不带，
+ *     其余用兜底句。
+ *
+ * 为什么 `irrelevant` 特殊：它的兜底句与样板说明是同一个意思（"本题没有这个要素"），
+ * 留着只是把「无关」写两遍；而 是/否/无法回答 的兜底句能说明**结论管的是问题里的哪一部分**。
+ */
+export function finalExplain(
+  result: Pick<JudgeResult, 'answer' | 'explain'>,
+  question: string,
+): string | null {
+  const clean = coherentExplain(result.explain, result.answer);
+  if (clean && !isBoilerplateExplain(clean)) return clean;
+  if (result.answer === 'irrelevant') return null;
+  return contextExplain(result.answer, question);
+}
+
+/**
  * 从玩家的问题里抠一个短话题（只用于回指问题本身；剥掉"是不是/吗"这类疑问外壳）。
  *
  * 疑问外壳**直接删掉**（不是换成空格）：换成空格会留下「他 是顺手把钥匙放到沙发」这种
