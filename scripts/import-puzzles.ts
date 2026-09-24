@@ -46,36 +46,127 @@ const limit = Math.max(1, Number(arg('limit') ?? 30));
 const dryRun = has('dry-run');
 const accepted = arg('accept-license');
 const outFile = resolve(root, arg('out') ?? 'packages/server/src/data/collected-puzzles.ts');
+/** HuggingFace 端点（国内可换成 https://hf-mirror.com） */
+const hfEndpoint = arg('hf-endpoint') ?? 'https://huggingface.co';
 
 /** 已知源题库的许可（未列出的一律要求显式确认） */
 const SOURCE_LICENSES: Record<string, string> = {
+  // GitHub
   'github:KONpiGG/astrbot_plugin_soupai': 'AGPL-3.0',
   'KONpiGG/astrbot_plugin_soupai': 'AGPL-3.0',
+  // HuggingFace：这一个许可是 Apache-2.0（干净、可再分发，只需注明出处）
+  'hf:lpj990/haiguitang': 'apache-2.0',
+  'lpj990/haiguitang': 'apache-2.0',
+  // 下面两个数据集**没有声明许可**，要用必须自己判断风险（脚本会要求你显式确认）
+  'hf:neurostellar/haiguitang': 'UNKNOWN',
+  'hf:lin52/TurtleSoup': 'UNKNOWN',
 };
 
 interface RawItem { surface: string; truth: string }
 type Adapter = (raw: unknown) => RawItem[];
 
-/** 通用适配器：兼容 {surface,truth} / {puzzle,answer} / {question,answer} 等常见形态 */
+/** 通用适配器：兼容 {surface,truth} / {puzzle,answer} / {Riddle,Solution} 等常见形态 */
 const genericAdapter: Adapter = (raw: unknown): RawItem[] => {
   const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' && Array.isArray((raw as { data?: unknown[] }).data) ? (raw as { data: unknown[] }).data : []);
   const out: RawItem[] = [];
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const o = item as Record<string, unknown>;
-    const surface = [o.surface, o.puzzle, o.question, o.title_surface].find((v) => typeof v === 'string' && v.trim()) as string | undefined;
-    const truth = [o.truth, o.answer, o.bottom, o.solution].find((v) => typeof v === 'string' && v.trim()) as string | undefined;
+    const surface = [o.surface, o.puzzle, o.question, o.Riddle, o.riddle, o.title_surface, o['汤面']]
+      .find((v) => typeof v === 'string' && (v as string).trim()) as string | undefined;
+    const truth = [o.truth, o.answer, o.bottom, o.Solution, o.solution, o['汤底']]
+      .find((v) => typeof v === 'string' && (v as string).trim()) as string | undefined;
     if (!surface || !truth) continue;
     out.push({ surface: surface.trim(), truth: truth.trim() });
   }
   return out;
 };
 
-async function fetchSource(src: string): Promise<unknown> {
+/**
+ * HuggingFace 数据集源：`hf:<dataset-id>[#config=&split=&rows=]`
+ *
+ * 走 datasets-server 的 rows 接口（每页最多 100 行），分页取够 limit 就停，
+ * 不会为了拿 30 道题把 2 万行全下来。
+ * 例：hf:lpj990/haiguitang（20046 行，Apache-2.0，字段 Riddle/Solution）
+ */
+async function fetchHf(src: string, want: number): Promise<unknown[]> {
+  const [idPart, queryPart] = src.slice(3).split('#');
+  const params = new URLSearchParams(queryPart ?? '');
+  const config = params.get('config') ?? 'default';
+  const split = params.get('split') ?? 'train';
+  const out: unknown[] = [];
+  const cap = Math.min(want, 2000);
+  for (let offset = 0; offset < cap; offset += 100) {
+    const url = `https://datasets-server.huggingface.co/rows?dataset=${encodeURIComponent(idPart ?? '')}`
+      + `&config=${encodeURIComponent(config)}&split=${encodeURIComponent(split)}&offset=${offset}&length=100`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'haiguitang-import' } });
+    if (!res.ok) {
+      if (offset === 0) throw new Error(`HF datasets-server ${res.status}：${url}`);
+      break;
+    }
+    const body = await res.json() as { rows?: Array<{ row: unknown }> };
+    const rows = body.rows ?? [];
+    for (const r of rows) out.push(r.row);
+    if (rows.length < 100) break;
+  }
+  return out;
+}
+
+/**
+ * HuggingFace **直连文件**源：`hf-file:<dataset-id>/<path>[#ref=<branch>]`
+ *
+ * 为什么不只用 datasets-server：国内网络常常连不上 huggingface.co，
+ * 而 hf-mirror.com 这类镜像通常只镜像**仓库文件**（resolve 路径），不镜像 datasets-server。
+ * 所以这里直接下原始文件（.jsonl / .json），并且可以用 --hf-endpoint 换镜像：
+ *
+ *   pnpm import:puzzles --source=hf-file:lpj990/haiguitang/neww_clue_data.jsonl \
+ *                       --hf-endpoint=https://hf-mirror.com --limit 50 --accept-license=apache-2.0
+ */
+async function fetchHfFile(src: string, endpoint: string): Promise<unknown> {
+  const spec = src.slice(8);
+  const [pathPart, ref = 'main'] = spec.split('#');
+  const slash = (pathPart ?? '').indexOf('/');
+  const firstSlash = (pathPart ?? '').indexOf('/');
+  const secondSlash = (pathPart ?? '').indexOf('/', firstSlash + 1);
+  if (secondSlash < 0) throw new Error('hf-file 源格式应为 hf-file:owner/repo/path[#ref]');
+  const id = (pathPart ?? '').slice(0, secondSlash);
+  const file = (pathPart ?? '').slice(secondSlash + 1);
+  void slash;
+  const url = `${endpoint.replace(/\/+$/, '')}/datasets/${id}/resolve/${ref}/${file}`;
+  console.log(`下载：${url}`);
+  const res = await fetch(url, { headers: { 'User-Agent': 'haiguitang-import' }, redirect: 'follow' });
+  if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}：${url}\n（国内网络可以试试 --hf-endpoint=https://hf-mirror.com）`);
+  const text = await res.text();
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) return JSON.parse(text);
+  // JSONL：一行一个对象
+  const out: unknown[] = [];
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch { /* 跳过坏行 */ }
+  }
+  return out;
+}
+
+async function fetchSource(src: string, want: number, hfEndpoint: string): Promise<unknown> {
+  if (src.startsWith('hf-file:')) return fetchHfFile(src, hfEndpoint);
+  if (src.startsWith('hf:')) return fetchHf(src, want);
   if (src.startsWith('file:')) {
     const p = resolve(root, src.slice(5));
     if (!existsSync(p)) throw new Error(`文件不存在：${p}`);
-    return JSON.parse(readFileSync(p, 'utf8'));
+    const text = readFileSync(p, 'utf8');
+    const trimmed = text.trimStart();
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try { return JSON.parse(text); } catch { /* 落到 JSONL 分支 */ }
+    }
+    const out: unknown[] = [];
+    for (const line of text.split('\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      try { out.push(JSON.parse(t)); } catch { /* 跳过坏行 */ }
+    }
+    return out;
   }
   if (src.startsWith('github:')) {
     const spec = src.slice(7);
@@ -132,10 +223,9 @@ if (!dryRun) {
   }
 }
 
-const raw = await fetchSource(source);
+const raw = await fetchSource(source, Math.max(limit * 2, 120), hfEndpoint);
 const items = genericAdapter(raw);
 console.log(`解析出 ${items.length} 道原始题目（源许可：${license}）`);
-
 // 去重：与现有题库按汤面去重，源内也去重
 const existingSurfaces = new Set(seedPuzzles().map((p) => p.surface.replace(/\s+/g, '')));
 const seen = new Set<string>();
