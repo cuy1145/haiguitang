@@ -57,9 +57,10 @@ function loadClientScript() {
   } as Record<string, unknown>;
   sandbox.globalThis = sandbox;
 
-  runInContext(script + '\n;globalThis.__probe = { stateFingerprint, S };', createContext(sandbox));
+  runInContext(script + '\n;globalThis.__probe = { stateFingerprint, viewRoom, S };', createContext(sandbox));
   return sandbox.__probe as {
     stateFingerprint: () => string;
+    viewRoom: () => string;
     S: Record<string, unknown>;
   };
 }
@@ -126,4 +127,93 @@ test('W3: 弹窗的可见状态在指纹里；但 API Key 明文刻意不进指�
   (S.drafts as Record<string, string>).keyValue = 'sk-abcdef';
   assert.equal(stateFingerprint(), third, 'API Key 明文不应进入指纹（否则每次按键都会重渲染弹窗）');
   assert.ok(!stateFingerprint().includes('sk-abcdef'), '指纹里不应出现密钥明文');
+});
+
+/* ============================================================================
+ * W4：移动端布局契约
+ *
+ * 手机上的痛点是「题目在最上面、输入框被记录推到最下面」，来回滚才能边看题边打字。
+ * 修法是：≤900px 时两栏容器用 display:contents 摘壳，每张卡片成为 .grid 直接子项，
+ * 再用 order 排成「发言者 → 汤面 → 该你问 → 输入框」。这些类是 CSS 排序的唯一抓手，
+ * 谁把它们改名/删掉，手机布局就会静默退化 —— 所以在这里钉死。
+ * ==========================================================================*/
+function playingRoom(serverTime: number, canSubmit: boolean) {
+  const room = baseRoom(serverTime) as Record<string, unknown>;
+  room.status = 'playing';
+  room.puzzle = {
+    id: 'p1', title: '雨夜', surface: '一个人在雨里笑。', rating: 'L1', difficulty: 2,
+    estMinutes: 5, tags: [], sensitiveTags: [], attribution: null,
+  };
+  room.turn = { seq: 1, memberId: 'm1', phase: 'ACTIVE', deadlineAt: serverTime + 40_000, graceDeadlineAt: 0, outcome: null, lateSubmit: false };
+  const you = { memberId: 'm1', isHost: true, canSubmit, canHintT12: false, canHintT3: false, guessLeft: 1 };
+  return { room, you };
+}
+
+test('W4: 手机上「汤面 → 记录 → 输入框」必须紧挨着（类名 + 排序契约）', () => {
+  const html = readFileSync(join(root, 'packages/web/public/index.html'), 'utf8');
+  // 1) 卡片类名齐全（CSS 靠它们排序）
+  assert.match(html, /<div class="card puzzle-card">/, '汤面卡片需要 puzzle-card 类');
+  assert.match(html, /class="card composer\$\{composerSticky \? ' sticky' : ''\}"/, '提问卡片需要 composer 类');
+  assert.match(html, /<div class="card records">/, '记录卡片需要 records 类');
+  assert.match(html, /<div class="col-side">[\s\S]*<div class="col-main">/, '两栏容器需要 col-side / col-main 类');
+  assert.match(html, /<div class="speakerbox">/, '发言者条需要 speakerbox 类（手机上要单独置顶）');
+  assert.match(html, /<div class="memlist">/, '玩家名单需要 memlist 类（手机上要沉底）');
+  assert.match(html, /\.col-main,\.col-side\{display:contents\}/, '≤900px 必须摘掉两栏外壳，卡片才能单独排序');
+
+  // 2) 排序选择器必须是**类名选择器**，不能是 .grid> 子选择器。
+  //    display:contents 只改盒模型，DOM 树上卡片仍是 .col-main 的子节点，
+  //    `.grid>.composer` 一个都匹配不到 —— 曾经因此让 order 全部静默失效。
+  const mobile = html.slice(html.indexOf('@media(max-width:900px)'), html.indexOf('.row{display:flex'));
+  assert.ok(mobile.includes('.col-main,.col-side{display:contents}'), '取到的应该是移动端布局块');
+  assert.doesNotMatch(mobile, /\.grid>/, '移动端排序规则不能用 .grid> 子选择器（display:contents 后匹配不到）');
+
+  const order = (cls: string) => {
+    const m = mobile.match(new RegExp(`(?:^|[,\\s])${cls.replace('.', '\\.')}\\{order:(\\d+)\\}`));
+    assert.ok(m, `缺少排序规则：${cls}`);
+    return Number(m![1]);
+  };
+  const speaker = order('.speakerbox');
+  const puzzle = order('.puzzle-card');
+  const yours = order('.your-turn');
+  const records = order('.records');
+  const composer = order('.composer');
+  const stats = order('.stats');
+  assert.ok(speaker < puzzle, '发言者/倒计时必须在汤面之前');
+  assert.ok(puzzle < yours && yours < records, '汤面 → 该你问 → 记录 必须连在一起');
+  assert.ok(records < composer, '记录（刚判完的答案）要贴着输入框，边看判定边打字');
+  assert.ok(composer < stats, '统计/汤主是次要信息，排在输入框之后');
+  assert.ok(order('.roomcard') > stats && order('.memlist') > stats && order('.creditcard') > stats,
+    '房间 / 玩家名单 / 额度来源属于参考信息，全部沉到最底部');
+
+  // 3) 汤面卡片：手机上把「提示 / 提交推理·揭秘」抬到卡片顶部 ——
+  //    吸附的输入框会盖住卡片末尾，操作按钮放下面等于被永久遮住。
+  assert.match(mobile, /\.puzzle-card \.actions\{order:-1/,
+    '提示/揭秘按钮要在移动端排到卡片顶部（否则被吸附的输入框盖住）');
+});
+
+test('W4b: 对局中手机端输入框吸附底部；等待/结束时不吸附（不挡内容）', () => {
+  const { viewRoom, S } = loadClientScript();
+  S.screen = 'room';
+  S.questions = [];
+  S.log = [];
+  S.drafts = {};
+  S.config = { realModelEnabled: true, vaultEnabled: true };
+  S.pendingTimeline = [];
+
+  const my = playingRoom(1000, true);
+  S.view = { room: my.room, you: my.you, candidates: [] };
+  assert.match(viewRoom(), /class="card composer sticky"/, '轮到我发言 → 输入框吸附在屏幕底部');
+
+  // 对局进行中就吸附：别人发言时也想边看记录边预输入
+  const other = playingRoom(1000, false);
+  S.view = { room: other.room, you: other.you, candidates: [] };
+  assert.match(viewRoom(), /class="card composer sticky"/, '对局进行中 → 保持吸附，随时能打字');
+
+  // 等待开局 / 已结束：输入框留在文档流里（吸附会白占屏幕）
+  S.view = { room: baseRoom(1000), you: { memberId: 'm1', isHost: true, canSubmit: false }, candidates: [] };
+  assert.match(viewRoom(), /class="card composer"/, '还没开局 → 不吸附');
+  assert.doesNotMatch(viewRoom(), /class="card composer sticky"/);
+
+  S.drafts = { ask: '它是不是在哭？' };
+  assert.match(viewRoom(), /class="card composer sticky"/, '等待中已经写了草稿 → 吸附，别把已输入的内容收走');
 });

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>AI 海龟汤</title>
 <!--
   M1 本地服务器版前端（阶段性实现：零依赖、直接吃同一份 @ht/core 语义）。
@@ -79,7 +79,65 @@
    * ========================================================================*/
   .wrap{max-width:1180px;margin:0 auto;padding:18px 18px 96px}
   .grid{display:grid;grid-template-columns:308px minmax(0,1fr);gap:16px;align-items:start}
-  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  /* ==========================================================================
+   * 移动端（≤900px）：单列 + 重新排序
+   * 目标：把「谁在发言 → 汤面 → 记录 → 提问输入框」连成一条线，输入框停在拇指边，
+   *       不用在题目和输入框之间来回滚。
+   * 做法：两栏容器 display:contents 摘掉外壳，让每张卡片在盒模型上变成 .grid 的
+   *       直接子项，再用 order 逐个排序。桌面端（>900px）仍是原来的两栏 grid。
+   * 注意：这里**不能**写 `.grid>.speakerbox` 这类子选择器 —— display:contents 只改
+   *       盒模型，DOM 树上卡片仍然是 .col-main 的子节点，`>` 一个都匹配不到
+   *       （踩过一次：order 全部静默失效，手机上顺序毫无变化）。所以统一用类名选择器；
+   *       下面这些类名只在房间视图里出现，不会误伤别的页面。
+   * ========================================================================*/
+  @media(max-width:900px){
+    .grid{display:flex;flex-direction:column;gap:0;align-items:stretch}
+    .col-main,.col-side{display:contents}
+    .topmsg{order:10}
+    .speakerbox{order:15}
+    .puzzle-card{order:30}
+    .your-turn{order:35}
+    .records{order:38}
+    .composer{order:40}
+    .stats{order:50}
+    .engine{order:60}
+    .settled{order:75}
+    .bannerbox{order:80}
+    .aicard,.waitcard,.candcard{order:85}
+    .roomcard{order:90}
+    .memlist{order:92}
+    .creditcard{order:94}
+
+    /* 玩家卡片在手机上拆开：发言者 / 倒计时置顶，名单沉到底部当参考信息 */
+    .playercard{display:contents}
+    .speakerbox,.memlist{
+      background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+      padding:13px;margin-bottom:12px;box-shadow:var(--shadow);backdrop-filter:blur(10px);
+    }
+
+    /* 汤面卡片：把「提示 / 提交推理·揭秘」这一行抬到卡片顶部。
+       手机上输入框吸附在底部时会盖住卡片末尾，而这一行是**操作**（揭秘是胜负手），
+       放在下面等于被永久遮住；抬到顶部就永远看得见。 */
+    .puzzle-card{display:flex;flex-direction:column}
+    .puzzle-card>.spread{order:-2}
+    .puzzle-card .actions{order:-1;margin-bottom:12px}
+    .puzzle-card>.hr{display:none}
+
+    /* 输入框：只要对局在进行中就吸附在屏幕底部 —— 边看题/边看记录边打字。
+       吸附时收掉标题行、压矮输入区，把屏幕让给汤面和记录。 */
+    .composer.sticky{
+      position:sticky;bottom:0;z-index:30;
+      background:linear-gradient(180deg,rgba(18,20,32,.97),rgba(12,14,23,.99));
+      border-color:rgba(124,108,245,.45);
+      box-shadow:0 -14px 34px -16px rgba(0,0,0,.92);
+      padding-bottom:calc(13px + env(safe-area-inset-bottom,0px));
+    }
+    .composer.sticky .spread{display:none}
+    .composer.sticky textarea{min-height:52px}
+
+    /* 收紧留白的那几条放在本文件末尾的同名媒体查询里：它们和基础规则同权重，
+       必须写在基础规则之后才生效（否则被上面的 .card / .log 覆盖成没写）。 */
+  }
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .spread{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
   .stack{display:flex;flex-direction:column;gap:14px}
@@ -321,6 +379,32 @@
   .mode.on{border-color:var(--accent);background:rgba(124,108,245,.18);box-shadow:0 14px 30px -22px rgba(124,108,245,1)}
   .mode .t{font-size:13px;font-weight:650}
   .mode .d{font-size:11px;color:var(--fg3);margin-top:3px}
+
+  /* ==========================================================================
+   * 移动端收紧留白（必须放在样式表最后）
+   * 这些选择器（.card / .log / .stat …）和上面的基础规则**同权重**，
+   * 只有写在它们后面才会生效 —— 放在前面等于没写。
+   * ========================================================================*/
+  @media(max-width:900px){
+    .wrap{padding:12px 12px 28px}
+    .topbar{margin:0 0 12px;gap:10px}
+    .topchips .chip{font-size:11px;padding:3px 8px}
+    .card{padding:13px;margin-bottom:12px}
+    .puzzle{padding:13px}
+    .puzzle .ptitle{font-size:17px}
+    .puzzle .surface{font-size:15px;line-height:1.8}
+    .log{max-height:32vh}
+    .stats{gap:8px;margin-bottom:12px}
+    .stat{flex:1 1 68px;min-width:0;padding:8px 10px}
+    .stat .v{font-size:17px}
+    .engine{margin-bottom:12px;padding:9px 11px}
+    textarea{min-height:64px}
+    /* 吸附时把记录压矮一点，保证刚判完的那一条不被输入框盖住 */
+    .grid:has(.composer.sticky) .records{padding-bottom:22px}
+    .grid:has(.composer.sticky) .log{max-height:24vh}
+    /* 记录卡片末尾那句静态说明会被吸附的输入框压住半行，干脆收起来（滚动一下就能看到全文也没意义） */
+    .grid:has(.composer.sticky) .records>.dim{display:none}
+  }
 </style>
 </head>
 <body>
@@ -949,6 +1033,9 @@ function viewRoom() {
   const puzzle = room.puzzle;
   const draft = S.drafts.ask ?? (localStorage.getItem(LS_DRAFT) || '');
   const myTurn = you.canSubmit;
+  // 手机上输入框是否吸附在屏幕底部：对局进行中就一直吸附（随时能打字），
+  // 另外只要写了草稿也吸附（等待阶段预输入完不被收走）
+  const composerSticky = room.status === 'playing' || Boolean(String(draft).trim());
   const phaseLabel = { ACTIVE: '提问中', GRACE: '宽限期（提交仍有效）', JUDGING: '主持人判定中', SETTLED: '本轮结束', SKIPPED: '已跳过', PAUSED: '已暂停', IDLE: '—' }[turn.phase] || turn.phase;
   // 计时：以服务端时间为准，按秒走（真正的刷新由 tickUi() 每 250ms 打到 #tickLeft 上，不整页重渲染）
   const counting = turn.phase === 'ACTIVE' || turn.phase === 'GRACE';
@@ -960,8 +1047,8 @@ function viewRoom() {
 
   return `
   <div class="grid">
-    <div>
-      <div class="card"><h3>房间</h3>
+    <div class="col-side">
+      <div class="card roomcard"><h3>房间</h3>
         <div class="kv">
           <div class="k">房间码</div><div><b style="font-size:19px;letter-spacing:.16em">${esc(room.code)}</b></div>
           <div class="k">状态</div><div>${esc(room.status)}${room.pauseReason ? ' · ' + esc(room.pauseReason) : ''}</div>
@@ -981,7 +1068,7 @@ function viewRoom() {
 
       ${speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel)}
 
-      <div class="card">
+      <div class="card creditcard">
         <div class="spread"><h3 style="margin:0">额度来源</h3>
           <span class="pill ${room.credit.mode === 'host_key' ? 'accent' : ''}">${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'}</span></div>
         <div class="kv">
@@ -993,9 +1080,11 @@ function viewRoom() {
       </div>
     </div>
 
-    <div>
-      ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
-      ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
+    <div class="col-main">
+      ${(S.notice || S.error) ? `<div class="topmsg">
+        ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
+        ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
+      </div>` : ''}
 
       ${myTurn && room.status === 'playing' ? `<div class="your-turn">🎤 轮到你发言了 —— 想好就直接问，超时会自动跳过本轮</div>` : ''}
 
@@ -1006,11 +1095,11 @@ function viewRoom() {
       ${(you.isHost && room.status === 'waiting') ? aiPuzzleCard(room, you) : ''}
 
       ${(room.status === 'waiting' && !you.isHost) ? `
-      <div class="card"><div class="spread"><h3 style="margin:0">选题</h3><span class="pill">等待房主选题…</span></div>
+      <div class="card waitcard"><div class="spread"><h3 style="margin:0">选题</h3><span class="pill">等待房主选题…</span></div>
         <div class="dim">房主可以自己挑一道、让大家投票选，或者让 AI 现写一道新题。</div></div>` : ''}
 
       ${(you.isHost && v.candidates && v.candidates.length > 0 && room.status === 'waiting') ? `
-      <div class="card"><div class="spread"><h3 style="margin:0">选题（${v.candidates.length} 道可选）</h3>
+      <div class="card candcard"><div class="spread"><h3 style="margin:0">选题（${v.candidates.length} 道可选）</h3>
         <span class="dim">点「选这道」直接开局，或发起「投票选汤」让成员一起选</span></div>
         <div class="cands">
           ${v.candidates.map((c) => `
@@ -1025,11 +1114,11 @@ function viewRoom() {
         </div>
       </div>` : ''}
 
-      ${banners(room, you)}
+      ${bannersBox(room, you)}
 
       ${recordsCard(room, you)}
 
-      <div class="card">
+      <div class="card composer${composerSticky ? ' sticky' : ''}">
         <div class="spread"><h3 style="margin:0">提问</h3>
           <span class="dim">草稿只存在本机浏览器，不上传、不广播</span></div>
         <textarea id="ask" placeholder="随时可以打字（预输入）。轮到你时才能发送。">${esc(draft)}</textarea>
@@ -1042,7 +1131,7 @@ function viewRoom() {
       </div>
 
       ${room.status === 'settled' ? `
-      <div class="card"><div class="spread"><h3 style="margin:0">对局结束</h3>
+      <div class="card settled"><div class="spread"><h3 style="margin:0">对局结束</h3>
         ${you.isHost ? '<button class="primary" id="btnRecap">查看复盘 · 揭晓汤底</button>' : '<span class="pill">汤底仅房主可见</span>'}</div>
         <div class="dim">${you.isHost
           ? '复盘含汤底揭晓，只有你能看到；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。'
@@ -1064,7 +1153,7 @@ function puzzleCard(puzzle, room, you) {
   const hintsOn = Boolean(room.config && room.config.hintsEnabled);
   const playing = room.status === 'playing';
   return `
-  <div class="card">
+  <div class="card puzzle-card">
     <div class="spread" style="margin-bottom:12px">
       <h3 style="margin:0">题目 · 汤面</h3>
       ${you.isHost && playing ? `<button id="btnCfgQuick" class="ghost">对局参数</button>` : ''}
@@ -1152,7 +1241,7 @@ function aiPuzzleCard(room, you) {
   const canUse = Boolean(st && st.puzzleId) && room.status === 'waiting';
   const model = (S.drafts.keyModel ?? defaultModel());
   return `
-  <div class="card">
+  <div class="card aicard">
     <div class="spread" style="margin-bottom:10px">
       <h3 style="margin:0">AI 创作 <span class="dim">房主专用</span></h3>
       <span class="pill accent">${esc(model)}</span>
@@ -1288,12 +1377,8 @@ function speakerPanel(room, you, turn, counting, left, deadline, total, pct, pha
   const allReady = eligible > 0 && readyCount >= eligible;
 
   return `
-  <div class="card">
-    <div class="spread" style="margin-bottom:12px">
-      <h3 style="margin:0">玩家 <span class="dim">${room.members.length} 人</span></h3>
-      <span class="pill ${allReady ? 'live' : ''}">已准备 ${readyCount}/${eligible}${allReady ? ' · 可以开局' : ''}</span>
-    </div>
-
+  <div class="card playercard">
+    <div class="speakerbox">
     <div class="speaker${current ? '' : ' idle'}">
       <div class="avatar" style="--h:${hueOf(current ? current.name : '空')}">${current ? esc(initialOf(current.name)) : '·'}</div>
       <div>
@@ -1313,6 +1398,13 @@ function speakerPanel(room, you, turn, counting, left, deadline, total, pct, pha
       <button class="${iAmReady ? '' : 'primary'}" id="btnReady">${iAmReady ? '✓ 已准备（点一下收回）' : '我准备好了'}</button>
       <span class="dim">${allReady ? '全员已准备，房主可以开局了' : `还有 ${Math.max(0, eligible - readyCount)} 人没准备（离线/旁观不算数）`}</span>
     </div>` : ''}
+    </div>
+
+    <div class="memlist">
+    <div class="spread" style="margin-bottom:12px">
+      <h3 style="margin:0">玩家 <span class="dim">${room.members.length} 人</span></h3>
+      <span class="pill ${allReady ? 'live' : ''}">已准备 ${readyCount}/${eligible}${allReady ? ' · 可以开局' : ''}</span>
+    </div>
 
     <div class="hr"></div>
 
@@ -1340,13 +1432,14 @@ function speakerPanel(room, you, turn, counting, left, deadline, total, pct, pha
     }).join('')}
 
     <div class="dim" style="margin-top:10px">挂机只跳过其回合、不移交房主；断连才触发移交。被移出的成员会立刻失效，需要重新加入。</div>
+    </div>
   </div>`;
 }
 
 /** 公共记录：**只放记录**（操作按钮都在题目卡片里） */
 function recordsCard(room, you) {
   return `
-  <div class="card">
+  <div class="card records">
     <div class="spread" style="margin-bottom:12px">
       <h3 style="margin:0">公共记录 <span class="dim">${S.log.length} 条 · 全员共享</span></h3>
       <span class="pill">按时间排列</span>
@@ -1404,6 +1497,12 @@ function banners(room, you) {
       <div class="row" style="margin-top:6px"><button data-reenable="yes">是（复测并切回自备额度）</button><button data-reenable="no">否（销毁 Key）</button></div></div>`);
   }
   return out.join('');
+}
+
+/** 把上面这些提示包成一块：手机上它们排在记录之后（次要信息），不抢题目和输入框的位置 */
+function bannersBox(room, you) {
+  const h = banners(room, you);
+  return h ? `<div class="bannerbox">${h}</div>` : '';
 }
 
 function nameOf(room, id) { const m = room.members.find((x) => x.id === id); return m ? m.name : '—'; }
