@@ -166,6 +166,8 @@ export function messageOf(code: string): string {
     case 'CONNECT_TIMEOUT': case 'READ_TIMEOUT': return '调用模型超时：检查网络/代理，或换一个 Base URL。';
     case 'CONN_RESET': return '连接模型时被重置：稍后重试，或换一个 Base URL。';
     case 'SCHEMA_INVALID': return '模型这次没按要求返回 JSON（已自动重试一次）。再点一次生成通常就能出题；连续失败可以把模型换成 deepseek-chat 试试。';
+    case 'OUTPUT_TRUNCATED': return '输出被截断了（达到 max_tokens 上限，JSON 只写了一半）。系统重试时会自动加大预算；仍然失败就把模型换成输出更短的（见下方技术原因）。';
+    case 'THINKING_ONLY': return '这个模型只回了思考过程、正文是空的 —— 通常是它默认开着思考模式，把输出预算吃光了。系统已自动重试并加大预算；仍失败请换一个非思考模型（例如 deepseek-flash）。';
     case 'PROVIDER_REFUSAL': return '上游以内容策略为由拒绝了这次请求：换一个模型或改一下题目方向。';
     case 'LEAK_DETECTED': return '模型输出里含有汤底片段，被安全机制拦下了（不会下发给任何人）。再生成一次即可。';
     case 'INCONSISTENT': return '模型输出前后矛盾，无法用于判定。再生成一次即可。';

@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { HostService, buildJsonBody } = await import('../../packages/server/src/ai.ts');
+const { HostService, buildJsonBody, extractJsonObject } = await import('../../packages/server/src/ai.ts');
 const { checkAndNormalizePuzzle } = await import('../../packages/core/src/puzzle-check.ts');
 
 const noopLogger = { info() {}, warn() {}, error() {}, debug() {} } as never;
@@ -89,7 +89,7 @@ test('G7: 出题失败会自动重试（SCHEMA_INVALID / 限流都是一次性�
   }
 });
 
-test('G8: 重试用尽后仍失败 → 错误消息要带 finish_reason（截断 vs 模型不听话，能一眼区分）', async () => {
+test('G8: 重试用尽后仍失败 → 截断单独归类，且消息里能一眼看出是截断', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = (async () => new Response(JSON.stringify({
     choices: [{ message: { content: '{"title":"半截' }, finish_reason: 'length' }],
@@ -99,8 +99,10 @@ test('G8: 重试用尽后仍失败 → 错误消息要带 finish_reason（截断
     const res = await host.generatePuzzle({ apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', provider: 'openai-compatible' });
     assert.equal(res.ok, false);
     if (!res.ok) {
-      assert.equal(res.errorClass, 'SCHEMA_INVALID');
+      // 截断以前混在 SCHEMA_INVALID 里，房主只能看到"没按要求返回 JSON"，看不出是预算不够
+      assert.equal(res.errorClass, 'OUTPUT_TRUNCATED');
       assert.match(res.message, /finish_reason=length/, `要能看出是被 max_tokens 截断：${res.message}`);
+      assert.match(res.message, /max_tokens/, '消息里要提到预算上限，便于房主换更短的模型');
     }
   } finally {
     globalThis.fetch = original;
@@ -166,6 +168,113 @@ test('G5: 上游 401 / 429 / 5xx → 分类正确（供 UI 给出人话提示）
   }
 });
 
+test('G9: 思考模式的模型只回 reasoning_content → 归类为 THINKING_ONLY（能直接告诉房主换模型）', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    choices: [{
+      message: { content: '', reasoning_content: '让我想想……玩家问的是门是不是锁着的，我需要对照事实点……' },
+      finish_reason: 'length',
+    }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+  try {
+    const host = makeHost(3000, 0);
+    const res = await host.generatePuzzle({ apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com', model: 'deepseek-reasoner', provider: 'openai-compatible' });
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.equal(res.errorClass, 'THINKING_ONLY', `应当单独识别"只回思考过程"：${res.message}`);
+      assert.match(res.message, /思考/, '消息里要说清是思考模式的问题');
+      assert.match(res.message, /deepseek-flash/, '要给出可执行的下一步（换非思考模型）');
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('G10: 判定被截断 → OUTPUT_TRUNCATED，且**重试时自动加大 max_tokens**', async () => {
+  const budgets: number[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init: { body?: string }) => {
+    const body = JSON.parse(String(init?.body ?? '{}')) as { max_tokens?: number };
+    budgets.push(Number(body.max_tokens ?? 0));
+    // 第一次故意截断，第二次正常返回 → 验"加大预算之后就成功了"
+    const truncated = budgets.length === 1;
+    return new Response(JSON.stringify({
+      choices: [{
+        message: { content: truncated ? '{"answer":"yes","reason_code":"NONE","matched_fact_ids":["f1"],"explain":"是——' : JSON.stringify({ answer: 'yes', reason_code: 'NONE', matched_fact_ids: ['f1'], explain: '是——只针对你问的这一句。' }) },
+        finish_reason: truncated ? 'length' : 'stop',
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 20 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as unknown as typeof fetch;
+  try {
+    const host = makeHost(3000, 1);            // 允许重试一次
+    const checked = checkAndNormalizePuzzle(JSON.parse(VALID_PUZZLE), { idPrefix: 'g' });
+    assert.equal(checked.ok, true);
+    const puzzle = checked.ok ? checked.puzzle : null;
+    assert.ok(puzzle);
+    const out = await host.judge({
+      roomId: 'r1', matchId: null, turnSeq: 1, question: '门当时是锁着的吗？', puzzle: puzzle!,
+      credential: { apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', provider: 'openai-compatible' },
+    });
+    assert.equal(out.kind, 'ok', out.kind === 'error' ? `${out.errorClass}: ${out.message}` : '');
+    assert.equal(budgets.length, 2, '应当重试一次');
+    assert.ok(budgets[1]! > budgets[0]!, `重试必须加大输出预算（${budgets.join(' → ')}）`);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('G11: 正文里混着示例 JSON（思考外溢）→ 取第一个能解析的对象，而不是"第一个 { 到最后一个 }"', () => {
+  const raw = '我先列个格式示例：{"answer":"yes"} 然后给出真正的结果：'
+    + '{"answer":"no","reason_code":"NONE","matched_fact_ids":["f2"],"explain":"否——你问的『照片』在本题设定里不成立。"}';
+  const got = extractJsonObject(raw);
+  assert.ok(got, '应当能取出一个对象');
+  const parsed = JSON.parse(got!) as { answer?: string; matched_fact_ids?: string[] };
+  assert.equal(parsed.answer, 'no', `要取到真正的那个对象，而不是示例：${got}`);
+  assert.deepEqual(parsed.matched_fact_ids, ['f2']);
+  // 围栏 + 前后散文 + 截断（结尾少一个 }）仍要能救回来
+  const fenced = '好的：\n```json\n{"answer":"yes","reason_code":"NONE","matched_fact_ids":["f1"],"explain":"是——只针对你问的那一句。"';
+  const got2 = extractJsonObject(fenced);
+  assert.ok(got2, '截断（差一个 }）应当被补救');
+  assert.equal((JSON.parse(got2!) as { answer?: string }).answer, 'yes');
+});
+
+test('G12: 多余字段（explanation / reasoning / thought）一律判为越界，绝不进判定', async () => {
+  const { validateJudgeOutput, analyzeInput } = await import('../../packages/core/src/verdict.ts');
+  const checked = checkAndNormalizePuzzle(JSON.parse(VALID_PUZZLE), { idPrefix: 'g' });
+  assert.equal(checked.ok, true);
+  const puzzle = checked.ok ? checked.puzzle : null;
+  assert.ok(puzzle);
+  const features = analyzeInput('门当时是锁着的吗？').features;
+  for (const extra of [{ explanation: '因为……' }, { reasoning: '思路……' }, { thought: '思考……' }]) {
+    const v = validateJudgeOutput(
+      { answer: 'yes', reason_code: 'NONE', matched_fact_ids: ['f1'], ...extra },
+      { truth: puzzle!.truth.truth, facts: puzzle!.facts, features },
+    );
+    assert.equal(v.ok, false, `越界字段必须整条拒绝：${JSON.stringify(extra)}`);
+    if (!v.ok) assert.equal(v.reason, 'SCHEMA_INVALID');
+  }
+});
+
+test('G9x: 出题路径的截断错误也单独分类（不再混进 SCHEMA_INVALID）', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    choices: [{ message: { content: '{"title":"半截' }, finish_reason: 'length' }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+  try {
+    const host = makeHost(3000, 0);
+    const res = await host.generatePuzzle({ apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', provider: 'openai-compatible' });
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.equal(res.errorClass, 'OUTPUT_TRUNCATED');
+      assert.match(res.message, /截断/);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+
 test('G6: generateFacts 只补事实点（用于导入网上收集的题目）', async () => {
   const stub = stubFetch(JSON.stringify({
     facts: [
@@ -189,3 +298,4 @@ test('G6: generateFacts 只补事实点（用于导入网上收集的题目）',
     stub.restore();
   }
 });
+

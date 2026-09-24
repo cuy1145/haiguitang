@@ -1925,6 +1925,8 @@ function logEntry(t, room, you) {
 function aiBlockHint(code) {
   switch (code) {
     case 'SCHEMA_INVALID': return '模型没有按要求的 JSON 格式回答（常见原因：模型名不匹配、输出被截断）。可换一个模型名（例如 deepseek-v4-pro）后重新提交，系统会自动重试一次。';
+    case 'OUTPUT_TRUNCATED': return '模型这次输出被截断了（写到一半就到上限）。系统重试时会自动加大输出预算；仍然失败就换一个输出更短的模型。';
+    case 'THINKING_ONLY': return '这个模型只回了思考过程、正文是空的 —— 多半是它默认开着「思考模式」，把输出预算吃光了。系统已自动重试并加大预算；仍失败请换一个非思考模型（例如 deepseek-flash）。';
     case 'HTTP_401': case 'AUTH_FAILED': return 'API Key 无效或已被撤销：到服务商后台重新生成后提交。';
     case 'HTTP_402': case 'QUOTA_EXHAUSTED': return '账号余额/额度不足：充值或换一个 Key。';
     case 'HTTP_429': case 'RATE_LIMITED': return '被上游限流：稍等一会儿重新提交即可。';
@@ -2594,6 +2596,8 @@ function keyTestBox() {
 function hintForReason(code) {
   switch (code) {
     case 'MISSING_API_KEY': return '先把 API Key 填进第三个输入框。';
+    case 'OUTPUT_TRUNCATED': return '模型输出被截断（达到 max_tokens 上限）：换一个输出更短的模型，或把问题问得更聚焦。系统重试时会自动加大预算。';
+    case 'THINKING_ONLY': return '这个模型只回了思考过程、正文是空的：它默认开着思考模式，请换成非思考模型（例如 deepseek-flash）。';
     case 'AUTH_FAILED': return 'Key 无效或已被撤销：到服务商后台重新生成一个（注意别带上多余空格）。';
     case 'PERMISSION_DENIED': return '该账号无权访问这个模型：换个模型名或换账号。';
     case 'QUOTA_EXHAUSTED': return '余额/额度不足：充值或换一个 Key。';

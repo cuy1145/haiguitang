@@ -22,6 +22,10 @@ export type AiErrorClass =
   | 'CONNECT_TIMEOUT' | 'READ_TIMEOUT' | 'CONN_RESET'
   | 'HTTP_401' | 'HTTP_403' | 'HTTP_402' | 'HTTP_400' | 'HTTP_404' | 'HTTP_408' | 'HTTP_425' | 'HTTP_429'
   | 'HTTP_5XX' | 'SCHEMA_INVALID' | 'LEAK_DETECTED' | 'INCONSISTENT' | 'UNANSWERABLE_ABUSE'
+  /** 输出被 max_tokens 截断（finish_reason=length）：JSON 不完整，重试时应加大预算 */
+  | 'OUTPUT_TRUNCATED'
+  /** 只回思考过程、正文为空（模型处于思考模式，思维链吃光了输出预算） */
+  | 'THINKING_ONLY'
   | 'PROVIDER_REFUSAL' | 'UNKNOWN';
 
 export interface JudgeRequest {
@@ -57,8 +61,19 @@ export interface HostDeps {
 }
 
 // SCHEMA_INVALID 也重试：多数情况是输出被 max_tokens 截断或上游偶发返回散文，重试一次常常就正常了。
+// OUTPUT_TRUNCATED / THINKING_ONLY 更要重试 —— 而且重试时会**加大 max_tokens**（见 judge()），
+// 所以第二次的成功率明显更高。
 // 注意：L3 输出校验失败走的是另一条分支，那里显式 retryable:false（同一提示词重试大概率再犯）。
-const RETRYABLE = new Set<AiErrorClass>(['CONNECT_TIMEOUT', 'READ_TIMEOUT', 'CONN_RESET', 'HTTP_408', 'HTTP_425', 'HTTP_429', 'HTTP_5XX', 'SCHEMA_INVALID']);
+const RETRYABLE = new Set<AiErrorClass>([
+  'CONNECT_TIMEOUT', 'READ_TIMEOUT', 'CONN_RESET', 'HTTP_408', 'HTTP_425', 'HTTP_429', 'HTTP_5XX',
+  'SCHEMA_INVALID', 'OUTPUT_TRUNCATED', 'THINKING_ONLY',
+]);
+
+/** 判定输出的 token 预算：首次 400，重试时翻倍（截断就是因为这里不够），上限 1600。 */
+export const JUDGE_MAX_TOKENS = 400;
+export function judgeTokenBudget(attempt: number): number {
+  return Math.min(1600, JUDGE_MAX_TOKENS * 2 ** Math.max(0, attempt - 1));
+}
 
 export class HostService {
   private readonly deps: HostDeps;
@@ -146,7 +161,10 @@ export class HostService {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const started = Date.now();
-      const call = await this.callModel(cred, req.question, req.puzzle);
+      // 重试时**加大输出预算**：截断/只回思考过程都是"预算不够"的表现，
+      // 用同样的 400 再试一次基本会再失败（这正是以前重试无效的原因）。
+      const budget = judgeTokenBudget(attempt);
+      const call = await this.callModel(cred, req.question, req.puzzle, budget);
       const latencyMs = Date.now() - started;
 
       if (!call.ok) {
@@ -349,14 +367,37 @@ export class HostService {
     }
     let data: unknown;
     try { data = await res.json(); } catch { return { ok: false, errorClass: 'SCHEMA_INVALID', message: '响应不是 JSON' }; }
-    const obj = data as { choices?: Array<{ message?: { content?: string; refusal?: string }; finish_reason?: string }> };
+    const obj = data as {
+      choices?: Array<{
+        message?: { content?: string; refusal?: string; reasoning_content?: string; reasoning?: string };
+        finish_reason?: string;
+      }>;
+    };
     if (obj.choices?.[0]?.message?.refusal) return { ok: false, errorClass: 'PROVIDER_REFUSAL', message: '上游拒绝回答（内容策略）' };
     const content = obj.choices?.[0]?.message?.content ?? '';
     const finishReason = obj.choices?.[0]?.finish_reason ?? '';
+    // 与判定路径同一套识别：只回思考过程 / 被截断，都要单独分类（提示与重试策略不同）
+    const reasoning = obj.choices?.[0]?.message?.reasoning_content ?? obj.choices?.[0]?.message?.reasoning ?? '';
+    if (!content.trim() && String(reasoning).trim()) {
+      this.deps.logger.warn('json_thinking_only', { finish_reason: finishReason, reasoning_len: String(reasoning).length });
+      return {
+        ok: false,
+        errorClass: 'THINKING_ONLY',
+        message: `模型只回了思考过程、正文为空（finish_reason=${finishReason || '未知'}）：`
+          + '通常是这个模型默认开着思考模式，把输出预算吃光了。换一个非思考模型（例如 deepseek-flash）再试。',
+      };
+    }
     const strict = extractJsonObject(content, { repair: false });   // 不做"补括号"的补救
     const jsonText = strict ?? extractJsonObject(content);
     if (!jsonText) {
       // finish_reason 必须带上：length = 被 max_tokens 截断（要提高上限），stop = 模型就是不肯按格式说
+      if (finishReason === 'length') {
+        return {
+          ok: false,
+          errorClass: 'OUTPUT_TRUNCATED',
+          message: `模型输出被 max_tokens 截断（当前预算 ${maxTokens}），JSON 不完整：${leakSafePreview(content, '', 120)}`,
+        };
+      }
       return {
         ok: false,
         errorClass: 'SCHEMA_INVALID',
@@ -369,8 +410,8 @@ export class HostService {
     if (!strict && finishReason === 'length') {
       return {
         ok: false,
-        errorClass: 'SCHEMA_INVALID',
-        message: `模型输出被 max_tokens 截断（finish_reason=length），JSON 不完整：${leakSafePreview(content, '', 120)}`,
+        errorClass: 'OUTPUT_TRUNCATED',
+        message: `模型输出被 max_tokens 截断（当前预算 ${maxTokens}，finish_reason=length），JSON 不完整：${leakSafePreview(content, '', 120)}`,
       };
     }
     try {
@@ -385,6 +426,7 @@ export class HostService {
     cred: { apiKey: string; baseUrl: string; model: string; provider: string },
     question: string,
     puzzle: Puzzle,
+    maxTokens: number = JUDGE_MAX_TOKENS,
   ): Promise<{ ok: true; json: unknown; tokensIn: number; tokensOut: number } | { ok: false; errorClass: AiErrorClass; message: string }> {
     const url = HostService.chatCompletionsUrl(cred.baseUrl);
     const factList = puzzle.facts.map((f) => `${f.id}: ${f.text} (isTrue=${f.isTrue})`).join('\n');
@@ -424,7 +466,7 @@ export class HostService {
       res = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${cred.apiKey}` },
-        body: JSON.stringify(buildJudgeBody(cred, system, question)),
+        body: JSON.stringify(buildJudgeBody(cred, system, question, maxTokens)),
         signal: controller.signal,
       });
     } catch (err) {
@@ -459,7 +501,10 @@ export class HostService {
       return { ok: false, errorClass: 'SCHEMA_INVALID', message: '响应不是 JSON' };
     }
     const obj = data as {
-      choices?: Array<{ message?: { content?: string; refusal?: string }; finish_reason?: string }>;
+      choices?: Array<{
+        message?: { content?: string; refusal?: string; reasoning_content?: string; reasoning?: string };
+        finish_reason?: string;
+      }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
     if (obj.choices?.[0]?.message?.refusal) {
@@ -467,16 +512,39 @@ export class HostService {
     }
     const content = obj.choices?.[0]?.message?.content ?? '';
     const finishReason = obj.choices?.[0]?.finish_reason ?? '';
-    const jsonText = extractJsonObject(content);
+    // 思考模式的典型表现：正文字段是空的，整段输出都在 reasoning_content 里（思维链吃光了预算）。
+    // 必须单独识别：不然只会报"模型没返回内容"，房主不知道该把思考模式关掉或换个模型。
+    const reasoning = obj.choices?.[0]?.message?.reasoning_content ?? obj.choices?.[0]?.message?.reasoning ?? '';
+    if (!content.trim() && String(reasoning).trim()) {
+      this.deps.logger.warn('judge_thinking_only', {
+        finish_reason: finishReason, reasoning_len: String(reasoning).length,
+      });
+      return {
+        ok: false,
+        errorClass: 'THINKING_ONLY',
+        message: `模型只回了思考过程、正文为空（finish_reason=${finishReason || '未知'}，思考长度 ${String(reasoning).length} 字）：`
+          + '通常是这个模型默认开着思考模式，把输出预算吃光了。系统已自动重试一次并加大预算；仍失败就换一个非思考模型（例如 deepseek-flash）。',
+      };
+    }
+    const jsonText = extractJsonObject(content, { repair: finishReason !== 'length' });
     if (!jsonText) {
       // 诊断信息要能定位问题，但**绝不能把汤底写进日志/审计**：预览先过泄露检查
       const preview = leakSafePreview(content, puzzle.truth.truth);
       this.deps.logger.warn('judge_output_parse_failed', {
         finish_reason: finishReason, content_len: content.length, preview,
       });
+      // 被 max_tokens 截断 → 单独一类错误（重试会加大预算，房主提示也更准）
+      if (finishReason === 'length') {
+        return {
+          ok: false,
+          errorClass: 'OUTPUT_TRUNCATED',
+          message: `输出被 max_tokens 截断（当前预算 ${maxTokens}），JSON 不完整：${preview}`,
+        };
+      }
       if (!content.trim()) {
         return {
-          ok: false, errorClass: 'SCHEMA_INVALID',
+          ok: false,
+          errorClass: 'SCHEMA_INVALID',
           message: `模型没有返回内容（finish_reason=${finishReason || '未知'}，通常是输出被 max_tokens 截断或模型不支持该参数）`,
         };
       }
@@ -609,15 +677,52 @@ export function extractJsonObject(raw: string, opts: { repair?: boolean } = {}):
   for (const candidate of [text, unfenced]) {
     if (isJsonObject(candidate)) return candidate;
   }
+  // 逐个扫描**平衡的** {...} 片段。不能只取"第一个 { 到最后一个 }"：思考外溢的正文里
+  // 常先写一个示例 JSON，那样切出来的片段一定解析不了、明明后面就有正确答案却被判成格式错误。
+  // 也不能无脑取第一个能解析的：示例本身往往就是合法 JSON（{"answer":"yes"}），取错就答非所问。
+  // 规则：**取字段最多的那个**（真正的答案四个字段齐全，示例只有一两个）；字段数相同取靠后的
+  // （模型的最终答案出现在正文末尾）。
+  const parsed = balancedObjectCandidates(unfenced).filter(isJsonObject);
+  if (parsed.length > 0) {
+    let best = parsed[0]!;
+    let bestKeys = Object.keys(JSON.parse(best) as Record<string, unknown>).length;
+    for (const c of parsed.slice(1)) {
+      const k = Object.keys(JSON.parse(c) as Record<string, unknown>).length;
+      if (k >= bestKeys) { best = c; bestKeys = k; }
+    }
+    return best;
+  }
   const start = unfenced.indexOf('{');
   if (start < 0) return null;
   const end = unfenced.lastIndexOf('}');
   const slice = end > start ? unfenced.slice(start, end + 1) : unfenced.slice(start);
-  if (isJsonObject(slice)) return slice;
   if (opts.repair === false) return null;              // 只认"结构本来就完整"的输出
   const repaired = repairTruncatedJson(slice);
   if (repaired && isJsonObject(repaired)) return repaired;
   return null;
+}
+
+/** 扫出所有"括号平衡"的 {...} 候选（按出现顺序，忽略字符串里的花括号）。 */
+function balancedObjectCandidates(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\') { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') { if (depth === 0) start = i; depth++; continue; }
+    if (ch === '}') {
+      depth--;
+      if (depth === 0 && start >= 0) { out.push(text.slice(start, i + 1)); start = -1; }
+      if (depth < 0) depth = 0;
+    }
+  }
+  return out;
 }
 
 function isJsonObject(text: string): boolean {
@@ -686,11 +791,12 @@ export function buildJudgeBody(
   cred: { baseUrl: string; model: string },
   system: string,
   question: string,
+  maxTokens: number = JUDGE_MAX_TOKENS,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: cred.model,
     temperature: 0,
-    max_tokens: 400,
+    max_tokens: maxTokens,
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: system },
