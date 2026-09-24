@@ -378,7 +378,6 @@
   .chat .chatsep::before,.chat .chatsep::after{content:'';flex:1 1 auto;height:1px;background:var(--rule-soft)}
   .chatcard .row input{flex:1 1 auto;min-width:0}
   .chatcard .counter{font:11px/1 var(--font-mono);color:var(--text-muted);white-space:nowrap;align-self:center}
-  .chat-back,.btnchat{display:none}
   .chat-hint{font-size:11.5px}
 
   /* 页签：文字 + 底部短线（§2.26） */
@@ -433,12 +432,14 @@
   .waitcard,.candcard,.aicard,.bannerbox,.settled,.truthcard,.pendingcard{
     background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);padding:14px;
   }
-  .cands{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:10px}
+  .cands{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;margin-top:10px;align-items:stretch}
   .cand{
     background:var(--paper-200);color:var(--ink-900);border:1px solid var(--paper-300);border-radius:var(--r-xs);
-    padding:12px;display:flex;flex-direction:column;gap:8px;position:relative;
+    padding:12px;display:flex;flex-direction:column;gap:8px;position:relative;height:100%;
   }
-  .cand .cbody{font-family:var(--font-story);font-size:14.5px;line-height:1.7;max-height:7.6em;overflow:hidden}
+  /* 正文自适应但卡片等高、底部的「选这道」对齐在底部（用户要求水平和垂直都对齐） */
+  .cand .cbody{font-family:var(--font-story);font-size:14.5px;line-height:1.7;flex:1 1 auto;overflow:hidden}
+  .cand .row:last-of-type{margin-top:auto}
   .cand .row{gap:6px}
   .cand .pill{border-color:rgba(32,37,38,.28);background:rgba(255,255,255,.4);color:var(--ink-600)}
   .cand .pill.l3{border-color:var(--stamp-no);color:var(--stamp-no)}
@@ -540,15 +541,14 @@
     .topmsg{order:8}
     .pendingcard{order:16}
     .candcard,.waitcard,.aicard{order:30}
+    /* 窄屏（§6 玩法顺序）：状态 → 汤面/工具 → 记录 → **讨论** → 提问(吸底) → 名册/房间/额度 */
     .records{order:38}
-    .composer{order:40}
-    .chatcard{order:46}
+    /* 讨论就在公共记录底下（用户要求）：整块「页签 + 便笺」紧跟在记录之后 */
+    .col-rail>.card{order:40}
+    .composer{order:42}
     .bannerbox{order:60}
     .settled,.truthcard{order:70}
     .roomcard{order:82}
-    /* 右栏整块（页签 + 名册/便笺）要排在主内容之后：它是 .col-rail 的直接子元素，
-       不给它 order 的话默认是 0 —— 手机上会跑到最顶端去（真实踩到过） */
-    .col-rail>.card{order:84}
     .memlist{order:84}
     .creditcard{order:86}
     .playercard{display:flex}
@@ -558,22 +558,14 @@
     .stat .n{font-size:17px}
     /* 触控目标 44px（§23） */
     button,.tab,.hintbtn,.chip.clickable{min-height:44px}
-    /* 窄屏：讨论收成入口按钮 + 近全屏面板（§12.4） */
-    .chatcard{display:none}
-    .btnchat{display:inline-flex;align-items:center;gap:2px;min-height:44px}
-    .chatcard.open{
-      display:flex;flex-direction:column;position:fixed;inset:0;z-index:70;margin:0;border-radius:0;
-      height:100vh;height:100dvh;max-height:none;overflow:hidden;
-      background:var(--desk-950);
-      padding:calc(12px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom));
-    }
-    .chatcard.open .chat{flex:1 1 auto;min-height:0;max-height:none}
-    .chatcard.open .chat-back{display:inline-flex;align-items:center;padding:6px 10px;margin-right:7px}
-    .chatcard.open .chat-hint{display:none}
-    body.chat-open{overflow:hidden}
+    /* 窄屏：讨论内联在流程里（不再做全屏面板），发送按钮就在便笺栏内部 */
+    .chat{max-height:none}
+    .chatcard .row input{min-height:44px}
+    /* 顶栏只留"已连接"，不显示技术细节 */
+    .chip .tech{display:none}
     .toasts{top:60px;right:10px;left:10px;width:auto}
+    .cands{grid-template-columns:minmax(0,1fr)}
   }
-  @media(min-width:901px){.chat-back{display:none}}
 
   /* 减少动态效果（§2.24 / §23） */
   @media(prefers-reduced-motion:reduce){
@@ -719,11 +711,13 @@ const S = {
   hint: '',  recap: null,
   // 全员讨论区：消息、增量游标、草稿（只在内存里，和正式提问草稿分开）、未读数
   chat: [], chatSeq: 0, chatDraft: '', chatReadSeq: 0, chatUnread: 0,
-  // chatOpen：窄屏的讨论面板是否打开（桌面端忽略，侧栏一直看得见）
   // chatPinned：讨论列表是否停在底部 —— 停在底部才自动跟随新消息，也才算"已读"
-  chatOpen: false, chatPinned: true, chatScrollToBottom: false,
+  // chatScrollToBottom：一次性指令（点「有 N 条新消息 ↓」时用），渲染后自动消费
+  chatPinned: true, chatScrollToBottom: false,
   // 右栏页签：crew（在桌成员）/ notes（全员讨论）。切页签不动中央记录的滚动位置。
   railTab: 'crew',
+  /** 房主点「换一批」后的候选题（只活在当前等待阶段；离开房间会被清掉） */
+  pickPool: null,
   keyMask: null,
   keyTest: null,
   configModal: false,
@@ -748,6 +742,8 @@ const serverNow = () => Date.now() + S.serverOffset;
  * ------------------------------------------------------------------------- */
 /** 单条讨论消息长度上限，与服务端 `PLATFORM.chatMaxLen` 对齐（这里只用于输入框提示与字数显示） */
 const CHAT_MAXLEN = 500;
+/** 短提示（窄收据）停留时长 */
+const TOAST_MS = 4600;
 /**
  * 短提示：窄收据从右上角滑入，4.6 秒后收起（§2.23）。
  * 容器 #toasts 在 #app 之外，所以整页重渲染不会把它冲掉；左侧细线的颜色表示性质。
@@ -758,9 +754,25 @@ function pushToast(text, kind = 'ok') {
   const el = document.createElement('div');
   el.className = `toast${kind === 'err' ? ' err' : kind === 'warn' ? ' warn' : ''}`;
   el.textContent = text;
+  el.setAttribute('data-at', String(Date.now()));
   box.appendChild(el);
   while (box.children.length > 4) box.removeChild(box.firstChild);
-  setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 4600);
+  setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, TOAST_MS);
+}
+
+/**
+ * 清理过期收据。
+ * 为什么不能只靠 setTimeout：后台标签页/无头浏览器会把定时器节流到分钟级，
+ * 那样提示会一直挂着。所以每轮渲染（≥1.2 秒一次）也顺手按时间戳清一遍。
+ */
+function pruneToasts() {
+  const box = document.getElementById('toasts');
+  if (!box) return;
+  const now = Date.now();
+  for (const el of Array.from(box.children)) {
+    const at = Number(el.getAttribute('data-at') || 0);
+    if (at > 0 && now - at > TOAST_MS) box.removeChild(el);
+  }
 }
 
 /**
@@ -778,7 +790,6 @@ function closeTopModal() {
     if (r && r.truth) S.truthDismissedKey = `${r.id}:${r.roundNo}`;   // 关掉就别再自动弹
     return true;
   }
-  if (S.chatOpen) { S.chatOpen = false; return true; }
   return false;
 }
 
@@ -828,7 +839,6 @@ function chatPillHtml() {
   const unread = S.chatUnread || 0;
   const n = unread > 99 ? '99+' : unread;
   // 用户正在往上翻旧消息：**不强行拉到底**，只给一个入口
-  if (unread && !S.chatPinned) return `<button class="pill live jump" id="btnChatJump">有 ${n} 条新消息 ↓</button>`;
   return `<span class="pill ${unread ? 'live' : ''}">${unread ? `${n} 条新消息` : '房间内自由发言'}</span>`;
 }
 /**
@@ -848,6 +858,14 @@ function patchChatList() {
   if (pill) pill.innerHTML = chatPillHtml();
   const cnt = $('#chatCount');
   if (cnt) cnt.textContent = `${S.chat.length} 条`;
+  // 输入框与发送键也一起同步（自己刚发完：清空草稿、按钮变灰、字数归零）。
+  // 注意只改 value，不动节点本身 —— 中文输入法组字不能被打断。
+  const input = $('#chatInput');
+  if (input && input.value !== (S.chatDraft || '')) input.value = S.chatDraft || '';
+  const btn = $('#btnChatSend');
+  if (btn) btn.disabled = !String(S.chatDraft || '').trim();
+  const counter = btn && btn.parentElement ? btn.parentElement.querySelector('.counter') : null;
+  if (counter) counter.textContent = `${String(S.chatDraft || '').length}/${CHAT_MAXLEN}`;
   if (S.chatPinned) log.scrollTop = log.scrollHeight;
 }
 
@@ -926,6 +944,17 @@ function clearSession() {
   S.drafts = {};                 // 会话结束：连同内存里的 API Key 草稿一起丢掉
   S.questions = [];
   S.log = [];
+  // 讨论区是**房间内**的东西：离开/换房就清空，别把上一个房间的聊天带到下一个房间
+  S.chat = [];
+  S.chatSeq = 0;
+  S.chatReadSeq = 0;
+  S.chatUnread = 0;
+  S.chatDraft = '';
+  S.chatPinned = true;
+  S.fxChatSeq = 0;
+  S.fxLogAt = 0;
+  S.railTab = 'crew';
+  S.pickPool = null;             // 候选题"换一批"的结果也属于当前房间
 }
 
 /** 房间在服务端已经不存在（最后一人离开会立刻清理 / 过期回收）：回入口页，别一直重试 */
@@ -992,6 +1021,7 @@ const ACTIONS = {
   ready: (f) => ({ type: 'ready', ready: f.ready !== false }),
   kick: (f) => ({ type: 'kick', memberId: f.memberId }),
   create_ai_puzzle: () => ({ type: 'create_ai_puzzle' }),
+  reroll_candidates: () => ({ type: 'reroll_candidates' }),
   reenable_key: (f) => ({ type: 'reenable_key', yes: f.yes === true }),
   revoke_key: () => ({ type: 'revoke_key' }),
   skip_turn: () => ({ type: 'skip_turn' }),
@@ -1097,6 +1127,8 @@ function applyViewPayload(data) {
     for (const e of data.events) if (typeof e.seq === 'number' && e.seq > S.lastSeq) S.lastSeq = e.seq;
   }
   const roomNow = data.view && data.view.room ? data.view.room : null;
+  // 「换一批」的结果只对当前这次等待阶段有效：一开局（或回到选题）就丢掉，别让旧的一批串到下一局
+  if (roomNow && roomNow.status !== 'waiting') S.pickPool = null;
   if (roomNow && roomNow.status === 'settled') {
     S.notice = roomNow.truth ? '有人猜出了汤底：已对所有人公示' : '对局已结束，可以查看复盘';
     S.guessModal = false;                       // 结束了就别再挂着"猜汤底"弹窗
@@ -1354,8 +1386,8 @@ function stateFingerprint() {
     S.screen, S.connected, S.notice, S.error, S.hint,
     S.configModal, S.guessModal, S.keyModal, S.truthModal,
     // 讨论区：消息条数与未读数进指纹（否则新消息不会触发重渲染）；草稿刻意不进（打字不重渲染）；
-    // chatOpen 进指纹（打开/关闭面板要立刻重画）；chatPinned 不进（只看不重画，改了由滚动处理器显式 render）
-    S.chat.length, S.chatUnread, S.chatOpen, S.railTab,
+    // 页签也进指纹（切到「讨论」要立刻重画）；候选题「换一批」的结果同理
+    S.chat.length, S.chatUnread, S.railTab, S.pickPool ? S.pickPool.length : 0,
     S.keyMask, t ? [t.pending === true, t.ok === true, t.reasonCode, t.message, t.url] : null,
     S.recap ? 1 : 0,
     view, S.questions, S.log.length, S.pendingTimeline.length,
@@ -1367,6 +1399,7 @@ function stateFingerprint() {
 
 function render(force = false) {
   const app = $('#app');
+  pruneToasts();                                     // 过期的窄收据顺手清掉（不依赖被节流的定时器）
   // 短提示（§2.23）：notice 表示"刚发生了什么"，像一张窄收据从右上角滑入后自动收起。
   // 持续状态（连接中断 / AI 异常 / 投票 / 移交）走各自区域的常驻提示，不走这里；
   // 入口页（会话失效、房间已清理）也仍然内联显示，不放 toast。
@@ -1447,7 +1480,6 @@ function render(force = false) {
   // 容错：测试用的 DOM 桩没有 body.classList / matchMedia。
   const narrow = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width:900px)').matches : false;
   if (document.body && document.body.classList && typeof document.body.classList.toggle === 'function') {
-    document.body.classList.toggle('chat-open', Boolean(S.chatOpen && narrow));
   }
   if (modalScroll > 0) {
     const modal = document.querySelector('.modal');
@@ -1461,7 +1493,7 @@ function render(force = false) {
     const bad = inRoom && !S.connected;
     chip.innerHTML = bad
       ? '<i class="lamp off"></i>连接中断，正在重试…'
-      : '<i class="lamp"></i>已连接 · Cloudflare Workers + D1';
+      : '<i class="lamp"></i>已连接<span class="tech"> · Cloudflare Workers + D1</span>';
   }
 
   // 房号实时显示在顶栏（§2.7：ROOM / K7M2QX，等宽字体，点整个编号复制）
@@ -1703,11 +1735,14 @@ function viewRoom() {
         <div class="dim">房主可以自己挑一道、让大家投票选，或者让 AI 现写一道新题。选好后你会看到汤面。</div>
       </div>` : ''}
 
-      ${(you.isHost && v.candidates && v.candidates.length > 0 && waiting) ? `
-      <div class="candcard hd"><div class="spread"><h3 style="margin:0">CANDIDATES / 候选题（${v.candidates.length} 道）</h3>
-        <span class="dim">点「选这道」直接开局，或发起「投票选汤」让大家一起选</span></div>
+      ${(you.isHost && pickCandidates(v).length > 0 && waiting) ? `
+      <div class="candcard hd"><div class="spread"><h3 style="margin:0">CANDIDATES / 候选题（${pickCandidates(v).length} 道）</h3>
+        <span class="row">
+          <span class="dim">点「选这道」直接开局，或发起「投票选汤」让大家一起选</span>
+          <button id="btnReroll" class="ghost">换一批</button>
+        </span></div>
         <div class="cands">
-          ${v.candidates.map((c) => `
+          ${pickCandidates(v).map((c) => `
             <div class="cand">
               <div class="attrs">
                 <span class="seal">${esc(c.rating)}</span>
@@ -1785,7 +1820,6 @@ function composerCard(room, you, turn, myTurn, draft) {
     <div class="askrow">
       <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${grace && myTurn ? '发送（宽限期内仍有效）' : (myTurn ? '发送' : '等待回合')}</button>
       ${room.status === 'playing' ? `<button id="btnGuessQuick" class="reason" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>` : ''}
-      <button id="btnChatOpen" class="btnchat note">讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
       <span class="dim">${myTurn ? '轮到你发言了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}${turn.lateSubmit ? ' · 上一轮为临界提交' : ''}</span>
     </div>
     ${S.hint ? `<div class="notice hintbar">提示：${esc(S.hint)}</div>` : ''}
@@ -1874,22 +1908,31 @@ function aiBlockHint(code) {
   }
 }
 
+/** 房主看到的候选题：优先用「换一批」的结果（只在当前等待阶段有效），否则用服务端给的那一批 */
+function pickCandidates(v) {
+  if (S.pickPool && S.pickPool.length > 0) return S.pickPool;
+  return (v && v.candidates) || [];
+}
+
 /**
  * 全员讨论区（设计稿 §12）：房间内自由发言，**不参与判定**
  * —— 不进 AI 主持人、不占回合、不进判定缓存、不加线索、不触发猜汤底。
  * 谁都能发（含旁观者与待入席者）；限长 500 字、独立限流（10 秒 5 条）。
+ *
+ * 位置：桌面端在右栏「讨论」页签里；窄屏时整块卡片排在**公共记录下面**并在流程里内联展开
+ * （不再做全屏面板 —— 之前那个面板既要点提问区的按钮、又会把页面卡住）。
+ * 发送按钮就在便笺栏自己的输入框旁边，提问区里不再放讨论入口。
  */
 function chatCard(room, you, bare = false) {
   const draftLen = String(S.chatDraft || '').length;
   return `
-  <div class="chatcard${bare ? ' bare' : ' card'}${S.chatOpen ? ' open' : ''}">
-    ${bare ? '' : `
-    <div class="spread" style="margin-bottom:10px">
-      <h3 style="margin:0"><button class="chat-back" id="btnChatClose" title="返回房间">← 返回</button>NOTES / 全员讨论 <span class="dim" id="chatCount">${S.chat.length} 条</span></h3>
+  <div class="chatcard${bare ? ' bare' : ' card'}">
+    ${bare ? `<div class="spread" style="margin-bottom:8px"><span class="chat-hint dim">便笺只贴在桌边：不进判定、不占回合</span><span id="chatPill">${chatPillHtml()}</span></div>`
+      : `<div class="spread" style="margin-bottom:10px">
+      <h3 style="margin:0">NOTES / 全员讨论 <span class="dim" id="chatCount">${S.chat.length} 条</span></h3>
       <span id="chatPill">${chatPillHtml()}</span>
-    </div>`}
-    ${bare ? `<div class="spread" style="margin-bottom:8px"><span class="chat-hint dim">便笺只贴在桌边：不进判定、不占回合</span><span id="chatPill">${chatPillHtml()}</span></div>` : ''}
-    ${bare ? '' : `<div class="dim chat-hint" style="margin-bottom:8px">房号 ${esc(room.code)} · 只用来商量怎么问、怎么推理。这里说的话不会进判定，也不占提问回合。</div>`}
+    </div>
+    <div class="dim chat-hint" style="margin-bottom:8px">房号 ${esc(room.code)} · 只用来商量怎么问、怎么推理。这里说的话不会进判定，也不占提问回合。</div>`}
     <div class="chat" id="chatLog">
       ${chatListHtml()}
     </div>
@@ -2656,17 +2699,17 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnStart': requestStart('pick'); break;
-      case 'btnChatSend': await sendChat(); break;
       // 窄屏：打开近全屏讨论面板（桌面端这两个按钮被 CSS 隐藏，侧栏一直看得见讨论卡片）
       // 注意用 render(true)：点这两个按钮时聊天输入框通常还带着焦点，非强制渲染会被
       // isBusy() 推迟最多 700ms —— 表现就是"点了返回没反应"。
-      case 'btnChatOpen': S.chatOpen = true; S.chatPinned = true; S.chatScrollToBottom = true; markChatRead(); render(true); break;
-      case 'btnChatClose': S.chatOpen = false; render(true); break;
       // 「有 N 条新消息 ↓」：用户主动要求跳到底部（我们不强行拉走他）
       case 'btnChatJump': S.chatPinned = true; S.chatScrollToBottom = true; markChatRead(); render(true); break;
       // 右栏页签（§5.5）：切页签只换右侧内容，不动中央记录的滚动位置，也不清空聊天草稿
-      case 'btnTabCrew': S.railTab = 'crew'; render(); break;
-      case 'btnTabNotes': S.railTab = 'notes'; markChatRead(); render(); break;
+      // 右栏页签（§5.5）：切页签只换右侧内容，不动中央记录的滚动位置，也不清空聊天草稿。
+      // 用 render(true)：光标常常还留在便笺输入框里，非强制渲染会被 isBusy() 一直推迟 ——
+      // 表现就是"点了页签没反应"（真实踩到过）。草稿存在 S.chatDraft 里，重渲染不会丢。
+      case 'btnTabCrew': S.railTab = 'crew'; render(true); break;
+      case 'btnTabNotes': S.railTab = 'notes'; markChatRead(); render(true); break;
       // 顶栏「房间信息与设置」（§2.7 / §5.2）：房间元数据、额度铭牌与房主入口都收进抽屉
       case 'btnSeat': {
         // 待入席者的"举手"= 申请下一轮上桌（服务端按成员状态区分语义）
@@ -2691,6 +2734,8 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnCfg': S.configModal = true; render(true); break;
+      // 便笺栏自己的「贴上」按钮（讨论区在右栏页签 / 窄屏内联，都在同一张卡片里）
+      case 'btnChatSend': await sendChat(); break;
       case 'btnCfgClose':
         Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
         S.configModal = false; render(true); break;
@@ -2800,6 +2845,14 @@ document.addEventListener('click', async (e) => {
       case 'btnDeclineReturn': request({ t: 'decline_return' }); break;
       case 'btnFixKey': S.keyModal = true; S.keyTest = null; render(); break;
       case 'btnRevokeKey': await api('/api/credentials', { method: 'DELETE' }); S.notice = '已撤销 Key'; render(); break;
+      // 房主「换一批」候选题：拿服务端新抽的一批，替换候选题区块（不改房间状态）
+      case 'btnReroll': {
+        const res = await sendAction({ type: 'reroll_candidates' }, { silent: true });
+        const list = res && res.data && Array.isArray(res.data.candidates) ? res.data.candidates : null;
+        if (list) { S.pickPool = list; S.notice = `换了一批候选（${list.length} 道）`; }
+        render(true);
+        break;
+      }
       case 'btnLeave': await leaveRoom(); break;
       case 'btnRecap': {
         const recap = await api('/api/recap');
@@ -2816,6 +2869,10 @@ document.addEventListener('click', async (e) => {
 
 /**
  * 发一条讨论消息。失败保留草稿（不吞用户输入），成功后立刻把自己那条挂上去（clientMessageId 去重）。
+ *
+ * 注意：全程走 patchChatList()（局部更新），**不做整页 render(true)**：
+ *    整页重渲染会把整个房间（含正在输入的提问框、页签、名册）重建一遍，
+ *    表现就是"在讨论区说句话，整页闪一下"——房间还没开局时尤其明显。
  */
 async function sendChat() {
   const text = String(S.chatDraft || '').trim();
@@ -2832,15 +2889,19 @@ async function sendChat() {
   });
   S.chatDraft = '';
   countChatUnread();
-  render(true);
+  S.chatPinned = true;                       // 自己发的那条必须看得见
+  S.chatScrollToBottom = true;
+  patchChatList();
   const el0 = $('#chatLog'); if (el0) el0.scrollTop = el0.scrollHeight;
+  const input0 = $('#chatInput'); if (input0) input0.focus();
+
   const res = await sendAction({ type: 'chat', text, clientMessageId }, { silent: true });
   if (!res) {
     // 失败：把自己那条撤掉、草稿还回输入框（不吞用户写的东西）；错误信息已由 sendAction 显示
     S.chat = S.chat.filter((m) => m.clientMessageId !== clientMessageId);
     S.chatDraft = text;
     countChatUnread();
-    render(true);
+    patchChatList();
     const back = $('#chatInput'); if (back) back.focus();
     return;
   }
@@ -2851,7 +2912,7 @@ async function sendChat() {
     const i = S.chat.findIndex((m) => m.clientMessageId === clientMessageId && m.pending === true);
     if (i >= 0 && msg.chatSeq) S.chat[i] = msg;
   }
-  render(true);
+  patchChatList();
   const el = $('#chatLog'); if (el) el.scrollTop = el.scrollHeight;
   const input = $('#chatInput'); if (input) { input.value = ''; input.focus(); }
 }

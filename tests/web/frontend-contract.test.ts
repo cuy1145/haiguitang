@@ -75,13 +75,40 @@ test('F6: 同一个功能只留一个入口（不重复堆放按钮）', () => {
   // 猜汤底：只在底部书写板（btnGuessQuick）出现一次；工具条里不再有第二个
   assert.ok(html.includes('id="btnGuessQuick"'), '底部书写板要有猜汤底');
   assert.ok(!html.includes('id="btnGuess"'), '工具条里不该再有第二个猜汤底（曾重复）');
-  // 讨论：桌面靠右栏页签，窄屏才用入口按钮 —— 按钮必须带 btnchat（桌面 display:none）
-  assert.ok(/id="btnChatOpen" class="btnchat/.test(html), '窄屏讨论入口按钮要带 btnchat 类（否则桌面上会与右栏页签重复）');
+  // 讨论：入口是右栏页签（桌面）与流程里内联的便笺栏（窄屏）；
+  // 提问区里不再放讨论按钮（用户反馈：那里的按钮会与页签重复，还会卡住页面）
   assert.ok(html.includes('id="btnTabNotes"'), '右栏要有讨论页签');
+  assert.ok(!html.includes('btnChatOpen'), '提问区里不该再有讨论入口');
+  assert.ok(html.includes('id="btnChatSend"'), '便笺栏自带发送按钮');
   // 房间信息与设置：只保留左栏「ROOM / 房间」卡片，顶栏不再重复一个入口
   assert.ok(!html.includes('btnRoomInfo'), '顶栏不该再有房间信息入口');
   assert.ok(!html.includes('btnCfgQuick'), '工具条里不该再有第二个对局参数（左栏已有）');
   assert.ok(html.includes('HOST / 房主操作'), '房主操作集中在左栏卡片里');
+  // 候选题：给 2 道 + 一个「换一批」
+  assert.ok(html.includes('id="btnReroll"'), '候选题旁边要有换一批按钮');
+});
+
+test('F8: 窄屏把讨论排在公共记录之后，且连接状态只写"已连接"', () => {
+  const html = read(MAIN);
+  const css = styleOf(html);
+  // 窄屏顺序：记录 38 → 讨论（右栏整块）40 → 书写板（吸底）→ 名册 84 …
+  const mobile = css.slice(css.indexOf('@media(max-width:900px)'));
+  const orderOf = (sel: string): number => {
+    const m = mobile.match(new RegExp(`\\${sel}\\{order:(\\d+)\\}`));
+    return m ? Number(m[1]) : NaN;
+  };
+  const records = orderOf('.records');
+  const railBlock = (() => { const m = mobile.match(/\.col-rail>\.card\{order:(\d+)\}/); return m ? Number(m[1]) : NaN; })();
+  const roster = orderOf('.memlist');
+  assert.ok(Number.isFinite(records) && Number.isFinite(railBlock), '窄屏要有记录与讨论块的顺序');
+  assert.ok(railBlock > records, `讨论块要排在公共记录之后（records=${records}, 讨论=${railBlock}）`);
+  assert.ok(roster > railBlock, '名册仍在更后面');
+  // 连接状态：技术细节包在 .tech 里，窄屏隐藏
+  assert.ok(/已连接<span class="tech">/.test(html), '连接状态要拆成"已连接 + 技术细节"');
+  assert.ok(/\.chip \.tech\{display:none\}/.test(mobile), '窄屏要隐藏技术细节');
+  // 候选题两列等高自适应
+  assert.ok(/\.cands\{display:grid;grid-template-columns:repeat\(auto-fit/.test(css), '候选题要自适应列数');
+  assert.ok(/\.cand\{[^}]*height:100%/.test(css), '候选题卡片要等高');
 });
 
 test('F7: 入场动画只加在新条目上（否则每次重渲染都会闪一遍）', () => {

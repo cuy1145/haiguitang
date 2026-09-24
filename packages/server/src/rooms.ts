@@ -319,7 +319,9 @@ export class RoomRuntime {
       this.room = {
         ...this.room,
         members: this.room.members.map((m) => (m.id === memberId
-          ? { ...m, conn: 'disconnected' as const, lastHeartbeatAt: this.now - 60000 - 1 }
+          // ⚠️ 必须用 PLATFORM.disconnectSec：这里写死 60000 的话，
+          //    阈值一调大，"断连"就会被下一次扫描立刻改回 connected（移交也跟着取消）。
+          ? { ...m, conn: 'disconnected' as const, lastHeartbeatAt: this.now - PLATFORM.disconnectSec * 1000 - 1 }
           : m)),
       };
       this.persist();

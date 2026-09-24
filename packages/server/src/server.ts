@@ -538,6 +538,10 @@ export class App {
     }
     if (url.pathname === '/debug/member-state' && req.method === 'POST') {
       const memberId = String(body.memberId ?? '');
+      // 这是**测试支撑**接口：改完状态要像真实存在性变化那样广播事件，
+      // 否则测试只能靠"把假时钟推很久让别的成员自然挂机"来触发广播 ——
+      // 那样推得越久越容易顺带触发别的机制（房主无响应等），测出来的东西就不纯了。
+      const emitted: Array<{ type: 'member_state_changed'; memberId: string; line: 'activity' | 'conn'; from: string; to: string }> = [];
       await runtime.enqueue(() => {
         const room = runtime.room;
         runtime['room'] = {
@@ -548,15 +552,18 @@ export class App {
             if (body.activity === 'idle' || body.activity === 'active') {
               patch.activity = body.activity;
               patch.lastActivityAt = body.activity === 'idle' ? this.deps.now() - 600000 : this.deps.now();
+              if (m.activity !== body.activity) emitted.push({ type: 'member_state_changed', memberId, line: 'activity', from: m.activity, to: body.activity });
             }
             if (body.conn === 'connected' || body.conn === 'disconnected') {
               patch.conn = body.conn;
               patch.lastHeartbeatAt = body.conn === 'disconnected' ? this.deps.now() - 600000 : this.deps.now();
+              if (m.conn !== body.conn) emitted.push({ type: 'member_state_changed', memberId, line: 'conn', from: m.conn, to: body.conn });
             }
             return { ...m, ...patch };
           }),
         };
-        runtime.persist();
+        if (emitted.length > 0) runtime['apply'](emitted);
+        else runtime.persist();
       });
       this.deps.store.audit({ action: 'debug_member_state', roomId, subject: memberId, meta: { activity: body.activity, conn: body.conn } });
       json(res, 200, { ok: true });

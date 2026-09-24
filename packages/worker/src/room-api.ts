@@ -195,14 +195,16 @@ async function withRoom(
     });
 
     // 恢复候选题目列表：无状态请求下 RoomRuntime 内存里的 candidates 每次都是空的，
-    //   · 等待开局 → 按房间筛选条件给出可选题目（房主可从中指定）
+    //   · 等待开局 → 按房间筛选条件给出可选题目（数量＝房主设的候选数，默认 2 道）
     //   · 选题投票进行中 → 用投票记录里持久化的 puzzleIds（否则客户端看不到候选卡片）
     if (snapshot.room.status === 'waiting') {
-      runtime.setCandidates(store.listPuzzles({
+      const pool = store.listPuzzles({
         ratingMax: snapshot.room.config.ratingMax,
         difficultyMin: snapshot.room.config.difficultyMin,
         difficultyMax: snapshot.room.config.difficultyMax,
-      }).slice(0, 8).map((p) => p.id));
+      });
+      // 用房间号做种子轮转：同一个房间每次轮询看到的是同一批（不会闪），不同房间看到的不一样
+      runtime.setCandidates(previewCandidates(pool, snapshot.room.code, snapshot.room.config.candidateCount));
     } else if (snapshot.room.vote && snapshot.room.vote.type === 'puzzle_choice' && snapshot.room.vote.status === 'open') {
       runtime.setCandidates([...snapshot.room.vote.puzzleIds]);
     }
@@ -314,6 +316,21 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
       case 'create_ai_puzzle': {
         const r = await runtime.createAiPuzzle(memberId);
         return r.ok ? okWithView(r.data) : failWithView(r.code, r.detail);
+      }
+      /** 房主「换一批」候选题：只读动作，从题库里另抽 N 道（不改房间状态、不落库） */
+      case 'reroll_candidates': {
+        if (runtime.room.hostId !== memberId) return failWithView('NOT_HOST');
+        if (runtime.room.status !== 'waiting') return failWithView('NOT_ALLOWED');
+        const pool = store.listPuzzles({
+          ratingMax: runtime.room.config.ratingMax,
+          difficultyMin: runtime.room.config.difficultyMin,
+          difficultyMax: runtime.room.config.difficultyMax,
+        });
+        const ids = rerollCandidates(pool, runtime.room.config.candidateCount, runtime.candidateIds());
+        if (ids.length === 0) return failWithView('PUZZLE_NOT_FOUND');
+        runtime.setCandidates(ids);
+        const picked = ids.map((id) => store.getPuzzle(id)).filter((p): p is NonNullable<typeof p> => Boolean(p));
+        return okWithView({ candidates: picked } as unknown as Record<string, unknown>);
       }
       case 'ready': {
         const r = await runtime.setReady(memberId, body.ready !== false);
@@ -657,6 +674,40 @@ function publicQuestionLog(
     text: q.text, answer: q.answer, reasonCode: q.reasonCode, source: q.source,
     late: q.late === true, explain: q.explain ?? null, at: q.createdAt,
   }));
+}
+
+/**
+ * 等待阶段给房主看的候选题：按房间号做种子把题库轮转一下再取前 N 道。
+ * 为什么不用 Math.random：Worker 每个请求都会重算一次候选列表，
+ * 真随机会让**每次轮询都换一批**（界面疯狂跳动）；用房间号做种子则同房间稳定、不同房间不同。
+ */
+function previewCandidates<T extends { id: string }>(pool: T[], code: string, count: number): string[] {
+  const n = Math.max(1, Math.min(Number(count) || 2, 5));
+  if (pool.length === 0) return [];
+  let seed = 0;
+  for (const ch of String(code)) seed = (seed * 31 + ch.codePointAt(0)) % 100000;
+  const start = pool.length > n ? seed % pool.length : 0;
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(n, pool.length); i++) out.push(pool[(start + i) % pool.length]!.id);
+  return out;
+}
+
+/**
+ * 房主点「换一批」时的候选题目：**真随机**抽 N 道（尽量避开当前这批，让换一批有感觉）。
+ * 这是只读动作：不改房间状态，所以不落库、不需要迁移。
+ */
+function rerollCandidates<T extends { id: string }>(pool: T[], count: number, avoid: string[]): string[] {
+  const n = Math.max(1, Math.min(Number(count) || 2, 5));
+  if (pool.length === 0) return [];
+  const avoidSet = new Set(avoid);
+  const fresh = pool.filter((p) => !avoidSet.has(p.id));
+  const source = fresh.length >= n ? fresh : pool;
+  const shuffled = [...source];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+  }
+  return shuffled.slice(0, Math.min(n, shuffled.length)).map((p) => p.id);
 }
 
 function emptyRoomRow(id: string, code: string, config: GameConfig, now: number): {

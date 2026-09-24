@@ -10,12 +10,20 @@
 import type { GameConfig } from './types.ts';
 
 export const PLATFORM = {
-  /** 挂机判定：前台无活动 */
-  idleSec: 300,
-  /** 挂机判定：后台标签页 */
-  hiddenIdleSec: 900,
-  /** 断连判定：连接层心跳缺失 */
-  disconnectSec: 60,
+  /**
+   * 挂机判定：前台无活动。
+   * 10 分钟：玩家"在想问题/看记录"时不该被判成挂机（客户端只在真实交互时上报活动，
+   * 所以阈值必须给得足够宽），真走了的人由房主「跳过本轮」处理。
+   */
+  idleSec: 600,
+  /** 挂机判定：后台标签页（切出去查资料/接电话很常见，给到 30 分钟） */
+  hiddenIdleSec: 1800,
+  /**
+   * 断连判定：连接层心跳缺失。
+   * ⚠️ 手机锁屏、后台标签页的定时器会被系统节流，60 秒太容易误判成"离线"——
+   * 曾出现"切出去一分钟回来发现自己掉线了"。给到 3 分钟，仍然远快于挂机判定。
+   */
+  disconnectSec: 180,
   heartbeatSec: 20,
   /** 房主响应性：无响应多久后触发自动投票降级 */
   hostUnresponsiveSec: 180,
@@ -73,7 +81,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
     hintQuotaPerMember: 3, hintTier3Max: 1, hintCooldownSec: 60,
     maxRounds: 15, turnOrderMode: 'join', idleSkip: true,
     ratingMax: 'L3', difficultyMin: 1, difficultyMax: 5,
-    candidateCount: 3, voteDurationSec: 60, allowSpectator: true,
+    candidateCount: 2, voteDurationSec: 60, allowSpectator: true,
     preset: 'quick',
   },
   standard: {
@@ -84,7 +92,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
     hintQuotaPerMember: 3, hintTier3Max: 1, hintCooldownSec: 120,
     maxRounds: 20, turnOrderMode: 'join', idleSkip: true,
     ratingMax: 'L3', difficultyMin: 1, difficultyMax: 5,
-    candidateCount: 4, voteDurationSec: 120, allowSpectator: true,
+    candidateCount: 2, voteDurationSec: 120, allowSpectator: true,
     preset: 'standard',
   },
   casual: {
@@ -95,7 +103,7 @@ export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
     hintQuotaPerMember: 5, hintTier3Max: 2, hintCooldownSec: 240,
     maxRounds: 30, turnOrderMode: 'join', idleSkip: false,
     ratingMax: 'L3', difficultyMin: 1, difficultyMax: 5,
-    candidateCount: 5, voteDurationSec: 180, allowSpectator: true,
+    candidateCount: 2, voteDurationSec: 180, allowSpectator: true,
     preset: 'casual',
   },
 };
@@ -134,7 +142,7 @@ export const CONFIG_SCHEMA: readonly ConfigFieldSpec[] = [
   { key: 'ratingMax', label: '内容分级上限', type: 'enum', values: ['L1', 'L2', 'L3'], afterStart: 'free', effective: 'next-match' },
   { key: 'difficultyMin', label: '难度下限', type: 'int', min: 1, max: 5, afterStart: 'free', effective: 'next-match' },
   { key: 'difficultyMax', label: '难度上限', type: 'int', min: 1, max: 5, afterStart: 'free', effective: 'next-match' },
-  { key: 'candidateCount', label: '候选题数量', type: 'int', min: 3, max: 5, afterStart: 'locked', effective: 'next-match' },
+  { key: 'candidateCount', label: '候选题数量', type: 'int', min: 1, max: 5, afterStart: 'locked', effective: 'next-match' },
   { key: 'voteDurationSec', label: '选题投票时长（秒）', type: 'int', min: 30, max: 600, afterStart: 'locked', effective: 'next-match' },
   { key: 'allowSpectator', label: '允许旁观', type: 'bool', afterStart: 'free', effective: 'immediate' },
 ];

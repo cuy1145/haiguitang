@@ -415,7 +415,10 @@ test('I-04: 挂机不移交、断连才移交；移交后切站点额度、原 K
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ roomId: room.roomId, memberId: host.memberId, activity: 'idle' }),
   });
-  advance(400_000);
+  // 挂机状态变化会广播（/debug/member-state 现在像真实存在性变化一样发事件，
+  // 不需要再靠"把假时钟推很久"来触发，避免顺带触发房主无响应等其他机制）
+  await settle();
+  advance(1_000);
   await settle();
   let st = roomState(room.roomId);
   assert.equal(st.transfer.state, 'idle', '房主挂机不得触发移交');
@@ -425,7 +428,7 @@ test('I-04: 挂机不移交、断连才移交；移交后切站点额度、原 K
   assert.ok(c2.texts().some((t) => t.includes('挂机')), '应广播挂机状态变化');
 
   // ② 房主断连（真实路径：连接关闭）→ 30 秒宽限后移交
-  //    注意：假时钟跳了 400 秒，另外两位成员也会被判挂机；
+  //    注意：假时钟跳过了挂机阈值，另外两位成员也会被判挂机；
   //    真实场景里他们在浏览页面，所以这里显式补一次活动上报，让"在线活跃候选"成立。
   c2.activity(); c3.activity();
   await settle(2);
@@ -1276,4 +1279,7 @@ test('I-20: 参数变更：非法值整批拒绝、开局后只允许增大、�
   assert.equal(conflict.t, 'error', '版本冲突必须被拒绝（防两个标签页互相覆盖）');
   host.close();
 });
+
+
+
 
