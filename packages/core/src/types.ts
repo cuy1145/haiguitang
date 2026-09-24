@@ -97,7 +97,8 @@ export type ActionReject =
   | 'VOTE_NOT_OPEN'
   | 'NOT_HOST'
   | 'NOT_ALL_READY'
-  | 'NOT_ALLOWED';
+  | 'NOT_ALLOWED'
+  | 'PUZZLE_NOT_FOUND';
 
 // ---------------------------------------------------------------- 题库
 /** 原子事实点（🔴 永不 下发）。isTrue 是判定结论的唯一权威来源。 */

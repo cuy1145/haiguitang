@@ -298,7 +298,8 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
           typeof body.puzzleId === 'string' ? body.puzzleId : undefined,
           body.force === true,
         );
-        return result.ok ? okWithView() : failWithView(result.code);
+        // detail 要透传：开局失败时前端要知道到底是哪一道题找不到（自定义题没保存？id 对不上？）
+        return result.ok ? okWithView() : failWithView(result.code, result.detail);
       }
       case 'create_ai_puzzle': {
         const r = await runtime.createAiPuzzle(memberId);

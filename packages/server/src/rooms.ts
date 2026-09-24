@@ -553,7 +553,19 @@ export class RoomRuntime {
       const chosen = puzzleId
         ? (list.find((p) => p.id === puzzleId) ?? (custom && custom.id === puzzleId ? custom : undefined))
         : list[Math.floor(this.deps.rand() * list.length)];
-      if (!chosen) return { ok: false, code: 'NOT_ALLOWED' };
+      // 找不到指定题目时给出**具体原因**：以前一律回 NOT_ALLOWED（"当前状态下不能做这个操作"），
+      // 于是"AI 创作的题开局失败"看起来像状态问题，其实多半是自定义题没读到 / id 对不上。
+      if (!chosen) {
+        return {
+          ok: false,
+          code: 'PUZZLE_NOT_FOUND' as ActionReject,
+          detail: {
+            puzzleId: puzzleId ?? null,
+            customPuzzleId: custom ? custom.id : null,
+            librarySize: list.length,
+          },
+        };
+      }
       return this.enqueue(() => {
         if (this.room.status !== 'waiting') return { ok: false as const, code: 'NOT_ALLOWED' as ActionReject };
         const blocked = readyGate();

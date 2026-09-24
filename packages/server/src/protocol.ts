@@ -125,6 +125,7 @@ export function messageOf(code: string): string {
     case 'MATCH_NOT_ACTIVE': return '对局未在进行中。';
     case 'NOT_HOST': return '只有房主可以做这个操作。';
     case 'NOT_ALLOWED': return '当前状态下不能做这个操作（多半是对局已经开始/结束了）。';
+    case 'PUZZLE_NOT_FOUND': return '找不到这道题：可能房间里的自定义题（AI 创作）没保存成功，或题目 id 对不上。再生成一次即可。';
     case 'ROOM_NOT_FOUND': return '房间不存在或已被清理。';
     case 'ROOM_CLOSED': return '房间已经结束，不能再加入了。';
     case 'ROOM_FULL': return '房间人数已满。';
