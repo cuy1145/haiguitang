@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>海龟汤 · 深潜</title>
+<!--
+  ════════════════════════════════════════════════════════════════════════════
+  海龟汤 · 深潜（DIVE）—— 与 v1（/index.html）**完全隔离**的第二套前端。
+
+  · 隔离方式：不引用 v1 的任何 CSS/JS/资源；自己的 localStorage 键（ht.deep.*）；
+    自己的 DOM 结构与类名；放在 /deep/ 路径下。两个前端可以同时开着互不影响。
+  · 只依赖同一套后端 HTTP 接口（/api/*），后端一行没改。
+  · 设计隐喻：房间 = 一次下潜；提问 = 声呐脉冲；判定 = 回声；探索度 = 下潜深度；
+    猜中汤底 = 破水而出（整个界面从深海亮到海面）。
+  · 玩法范围：建房/加入/准备/开局（选题/投票）/提问/提示/猜汤底/汤底公示/下一潜/离开/结束对局。
+    管理类（API Key、对局参数、AI 创作、复盘）仍走 v1 —— 那些是"潜水装备柜"，不属于这一屏。
+  ════════════════════════════════════════════════════════════════════════════
+-->
+<style>
+  :root{
+    --abyss:#02121b; --deep:#04202c; --shelf:#06303f; --kelp:#0b4257;
+    --bio:#7ff5d4; --sonar:#54d8ff; --amber:#ffc46b; --coral:#ff8a6b; --haze:#9fc4d0;
+    --line:rgba(127,245,212,.16); --line2:rgba(127,245,212,.32);
+    --glow:0 0 24px -6px rgba(84,216,255,.55);
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Consolas,monospace;
+    --serif:Georgia,"Songti SC","Source Han Serif SC",serif;
+    --r:3px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(120% 60% at 50% -10%,#0d5c73 0%,#062b3a 38%,#02121b 100%) fixed,var(--abyss);
+    color:#dff2f7;font:14px/1.65 var(--mono);-webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  /* 海面透下来的光柱 */
+  .rays{position:fixed;inset:-20% -10% auto;height:80vh;pointer-events:none;z-index:0;opacity:.5;
+    background:repeating-linear-gradient(96deg,rgba(127,245,212,.10) 0 2px,transparent 2px 130px);
+    transform-origin:top center;animation:sway 19s ease-in-out infinite}
+  @keyframes sway{0%,100%{transform:skewX(-9deg) scaleY(1)}50%{transform:skewX(6deg) scaleY(1.08)}}
+  /* 气泡 */
+  .bubbles{position:fixed;inset:0;pointer-events:none;z-index:1;overflow:hidden}
+  .bubbles i{position:absolute;bottom:-40px;width:6px;height:6px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.9),rgba(127,245,212,.25) 60%,transparent 70%);
+    animation:rise linear infinite}
+  @keyframes rise{0%{transform:translateY(0) scale(.6);opacity:0}
+    12%{opacity:.85}100%{transform:translateY(-108vh) scale(1.15);opacity:0}}
+
+  .wrap{position:relative;z-index:2;max-width:1080px;margin:0 auto;padding:16px 16px 120px}
+
+  /* ── 仪器面板 ─────────────────────────────────────────── */
+  .pod{position:relative;background:linear-gradient(180deg,rgba(9,44,58,.86),rgba(4,20,28,.9));
+    border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;margin-bottom:14px;
+    box-shadow:inset 0 1px 0 rgba(127,245,212,.07)}
+  .pod::before,.pod::after{content:'';position:absolute;width:9px;height:9px;border:1px solid var(--line2);pointer-events:none}
+  .pod::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+  .pod::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+  .ttl{display:flex;align-items:baseline;gap:10px;margin:0 0 10px;font-size:11.5px;letter-spacing:.24em;
+    text-transform:uppercase;color:var(--bio);font-weight:600}
+  .ttl small{font:11px/1 var(--mono);letter-spacing:.06em;color:var(--haze);opacity:.75;text-transform:none}
+  .dim{color:var(--haze);opacity:.8;font-size:12px}
+  .hr{height:1px;background:var(--line);margin:12px 0}
+
+  /* ── 顶部：船位 / 深度 / 气压 ─────────────────────────── */
+  .hud{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .brand .eye{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;font-size:18px;
+    background:radial-gradient(circle at 50% 45%,rgba(127,245,212,.35),rgba(84,216,255,.08) 60%,transparent 70%);
+    border:1px solid var(--line2);animation:pulse 3.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(127,245,212,.30)}50%{box-shadow:0 0 0 12px rgba(127,245,212,0)}}
+  .brand b{display:block;font-size:15px;letter-spacing:.02em}
+  .brand span{font-size:11px;color:var(--haze);letter-spacing:.14em}
+  .gauges{display:flex;gap:8px;flex-wrap:wrap}
+  .g{border:1px solid var(--line);border-radius:var(--r);padding:4px 9px;font-size:11px;color:var(--haze);
+    background:rgba(2,18,27,.6);letter-spacing:.06em}
+  .g b{color:var(--bio);font-weight:600;letter-spacing:0}
+  .g.warn b{color:var(--amber)} .g.bad b{color:var(--coral)}
+
+  /* ── 汤面：海面浮标 ──────────────────────────────────── */
+  .surface{position:relative;overflow:hidden;border-radius:var(--r);padding:16px;
+    background:linear-gradient(180deg,rgba(127,245,212,.10),rgba(84,216,255,.03));border:1px solid var(--line2)}
+  .surface::after{content:'';position:absolute;left:0;right:0;top:-60%;height:120%;
+    background:radial-gradient(60% 50% at 20% 0%,rgba(255,255,255,.10),transparent 70%);pointer-events:none}
+  .surface h2{font:600 20px/1.4 var(--serif);margin:0 0 8px;color:#f2fbff}
+  .surface p{margin:0;font:16px/1.95 var(--serif);white-space:pre-wrap;color:#eaf7fb}
+  .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  .tag{font-size:10.5px;letter-spacing:.08em;color:var(--haze);border:1px solid var(--line);border-radius:99px;padding:2px 8px}
+  .tag.risk{color:var(--coral);border-color:rgba(255,138,107,.4)}
+
+  /* ── 深度计 + 声呐 ───────────────────────────────────── */
+  .instr{display:grid;grid-template-columns:1fr 148px;gap:14px;align-items:stretch}
+  @media(max-width:720px){.instr{grid-template-columns:1fr}}
+  .depth{position:relative;height:14px;border:1px solid var(--line);border-radius:99px;background:rgba(0,0,0,.35);overflow:hidden}
+  .depth i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sonar),var(--bio));transition:width .5s ease}
+  .depth+.dim{margin-top:6px}
+  .sonar{position:relative;width:148px;height:148px;margin:0 auto;border-radius:50%;
+    border:1px solid var(--line2);background:radial-gradient(circle,rgba(84,216,255,.10),transparent 70%)}
+  .sonar i{position:absolute;inset:24%;border:1px solid var(--line);border-radius:50%}
+  .sonar i:nth-child(2){inset:40%}
+  .sonar .sweep{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,rgba(127,245,212,.42),transparent 32%);
+    animation:sweep 4.2s linear infinite;mix-blend-mode:screen}
+  @keyframes sweep{to{transform:rotate(360deg)}}
+  .sonar .blip{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--bio);box-shadow:var(--glow)}
+  .sonar .core{position:absolute;inset:0;display:grid;place-items:center;font:600 20px/1 var(--mono);color:#eafff9}
+  .sonar .cap{position:absolute;left:0;right:0;bottom:-18px;text-align:center;font-size:10.5px;color:var(--haze)}
+
+  /* ── 回波记录 ────────────────────────────────────────── */
+  .echoes{display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto;padding-right:4px}
+  .echo{position:relative;display:grid;grid-template-columns:20px 1fr;gap:10px;padding:9px 11px;border-radius:var(--r);
+    background:linear-gradient(90deg,rgba(127,245,212,.045),rgba(255,255,255,.012));border:1px solid var(--line)}
+  .echo.mine{border-color:var(--line2);background:linear-gradient(90deg,rgba(127,245,212,.13),rgba(84,216,255,.03))}
+  .echo .dot{width:12px;height:12px;margin-top:4px;border-radius:50%;border:1px solid var(--line2);
+    display:grid;place-items:center}
+  .echo .dot::after{content:'';width:5px;height:5px;border-radius:50%;background:currentColor}
+  .echo.yes{color:var(--bio)} .echo.no{color:#7d9aa6} .echo.irrelevant{color:#6d8791}
+  .echo.unanswerable{color:var(--amber)}
+  .echo .who{font-size:11px;color:var(--haze);display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+  .echo .q{font:15px/1.7 var(--serif);color:#eef9fc;margin-top:3px}
+  .echo .a{margin-top:5px;font-size:12px;color:var(--haze)}
+  .echo .a b{color:inherit;font-weight:700;letter-spacing:.06em}
+  .echo .rep{display:block;margin-top:5px;padding-left:9px;border-left:2px solid var(--line2);font-style:italic;color:#cfe7ef}
+  .flow{font-size:11.5px;color:#87a9b5;padding:3px 11px;border-left:2px dashed var(--line2)}
+
+  /* ── 声呐发射器（主操作区）──────────────────────────── */
+  .ping{position:sticky;bottom:0;z-index:20;margin-top:14px;
+    background:linear-gradient(180deg,rgba(4,25,35,.72),rgba(2,18,27,.97));backdrop-filter:blur(10px);
+    border:1px solid var(--line2);border-radius:var(--r);padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));
+    box-shadow:0 -18px 40px -24px rgba(0,0,0,.95)}
+  .row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  input,textarea,select{font:inherit;color:#eafcff;width:100%;padding:11px 12px;border-radius:var(--r);
+    border:1px solid var(--line2);background:rgba(0,10,16,.66);transition:border-color .2s,box-shadow .2s}
+  input:focus,textarea:focus{outline:none;border-color:var(--bio);box-shadow:var(--glow)}
+  button{font:inherit;cursor:pointer;border-radius:var(--r);padding:10px 14px;color:#dff2f7;
+    border:1px solid var(--line2);background:linear-gradient(180deg,rgba(127,245,212,.10),rgba(127,245,212,.03));
+    transition:transform .12s,box-shadow .18s,border-color .18s}
+  button:hover:not(:disabled){transform:translateY(-1px);border-color:var(--bio);box-shadow:var(--glow)}
+  button:disabled{opacity:.38;cursor:not-allowed}
+  button.go{background:linear-gradient(180deg,var(--sonar),#1f8fb5);border-color:transparent;color:#01202b;font-weight:700;letter-spacing:.06em}
+  button.breach{background:linear-gradient(180deg,var(--amber),#e08a2a);border-color:transparent;color:#2a1702;font-weight:700}
+  button.ghost{background:transparent}
+  button.danger{color:var(--coral);border-color:rgba(255,138,107,.42)}
+  .meter{height:5px;border-radius:99px;background:rgba(0,0,0,.45);border:1px solid var(--line);overflow:hidden;margin-top:9px}
+  .meter i{display:block;height:100%;background:linear-gradient(90deg,var(--bio),var(--sonar));width:100%;transition:width .3s linear}
+  .meter.air i{background:linear-gradient(90deg,var(--amber),var(--coral))}
+
+  /* ── 小队 / 下潜点 ───────────────────────────────────── */
+  .diver{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:var(--r);border:1px solid transparent}
+  .diver+.diver{margin-top:4px}
+  .diver.turn{border-color:var(--line2);background:linear-gradient(90deg,rgba(127,245,212,.12),transparent)}
+  .diver .face{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;
+    background:radial-gradient(circle at 40% 35%,hsl(var(--h,180) 70% 60%),hsl(calc(var(--h,180) + 40) 60% 32%));color:#04222c}
+  .diver .nm{font-size:13px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .diver .mt{margin-left:auto;font-size:11px;color:var(--haze);white-space:nowrap}
+  .chip{font-size:10.5px;letter-spacing:.08em;border:1px solid var(--line);border-radius:99px;padding:1px 7px;color:var(--haze)}
+  .chip.on{color:var(--bio);border-color:var(--line2)}
+  .chip.off{color:var(--coral);border-color:rgba(255,138,107,.35)}
+  .sites{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+  .site{border:1px solid var(--line);border-radius:var(--r);padding:11px;background:rgba(2,20,28,.5);
+    display:flex;flex-direction:column;gap:8px}
+  .site .sbody{font:13.5px/1.7 var(--serif);color:#e6f5fa}
+
+  /* ── 破水（汤底公示）───────────────────────────────── */
+  .veil{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:18px;
+    background:linear-gradient(180deg,rgba(2,18,27,.88),rgba(2,18,27,.97))}
+  .breach{max-width:640px;width:100%;border-radius:var(--r);padding:22px;position:relative;overflow:hidden;
+    background:linear-gradient(180deg,#bff4ff 0%,#6fd8f5 34%,#0b5f7d 72%,#04222c 100%);
+    border:1px solid rgba(255,255,255,.5);box-shadow:0 40px 90px -40px rgba(127,245,212,.9);color:#03202b}
+  .breach::after{content:'';position:absolute;inset:0;background:
+    radial-gradient(60% 40% at 50% 0%,rgba(255,255,255,.85),transparent 60%);pointer-events:none}
+  .breach h2{margin:0 0 10px;font:700 22px/1.3 var(--serif);color:#012531}
+  .breach .truth{font:17px/2 var(--serif);background:rgba(255,255,255,.72);border-radius:var(--r);padding:14px;
+    color:#062a35;position:relative;z-index:2;white-space:pre-wrap}
+  .breach .act{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px;position:relative;z-index:2}
+  .breach button{background:rgba(1,32,44,.86);border-color:transparent;color:#d9f6ff}
+  .breach button.go{background:#01202b;color:#bff4ff}
+  .warn{border:1px solid rgba(255,196,107,.42);background:linear-gradient(180deg,rgba(255,196,107,.14),rgba(255,196,107,.04));
+    color:#ffe6bd;border-radius:var(--r);padding:9px 12px;font-size:12.5px;margin-bottom:12px}
+  .err{border:1px solid rgba(255,138,107,.5);background:linear-gradient(180deg,rgba(255,138,107,.16),rgba(255,138,107,.04));
+    color:#ffd9cf;border-radius:var(--r);padding:9px 12px;font-size:12.5px;margin-bottom:12px}
+  .modal{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:18px;background:rgba(2,14,20,.86)}
+  .modal .box{max-width:520px;width:100%;background:linear-gradient(180deg,rgba(9,44,58,.98),rgba(3,18,26,.99));
+    border:1px solid var(--line2);border-radius:var(--r);padding:18px;box-shadow:0 30px 80px -40px rgba(0,0,0,1)}
+  .empty{padding:22px 8px;text-align:center;color:var(--haze);font-size:12.5px}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="rays"></div>
+<div class="bubbles" id="bubbles"></div>
+<div class="wrap" id="app"></div>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 深潜前端（v2）——零依赖、单文件、与 v1 完全隔离
+ *   · 自己的会话键：ht.deep.token / ht.deep.draft（和 v1 的 ht.token 互不影响）
+ *   · 只调后端 HTTP 接口，不做任何服务端假设
+ * ═════════════════════════════════════════════════════════════════════════ */
+const KEY_TOKEN = 'ht.deep.token', KEY_DRAFT = 'ht.deep.draft', KEY_NICK = 'ht.deep.nick';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = (ms) => { const t = Math.max(0, Math.round(ms / 1000)); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+const hue = (s) => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return 150 + (h % 90); };
+
+const S = {
+  screen: 'entry',       // entry | dive
+  view: null, questions: [], seq: 0,
+  token: localStorage.getItem(KEY_TOKEN) || '',
+  cfg: null, notice: '', error: '',
+  busy: false, lastFp: '', offset: 0,
+  draft: localStorage.getItem(KEY_DRAFT) || '',
+  modal: null,           // null | 'breach' | 'guess' | 'site'
+  breachSeen: '',
+};
+let pollTimer = null, pollBusy = false, epoch = 0;
+
+const serverNow = () => Date.now() + S.offset;
+
+/* ── 网络 ─────────────────────────────────────────────────────────────── */
+async function api(path, { method = 'GET', body, token } = {}) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'content-type': 'application/json', ...((token ?? S.token) ? { authorization: `Bearer ${token ?? S.token}` } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const text = await res.text();
+  let json = null; try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
+  if (!res.ok || (json && json.ok === false)) {
+    const e = new Error((json && (json.message || json.error)) || `HTTP ${res.status}`);
+    e.status = res.status; e.body = json; throw e;
+  }
+  return json;
+}
+const act = (b) => api('/api/rooms/actions', { method: 'POST', body: b });
+
+/* ── 会话 ─────────────────────────────────────────────────────────────── */
+function forget() { epoch++; S.token = ''; localStorage.removeItem(KEY_TOKEN); S.view = null; S.questions = []; S.screen = 'entry'; stopPoll(); }
+function backToSurface(msg) { forget(); S.notice = msg || ''; S.error = ''; render(); }
+
+function startPoll() {
+  stopPoll();
+  pollTimer = setInterval(() => void poll(), 1200);
+  void poll();
+}
+function stopPoll() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+
+async function poll() {
+  if (pollBusy || !S.token) return;
+  const my = epoch; pollBusy = true;
+  try {
+    const res = await fetch(`/api/rooms/state?since=${S.seq}`, { headers: { authorization: `Bearer ${S.token}` } });
+    if (my !== epoch || !S.token) return;
+    if (res.status === 401) { backToSurface('这次下潜的凭证已经失效，请重新下潜。'); return; }
+    if (res.status === 404) { backToSurface('这次下潜已经结束（房间被清理）。'); return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    apply(await res.json());
+  } catch (e) {
+    if (my !== epoch || !S.token) return;
+    S.error = `声呐失联（${e.message}），正在重连…`; render();
+  } finally { pollBusy = false; }
+}
+
+function apply(data) {
+  if (data && data.view) {
+    S.view = data.view; S.screen = 'dive';
+    if (data.view.room) S.offset = data.view.room.serverTime - Date.now();
+  }
+  if (data && Array.isArray(data.questions)) S.questions = data.questions;
+  if (data && typeof data.seq === 'number' && data.seq > S.seq) S.seq = data.seq;
+  if (data && data.view && data.view.room) {
+    const r = data.view.room;
+    if (r.status === 'settled') {
+      S.modal = S.modal === 'guess' ? null : S.modal;
+      const key = r.truth ? `${r.id}:${r.roundNo}` : '';
+      if (key && S.breachSeen !== key && S.modal !== 'breach') { S.modal = 'breach'; }
+      if (!key) S.breachSeen = '';
+    } else { S.breachSeen = ''; if (S.modal === 'breach') S.modal = null; }
+  }
+  S.error = '';
+  render();
+}
+
+/* ── 渲染 ─────────────────────────────────────────────────────────────── */
+function fp() {
+  const v = S.view ? { ...S.view, room: S.view.room ? { ...S.view.room, serverTime: 0 } : null } : null;
+  return JSON.stringify([S.screen, S.notice, S.error, S.modal, v, S.questions.length]);
+}
+function render(force = false) {
+  const app = $('#app');
+  const active = document.activeElement;
+  const busy = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+  const f = fp();
+  if (!force && (busy || f === S.lastFp)) return;
+  S.lastFp = f;
+  app.innerHTML = S.screen === 'dive' && S.view ? viewDive() : viewEntry();
+  if (S.modal === 'breach') app.insertAdjacentHTML('beforeend', viewBreach());
+  if (S.modal === 'guess') app.insertAdjacentHTML('beforeend', viewGuess());
+  if (S.modal === 'site') app.insertAdjacentHTML('beforeend', viewSites());
+  bind();
+}
+
+function viewEntry() {
+  const code = new URLSearchParams(location.search).get('code') || '';
+  const presets = (S.cfg && S.cfg.presets) || [{ key: 'quick', title: '快速' }, { key: 'standard', title: '标准' }, { key: 'casual', title: '休闲' }];
+  return `
+  <div class="hud">
+    <div class="brand"><div class="eye">🐢</div><div><b>海龟汤 · 深潜</b><span>SONAR INFERENCE CONSOLE</span></div></div>
+    <div class="gauges"><span class="g">深度 <b>0 m</b></span><span class="g">信号 <b>待机</b></span></div>
+  </div>
+  <div class="pod">
+    <h3 class="ttl">下潜准备 <small>DIVE BRIEFING</small></h3>
+    <p class="dim" style="margin:0 0 12px">
+      你们是一支下潜小队。水面之下是**汤面**给出的那一幕反常景象；真相在更深处。
+      只能问「是/否」这类问题——每一次提问都是一次声呐脉冲，回声会告诉你方向对不对。
+      有人把真相拼出来时，整片海会亮起来。
+    </p>
+    <div class="row" style="gap:12px;align-items:flex-start">
+      <div style="flex:1 1 220px"><div class="dim">潜水员代号</div><input id="nick" maxlength="12" autocomplete="off" placeholder="例如：阿伟" value="${esc(localStorage.getItem(KEY_NICK) || '')}"></div>
+      <div style="flex:1 1 220px"><div class="dim">下潜点编号（留空 = 开辟新海域）</div><input id="code" maxlength="8" autocomplete="off" placeholder="6 位房号" value="${esc(code.toUpperCase())}"></div>
+    </div>
+    <div class="dim" style="margin:12px 0 6px">新海域的深度档位</div>
+    <div class="row" id="presets">
+      ${presets.map((p, i) => `<button class="ghost${i === 1 ? ' go' : ''}" data-preset="${esc(p.key)}">${esc(p.title || p.key)}</button>`).join('')}
+    </div>
+    ${S.error ? `<div class="err" style="margin-top:12px">${esc(S.error)}</div>` : ''}
+    ${S.notice ? `<div class="warn" style="margin-top:12px">${esc(S.notice)}</div>` : ''}
+    <div class="row" style="margin-top:14px"><button class="go" id="btnDive">下潜 / 归队</button></div>
+  </div>`;
+}
+
+function viewDive() {
+  const v = S.view, r = v.room, you = v.you, turn = r.turn;
+  const playing = r.status === 'playing';
+  const puzzle = r.puzzle;
+  const mine = you.memberId;
+  const current = r.members.find((m) => m.id === turn.memberId);
+  const left = turn.deadlineAt ? Math.max(0, turn.deadlineAt - serverNow()) : 0;
+  const total = Math.max(1, (turn.deadlineAt || 0) - (turn.startedAt || 0));
+  const need = r.requiredFactTotal || 0, got = Math.min((r.revealedFacts || []).length, need || 0);
+  const pct = need ? Math.round((got / need) * 100) : 0;
+  const cd = (r.guessCooldownUntil || 0) - serverNow();
+  const readyLeft = Math.max(0, (r.readyEligible || 0) - (r.readyCount || 0));
+
+  return `
+  <div class="hud">
+    <div class="brand"><div class="eye">🐢</div><div><b>${r.code}</b><span>${esc(you.isHost ? '领潜员' : '潜水员')} · ${esc(stateWord(r))}</span></div></div>
+    <div class="gauges">
+      <span class="g">深度 <b>${got}/${need || '—'}</b></span>
+      <span class="g">脉冲 <b>${S.questions.length}</b></span>
+      ${playing && turn.deadlineAt ? `<span class="g ${left < 10000 ? 'bad' : ''}">气瓶 <b class="mono" data-deadline="${turn.deadlineAt}">${fmt(left)}</b></span>` : ''}
+      <span class="g ${cd > 0 ? 'warn' : ''}">破水 <b>${cd > 0 ? `<span class="mono" data-deadline="${r.guessCooldownUntil}">${fmt(cd)}</span>` : (r.canGuess ? '就绪' : '—')}</b></span>
+      <button class="ghost danger" id="btnLeave" style="padding:4px 9px;font-size:11px">上浮离开</button>
+    </div>
+  </div>
+  ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
+  ${S.notice ? `<div class="warn">${esc(S.notice)}</div>` : ''}
+
+  <div class="instr">
+    <div class="pod" style="margin:0">
+      <h3 class="ttl">深度剖面 <small>${pct}% · 已解锁 ${got} 条事实点</small></h3>
+      <div class="depth"><i style="width:${pct}%"></i></div>
+      <div class="dim" style="margin-top:8px">
+        ${need ? `必需事实点 ${got}/${need}${pct >= 100 ? ' —— 已经到底了，可以试试破水' : '，越深越接近真相'}` : '对局尚未开始'}
+        ${playing && current ? ` · 现在轮到 <b style="color:var(--bio)">${esc(current.name)}</b>${current.id === mine ? '（你）' : ''}` : ''}
+      </div>
+      ${playing && turn.deadlineAt ? `<div class="meter air"><i data-bar data-deadline="${turn.deadlineAt}" data-total="${total}" style="width:100%"></i></div>` : ''}
+    </div>
+    <div class="pod" style="margin:0;display:grid;place-items:center">
+      <div class="sonar">
+        <i></i><i></i><span class="sweep"></span>
+        ${blips(r)}
+        <div class="core">${got}<small style="font-size:10px;color:var(--haze)">/${need || 0}</small></div>
+        <div class="cap">事实点回声</div>
+      </div>
+    </div>
+  </div>
+
+  ${puzzle ? `
+  <div class="pod" style="margin-top:14px">
+    <h3 class="ttl">海面 · 汤面 <small>${esc(puzzle.title)} · 难度 ${puzzle.difficulty}/5 · ${esc(puzzle.rating)}</small></h3>
+    <div class="surface">
+      <h2>《${esc(puzzle.title)}》</h2>
+      <p>${esc(puzzle.surface)}</p>
+      ${(puzzle.tags || []).length || (puzzle.sensitiveTags || []).length ? `<div class="tags">
+        ${(puzzle.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}
+        ${(puzzle.sensitiveTags || []).map((t) => `<span class="tag risk">含 ${esc(t)}</span>`).join('')}
+      </div>` : ''}
+    </div>
+  </div>` : ''}
+
+  <div class="pod" style="margin-top:14px">
+    <h3 class="ttl">声呐回波 <small>${S.questions.length} 次脉冲 · 全员可见</small></h3>
+    <div class="echoes" id="echoes">
+      ${S.questions.length ? S.questions.map((q) => echo(q, mine)).join('') : '<div class="empty">还没有脉冲。轮到谁，谁就在这里发问。</div>'}
+    </div>
+  </div>
+
+  ${r.status === 'waiting' ? diveSites(v) : ''}
+  ${r.status === 'settled' && !r.truth ? `
+  <div class="pod"><h3 class="ttl">这次没能破水 <small>${esc(r.result ? r.result.result : '')}</small></h3>
+    <div class="dim">汤底仍在深处：${you.isHost ? '你可以用 v1 界面看复盘，或直接开下一潜。' : '只有领潜员能揭开它。'}</div>
+    <div class="row" style="margin-top:10px">${you.isHost ? '<button class="go" id="btnNext">下一潜</button>' : ''}</div>
+  </div>` : ''}
+
+  <div class="pod ping">
+    <div class="row" style="align-items:flex-end">
+      <div style="flex:1 1 260px">
+        <div class="dim">声呐脉冲（提问：只能问能被「是 / 否」回答的问题）</div>
+        <textarea id="ask" rows="2" placeholder="轮到你的气瓶亮起时才能发射。可以先在这里预写。">${esc(S.draft)}</textarea>
+      </div>
+      <div class="row" style="gap:8px">
+        <button class="go" id="btnPing" ${you.canSubmit ? '' : 'disabled'}>发射脉冲</button>
+        <button class="breach" id="btnBreach" ${r.canGuess ? '' : 'disabled'}>${cd > 0 ? `<span class="mono" data-deadline="${r.guessCooldownUntil}">破水 ${fmt(cd)}</span>` : '破水 · 猜汤底'}</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:9px">
+      <span class="dim" style="flex:1">${you.canSubmit ? '轮到你发射了' : (current ? `等待 ${esc(current.name)} 发射` : (playing ? '等待中' : '尚未开始下潜'))}</span>
+      ${r.config && r.config.hintsEnabled ? `<span class="dim">提示：</span>
+        <button class="ghost" data-hint="1" ${you.canHintT12 ? '' : 'disabled'}>T1</button>
+        <button class="ghost" data-hint="2" ${you.canHintT12 ? '' : 'disabled'}>T2</button>
+        <button class="ghost" data-hint="3" ${you.canHintT3 ? '' : 'disabled'}>T3</button>` : '<span class="dim">本局未开启提示</span>'}
+    </div>
+  </div>
+
+  ${crew(v, readyLeft)}`;
+}
+
+function stateWord(r) {
+  return { waiting: '待下潜', playing: '下潜中', suspended: '暂停加压', settled: '已返回海面', destroyed: '已废弃' }[r.status] || r.status;
+}
+
+/** 声呐上的回波点：按已解锁事实点摆一圈 */
+function blips(r) {
+  const need = Math.max(1, r.requiredFactTotal || 0);
+  const got = Math.min((r.revealedFacts || []).length, need);
+  let out = '';
+  for (let i = 0; i < got; i++) {
+    const a = (i / need) * Math.PI * 2 - Math.PI / 2;
+    const x = 50 + Math.cos(a) * 38, y = 50 + Math.sin(a) * 38;
+    out += `<span class="blip" style="left:${x}%;top:${y}%;transform:translate(-50%,-50%)"></span>`;
+  }
+  return out;
+}
+
+function echo(q, mine) {
+  const ans = String(q.answer || '');
+  const word = { yes: '是', no: '否', irrelevant: '无关', unanswerable: '无法回答' }[ans] || ans;
+  const isMine = q.memberId === mine;
+  return `<div class="echo ${esc(ans)}${isMine ? ' mine' : ''}">
+    <div class="dot"></div>
+    <div>
+      <div class="who"><b style="color:inherit">${esc(q.memberName || '—')}${isMine ? '（你）' : ''}</b>
+        <span>第 ${q.turnSeq} 轮</span>${q.late ? '<span>· 临界</span>' : ''}</div>
+      <div class="q">${esc(q.text)}</div>
+      <div class="a">回声 <b>${esc(word)}</b>${q.explain ? `<span class="rep">${esc(q.explain)}</span>` : ''}</div>
+    </div>
+  </div>`;
+}
+
+function diveSites(v) {
+  const r = v.room, you = v.you;
+  const cands = v.candidates || [];
+  return `
+  <div class="pod">
+    <h3 class="ttl">下潜点 <small>${you.isHost ? '由领潜员定，或让全队投票' : '等待领潜员选定'}</small></h3>
+    ${you.isHost ? `
+      <div class="sites">
+        ${cands.map((c) => `<div class="site">
+          <div class="row" style="gap:6px"><span class="chip on">${esc(c.rating)}</span><span class="chip">难度 ${c.difficulty}</span><span class="chip">约 ${c.estMinutes} 分</span></div>
+          <div class="sbody">${esc(c.surface)}</div>
+          <div class="row"><button class="go" data-pick="${esc(c.id)}">从这里下潜</button></div>
+        </div>`).join('') || '<div class="empty">没有符合当前深度档位的题</div>'}
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="btnVote">让全队投票选下潜点</button>
+        <button id="btnEnd" class="ghost danger">结束这次下潜</button>
+      </div>`
+    : '<div class="dim">领潜员正在看海图。举手表示你已就位，等他按下下潜。</div>'}
+    ${!you.isHost ? `<div class="row" style="margin-top:12px"><button class="${readyOf(v) ? '' : 'go'}" id="btnReady">${readyOf(v) ? '✓ 已就位（点一下收回）' : '我已就位'}</button></div>` : ''}
+    ${you.isHost ? `<div class="dim" style="margin-top:10px">你是领潜员，不需要举手：等队员就位（或确认后强制）直接下潜。</div>` : ''}
+  </div>`;
+}
+const readyOf = (v) => Boolean(v.room.members.find((m) => m.id === v.you.memberId) || {}).ready;
+
+function crew(v, readyLeft) {
+  const r = v.room, you = v.you;
+  return `
+  <div class="pod">
+    <h3 class="ttl">下潜小队 <small>${r.members.length} 人 · ${r.status === 'waiting' ? `已就位 ${r.readyCount}/${r.readyEligible}${readyLeft ? ` · 还差 ${readyLeft} 人` : ''}` : stateWord(r)}</small></h3>
+    ${r.members.map((m) => {
+      const active = r.turn.memberId === m.id;
+      return `<div class="diver${active ? ' turn' : ''}">
+        <div class="face" style="--h:${hue(m.name)}">${esc(String(m.name || '?').slice(0, 1))}</div>
+        <div class="nm">${esc(m.name)}${m.id === you.memberId ? '<span class="dim">（你）</span>' : ''}
+          ${m.isHost ? '<span class="chip on">领潜</span>' : ''}
+          ${m.role === 'spectator' ? '<span class="chip">旁观</span>' : ''}
+          ${m.conn === 'disconnected' ? '<span class="chip off">失联</span>' : m.activity === 'idle' ? '<span class="chip off">静止</span>' : ''}
+          ${active ? '<span class="chip on">发射中</span>' : ''}
+        </div>
+        <div class="mt">深度分 ${m.score}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+/* 破水 = 汤底公示（只在对局被猜出时出现） */
+function viewBreach() {
+  const r = S.view.room, you = S.view.you;
+  return `<div class="veil"><div class="breach">
+    <h2>破水而出 · 汤底公示</h2>
+    <div class="dim" style="color:#0a3b4a;opacity:.9;margin-bottom:10px">有人把真相拼齐了：${esc(r.truthNote || '')}</div>
+    <div class="truth">${esc(r.truth)}</div>
+    <div class="act">
+      ${you.isHost ? '<button class="go" id="btnBreachNext">收起海图 · 下一潜</button>' : ''}
+      <button id="btnBreachClose">返回深海</button>
+    </div>
+  </div></div>`;
+}
+function viewGuess() {
+  const r = S.view.room;
+  const cd = (r.guessCooldownUntil || 0) - serverNow();
+  const sec = (r.config && r.config.guessCooldownSec) || 0;
+  return `<div class="modal"><div class="box">
+    <h3 class="ttl">破水 · 用一段话讲出真相 <small>猜中可以当场揭晓</small></h3>
+    <p class="dim" style="margin:0 0 10px">判定看关键要素是否齐、有没有把因果串起来；命中≥60% 会告诉你"接近了"（但不说哪几条）。
+      破水是<b>全队共用一个冷却</b>${sec ? `（${sec} 秒）` : '（不限）'}：谁先试谁开始计时${cd > 0 ? `，现在还剩 <b class="mono" data-deadline="${r.guessCooldownUntil}">${fmt(cd)}</b>` : ''}。</p>
+    <textarea id="guess" rows="4" placeholder="例如：他当年在海上遇难，靠同伴的肉活了下来……">${esc(S.guessDraft || '')}</textarea>
+    <div class="row" style="margin-top:12px">
+      <button class="breach" id="btnGuessGo" ${cd > 0 ? 'disabled' : ''}>${cd > 0 ? '冷却中…' : '破水'}</button>
+      <button class="ghost" id="btnGuessBack">继续下潜</button>
+    </div>
+  </div></div>`;
+}
+function viewSites() {
+  const r = S.view.room;
+  const vote = r.vote;
+  if (!vote) return '';
+  return `<div class="modal"><div class="box">
+    <h3 class="ttl">全队投票 · 选下潜点 <small>剩余 <span class="mono" data-deadline="${vote.deadlineAt}">${fmt(vote.deadlineAt - serverNow())}</span></small></h3>
+    <div class="sites">
+      ${(vote.candidates || []).map((c) => `<div class="site">
+        <div class="row" style="gap:6px"><span class="chip on">${esc(c.rating)}</span><span class="chip">难度 ${c.difficulty}</span></div>
+        <div class="sbody">${esc(c.surface)}</div>
+        <button data-votepuzzle="${esc(c.id)}" ${vote.myBallot ? 'disabled' : ''}>投这里</button>
+      </div>`).join('')}
+    </div>
+    <div class="row" style="margin-top:12px"><button class="ghost" id="btnVoteClose">收起</button></div>
+  </div></div>`;
+}
+
+/* ── 交互 ─────────────────────────────────────────────────────────────── */
+function bind() {
+  const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+  on('btnDive', doDive);
+  on('btnPing', doPing);
+  on('btnBreach', () => { S.modal = 'guess'; render(true); });
+  on('btnGuessBack', () => { S.modal = null; render(true); });
+  on('btnGuessGo', doGuess);
+  on('btnReady', () => void send({ type: 'ready', ready: !readyOf(S.view) }));
+  on('btnVote', () => void send({ type: 'start', mode: 'vote' }));
+  on('btnEnd', () => { if (confirm('结束这次下潜？汤底不会公示。')) void send({ type: 'end_match' }); });
+  on('btnNext', () => void send({ type: 'next_round' }));
+  on('btnLeave', () => { void leave(); });
+  on('btnBreachClose', () => { const r = S.view.room; S.breachSeen = `${r.id}:${r.roundNo}`; S.modal = null; render(true); });
+  on('btnBreachNext', () => { S.breachSeen = ''; S.modal = null; void send({ type: 'next_round' }); });
+  on('btnVoteClose', () => { S.modal = null; render(true); });
+  const ask = $('#ask');
+  if (ask) {
+    ask.oninput = () => { S.draft = ask.value; localStorage.setItem(KEY_DRAFT, ask.value); };
+    ask.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doPing(); } };
+  }
+  const g = $('#guess');
+  if (g) { g.oninput = () => { S.guessDraft = g.value; }; g.focus(); }
+  $('#app').querySelectorAll('[data-preset]').forEach((b) => {
+    b.onclick = () => {
+      $('#app').querySelectorAll('[data-preset]').forEach((x) => x.classList.remove('go'));
+      b.classList.add('go');
+    };
+  });
+  $('#app').querySelectorAll('[data-pick]').forEach((b) => { b.onclick = () => void send({ type: 'start', mode: 'pick', puzzleId: b.getAttribute('data-pick'), ...(needForce() ? { force: true } : {}) }); });
+  $('#app').querySelectorAll('[data-votepuzzle]').forEach((b) => { b.onclick = () => void send({ type: 'vote', choice: b.getAttribute('data-votepuzzle') }); });
+  $('#app').querySelectorAll('[data-hint]').forEach((b) => { b.onclick = () => void send({ type: 'hint', tier: Number(b.getAttribute('data-hint')) }); });
+}
+
+function needForce() {
+  const r = S.view.room;
+  const missing = r.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected' && !m.isHost && !m.ready);
+  if (!missing.length) return false;
+  return confirm(`${missing.map((m) => m.name).join('、')} 还没就位。仍然下潜？`);
+}
+
+async function doDive() {
+  const nick = (($('#nick') && $('#nick').value) || '').trim() || '潜水员';
+  const code = (($('#code') && $('#code').value) || '').trim().toUpperCase();
+  const preset = ($('[data-preset].go') && $('[data-preset].go').getAttribute('data-preset')) || 'standard';
+  localStorage.setItem(KEY_NICK, nick);
+  S.error = '';
+  try {
+    const res = code
+      ? await api(`/api/rooms/${code}/join`, { method: 'POST', body: { nickname: nick } })
+      : await api('/api/rooms', { method: 'POST', body: { nickname: nick, preset } });
+    epoch++;
+    S.token = res.token; localStorage.setItem(KEY_TOKEN, res.token);
+    S.view = res.view; S.screen = 'dive'; S.seq = 0;
+    startPoll(); render(true);
+  } catch (e) { S.error = e.message; render(true); }
+}
+
+async function doPing() {
+  const el = $('#ask'); const text = (el ? el.value : '').trim();
+  if (!text) return;
+  const r = S.view.room;
+  localStorage.removeItem(KEY_DRAFT); S.draft = '';
+  await send({ type: 'submit', turnSeq: r.turn.seq, text, clientSubmitId: (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())) });
+}
+async function doGuess() {
+  const text = (($('#guess') && $('#guess').value) || '').trim();
+  const verdict = await send({ type: 'guess', text });
+  if (verdict) { S.guessDraft = ''; S.modal = null; render(true); }
+}
+
+async function send(body) {
+  try {
+    const data = await act(body);
+    S.error = '';
+    if (data.view) apply(data); else render(true);
+    return true;
+  } catch (e) {
+    S.error = e.message + (e.body && e.body.detail && e.body.detail.cooldownLeftMs ? `（还剩 ${fmt(e.body.detail.cooldownLeftMs)}）` : '');
+    if (e.body && e.body.view) apply(e.body); else render(true);
+    return false;
+  }
+}
+async function leave() {
+  if (S.token) { try { await fetch('/api/rooms/actions', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${S.token}` }, body: JSON.stringify({ type: 'leave' }), keepalive: true }); } catch { /* 网络失败也要允许离开 */ } }
+  forget(); S.notice = '你已经浮上水面。'; S.error = ''; render(true);
+}
+
+/* 倒计时：只改文本，不整页重渲染 */
+setInterval(() => {
+  const now = serverNow();
+  document.querySelectorAll('[data-deadline]').forEach((el) => {
+    const left = Math.max(0, Number(el.getAttribute('data-deadline')) - now);
+    const t = fmt(left);
+    if (el.textContent.trim() !== t) el.textContent = t;
+  });
+  document.querySelectorAll('[data-bar]').forEach((el) => {
+    const left = Math.max(0, Number(el.getAttribute('data-deadline')) - now);
+    const total = Math.max(1, Number(el.getAttribute('data-total')) || 1);
+    el.style.width = `${Math.max(0, Math.min(100, (left / total) * 100))}%`;
+  });
+}, 250);
+
+/* 背景气泡 */
+(function bubbles() {
+  const box = document.getElementById('bubbles');
+  for (let i = 0; i < 16; i++) {
+    const b = document.createElement('i');
+    const s = 3 + Math.random() * 7;
+    b.style.left = `${Math.random() * 100}%`;
+    b.style.width = `${s}px`; b.style.height = `${s}px`;
+    b.style.animationDuration = `${9 + Math.random() * 12}s`;
+    b.style.animationDelay = `${Math.random() * 12}s`;
+    box.appendChild(b);
+  }
+})();
+
+(async () => {
+  try { S.cfg = await api('/api/config'); } catch { /* 入口页有默认档位 */ }
+  if (S.token) {
+    const my = epoch;
+    try {
+      const me = await api('/api/session');
+      if (my !== epoch || !S.token) return;
+      S.view = me.view; S.screen = 'dive';
+      if (me.view && me.view.room) S.offset = me.view.room.serverTime - Date.now();
+      startPoll();
+    } catch { forget(); }
+  }
+  render(true);
+})();
+</script>
+</body>
+</html>
