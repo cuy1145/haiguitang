@@ -343,6 +343,28 @@ test('回合上限：只在轮次边界结算，不打断进行中的回合', ()
   assert.equal(room.result?.reason, '达到总回合上限');
 });
 
+test('提问顺序：默认按加入顺序；乱序只在开局洗一次牌，中途改要等下一局', () => {
+  const now = 1_000_000;
+  // 默认（顺序）：与加入顺序一致
+  const joined = beginMatch(makeRoom(now), ctx(now));
+  assert.deepEqual(joined.turnOrder, ['m1', 'm2', 'm3'], '默认是按加入顺序');
+
+  // 乱序：开局洗一次，且能复现（同 rand 同结果）
+  const cfgRandom = { ...DEFAULT_CONFIG, turnOrderMode: 'random' as const };
+  let shuffled: CoreRoom = { ...makeRoom(now), config: cfgRandom };
+  shuffled = beginMatch(shuffled, ctx(now, () => 0.1));
+  assert.equal(shuffled.turnOrder.length, 3, '还是这 3 个人');
+  assert.deepEqual([...shuffled.turnOrder].sort(), ['m1', 'm2', 'm3'], '是同一个集合的排列');
+  const again = beginMatch({ ...makeRoom(now), config: cfgRandom }, ctx(now, () => 0.1));
+  assert.deepEqual(again.turnOrder, shuffled.turnOrder, '同一随机源 → 同一顺序（可复现）');
+
+  // 中途改配置：本局顺序不动（buildTurnOrder 只在 MATCH_BEGIN 跑）
+  const orderBefore = [...shuffled.turnOrder];
+  const changed = { ...shuffled, config: { ...shuffled.config, turnOrderMode: 'join' as const } };
+  const advanced = turn.advanceTurn(changed, ctx(now)).room;
+  assert.deepEqual(advanced.turnOrder, orderBefore, '本局中途改顺序不生效（要等下一局开局）');
+});
+
 test('轮转顺序：随机模式用同一 seed 得到同一顺序（可复现）', () => {
   const now = 1_000_000;
   const r = makeRoom(now);

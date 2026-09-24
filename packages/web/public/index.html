@@ -1668,6 +1668,12 @@ function cfgModal(room) {
         <span class="dim">打开后下面几项提示配额才会生效</span></div></div>
     ${num('perTurnSec', '每人提问时长（秒）', 15, 600)}
     ${num('graceSec', '超时宽限（秒）', 0, 30)}
+    <div class="field"><label>多人的提问顺序（下一局生效）</label>
+      <select data-cfg="turnOrderMode">
+        <option value="join" ${cur('turnOrderMode') === 'join' ? 'selected' : ''}>顺序（按加入顺序，默认）</option>
+        <option value="random" ${cur('turnOrderMode') === 'random' ? 'selected' : ''}>乱序（开局洗一次牌）</option>
+      </select>
+      <div class="dim">乱序是**开局时打乱一次**，整局按这个顺序轮转（不是每轮重洗）；改了要等下一局开局才生效。</div></div>
     ${num('guessEveryRounds', '揭秘间隔（每 N 轮）', 1, 10)}
     ${num('guessMaxPerMember', '每人揭秘次数', 1, 10)}
     ${num('hintQuotaPerMember', '每人提示次数（T1+T2）', 0, 10)}

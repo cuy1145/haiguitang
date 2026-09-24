@@ -124,7 +124,7 @@ export const CONFIG_SCHEMA: readonly ConfigFieldSpec[] = [
   { key: 'hintTier3Max', label: 'T3 关键提示（每局共享）', type: 'int', min: 0, max: 3, afterStart: 'increase-only', effective: 'immediate' },
   { key: 'hintCooldownSec', label: '提示冷却（秒）', type: 'int', min: 0, max: 600, afterStart: 'free', effective: 'immediate' },
   { key: 'maxRounds', label: '总回合上限（轮）', type: 'int', min: 1, max: 60, afterStart: 'increase-only', effective: 'next-round' },
-  { key: 'turnOrderMode', label: '回合顺序', type: 'enum', values: ['join', 'random'], afterStart: 'free', effective: 'next-round' },
+  { key: 'turnOrderMode', label: '回合顺序', type: 'enum', values: ['join', 'random'], afterStart: 'free', effective: 'next-match' },
   { key: 'idleSkip', label: '跳过挂机成员的回合', type: 'bool', afterStart: 'free', effective: 'next-turn' },
   { key: 'ratingMax', label: '内容分级上限', type: 'enum', values: ['L1', 'L2', 'L3'], afterStart: 'free', effective: 'next-match' },
   { key: 'difficultyMin', label: '难度下限', type: 'int', min: 1, max: 5, afterStart: 'free', effective: 'next-match' },
