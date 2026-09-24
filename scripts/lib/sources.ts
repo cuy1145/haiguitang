@@ -25,6 +25,9 @@ export const SOURCE_LICENSES: Record<string, string> = {
   'hf-file:neurostellar/haiguitang': 'UNKNOWN',
   'hf:lin52/TurtleSoup': 'UNKNOWN',
   'hf-file:lin52/TurtleSoup': 'UNKNOWN',
+  // ModelScope（阿里，国内访问快；Turtle-Bench 是 Apache-2.0 的经典题库/评测集）
+  'modelscope:Narcissuses/Turtle-Bench': 'apache-2.0',
+  'Narcissuses/Turtle-Bench': 'apache-2.0',
   // GitHub
   'github:KONpiGG/astrbot_plugin_soupai': 'AGPL-3.0',
   'KONpiGG/astrbot_plugin_soupai': 'AGPL-3.0',
@@ -143,8 +146,41 @@ export async function fetchGithub(src: string): Promise<unknown> {
   return parseTextAsItems(Buffer.from(body.content.replace(/\n/g, ''), 'base64').toString('utf8'));
 }
 
+/**
+ * ModelScope（阿里）数据集源：`modelscope:<namespace>/<name>/<path>[#revision]`
+ *
+ * 为什么加它：国内访问快（实测 200ms 级），而且上面有现成的海龟汤数据集
+ * （例：`modelscope:Narcissuses/Turtle-Bench/train_8k.json`，Apache-2.0）。
+ * 注意 Turtle-Bench 是**判定评测集**：9457 行 = 507 道独立题 × 每题多条「猜测+对错标签」。
+ */
+export async function fetchModelScope(src: string): Promise<unknown[]> {
+  const spec = src.slice('modelscope:'.length);
+  const [pathPart, revision = 'master'] = spec.split('#');
+  const parts = (pathPart ?? '').split('/');
+  if (parts.length < 3) throw new Error('modelscope 源格式应为 modelscope:namespace/name/path[#revision]');
+  const ns = parts[0]!;
+  const name = parts[1]!;
+  const file = parts.slice(2).join('/');
+  const url = `https://modelscope.cn/api/v1/datasets/${ns}/${name}/repo?Revision=${revision}&FilePath=${encodeURIComponent(file)}`;
+  console.log(`下载：modelscope:${ns}/${name}/${file}`);
+  const res = await fetch(url, { headers: { 'User-Agent': 'haiguitang-tools' }, redirect: 'follow' });
+  if (!res.ok) throw new Error(`ModelScope 下载失败 HTTP ${res.status}：${ns}/${name}/${file}`);
+  return parseTextAsItems(await res.text());
+}
+
+/** 列出 ModelScope 数据集里的文件（用来确认有哪些数据文件） */
+export async function listModelScopeFiles(ns: string, name: string, revision = 'master'): Promise<Array<{ path: string; size: number }>> {
+  const res = await fetch(`https://modelscope.cn/api/v1/datasets/${ns}/${name}/repo/tree?Revision=${revision}&Recursive=true`, {
+    headers: { 'User-Agent': 'haiguitang-tools' },
+  });
+  if (!res.ok) throw new Error(`ModelScope 文件列表失败 HTTP ${res.status}`);
+  const body = await res.json() as { Data?: { Files?: Array<{ Path: string; Size: number }> } };
+  return (body.Data?.Files ?? []).map((f) => ({ path: f.Path, size: f.Size }));
+}
+
 export async function fetchSource(src: string, opts: { want: number; hfEndpoint: string }): Promise<unknown> {
   if (src.startsWith('file:')) return readLocal(src);
+  if (src.startsWith('modelscope:')) return fetchModelScope(src);
   if (src.startsWith('hf-file:')) return fetchHfFile(src, opts.hfEndpoint);
   if (src.startsWith('hf:')) return fetchHf(src, opts.want);
   if (src.startsWith('github:')) return fetchGithub(src);

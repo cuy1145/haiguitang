@@ -258,6 +258,10 @@ export class HostService {
       '',
       '输出严格 JSON：{"facts":[{"id":"f1","text":"…","isTrue":true,"tier":1,"required":true,"keys":["…"]}]}',
       '',
+      '【繁体处理】如果汤面或汤底是**繁体中文**，请额外输出简体版本（只做繁简转换，不得改写内容）：',
+      '{"facts":[…],"surface_simplified":"…","truth_simplified":"…"}',
+      '本来就是简体时，省略这两个字段。',
+      '',
       '【汤面】', input.surface,
       '【汤底】', input.truth,
     ].join('\n');

@@ -1,71 +1,67 @@
 # 题库来源清单（可爬 / 可导入）
 
-> 结论先说：**推荐用 `lpj990/haiguitang`** —— 20,046 道题，许可是 **Apache-2.0**（可再分发，只需署名），
-> 字段是现成的「Riddle（汤面）/ Solution（汤底）/ Questions and Answers（问答记录）/ Clues（线索）」。
-> 其他源要么没有声明许可、要么是 AGPL 传染性许可、要么需要写网页适配器。
+> 一句话结论：
+> · **要质量** → `Narcissuses/Turtle-Bench`（ModelScope，**Apache-2.0**，563 道独立题，全是经典题，繁体）
+> · **要数量** → `lpj990/haiguitang`（HuggingFace，**Apache-2.0**，20,046 行 → **18,815 道可用**，AI 生成、质量参差）
+> · **要零风险** → 房主端「AI 创作」（不进仓库、不碰第三方许可）
 
-## 一、可直接导入（脚本已内置适配器）
+## 一、实测过的可用源（脚本已内置适配器）
 
-| 源 | 位置 | 题量 | 许可 | 字段 | 命令 |
+| 源 | 位置 | 规模 | 许可 | 质量 | 命令 |
 |---|---|---|---|---|---|
-| **lpj990/haiguitang** | HuggingFace 数据集 | **20,046** | **Apache-2.0** ✅ | `Riddle` / `Solution` / `Questions and Answers` / `Clues` | 见下 |
-| neurostellar/haiguitang | HuggingFace 数据集 | 3,729 | 未声明 ⚠️ | `output`（含"故事情节/真相"两段）/ `input` / `system` | `--source=hf:neurostellar/haiguitang` |
-| lin52/TurtleSoup | HuggingFace 数据集 | 32 | 未声明 ⚠️ | `surface` / `bottom` | `--source=hf:lin52/TurtleSoup` |
-| KONpiGG/astrbot_plugin_soupai | GitHub 仓库 | 289 | **AGPL-3.0** ⚠️ 传染 | `puzzle` / `answer` | `--source=github:KONpiGG/astrbot_plugin_soupai/network_soupai.json` |
+| **Narcissuses/Turtle-Bench** | ModelScope（国内快，200ms 级） | 9,457 行 = **563 独立题**（每题约 18 条「猜测+对错标签」） | **Apache-2.0** ✅ | **高**：经典题、汤底完整、0 条灵异/猎奇误伤；繁体 | `--source=modelscope:Narcissuses/Turtle-Bench/train_8k.json` |
+| **lpj990/haiguitang** | HuggingFace | **20,046 行 = 18,815 可** | **Apache-2.0** ✅ | 中：AI 批量生成，逻辑常不闭合，混灵异/性暴力/猎奇 | `--source=hf:lpj990/haiguitang` |
+| neurostellar/haiguitang | HuggingFace | 3,729 | 未声明 ⚠️ | 中：`output` 里混着"故事情节/真相"两段 | `--source=hf:neurostellar/haiguitang` |
+| lin52/TurtleSoup | HuggingFace | 32 | 未声明 ⚠️ | 中 | `--source=hf:lin52/TurtleSoup` |
+| KONpiGG/astrbot_plugin_soupai | GitHub | 289 | **AGPL-3.0** ⚠️ 传染 | 未知 | `--source=github:KONpiGG/astrbot_plugin_soupai/network_soupai.json` |
 
-推荐的导入命令（**先小批量试，每道题都要调一次模型补事实点表**）：
+**支持的源语法**：`file:<本地 JSON/JSONL>` · `modelscope:<ns>/<name>/<path>` · `hf:<dataset>` · `hf-file:<dataset>/<path>`（可配镜像） · `github:<owner>/<repo>/<path>` · `https://…json`
+
+## 二、看过但**不建议用**的源（附原因）
+
+| 源 | 为什么不建议 |
+|---|---|
+| ModelScope `Brain_teasers`（↓1779，许可 other） | 是**脑筋急转弯**（文字游戏/谐音梗），不是情境推理；我们的规则明确禁止"靠谐音、歧义当唯一谜底" |
+| ModelScope `naojingjizhuanwan`（Apache-2.0） | 同上，体裁不对 |
+| ModelScope `IQuiz`、`RiddleBench`、`altered-riddles`、`riddle_sense` | 英文谜语 / 通识评测集，不是中文海龟汤 |
+| GitHub `wangyafu/haiguitangmcp` | 题库是 `puzzles/*.md` 一题一文件，量极小（个位数） |
+| 游戏站 `gl.ali213.net`、`m.gamedog.cn`、文档站 `renrendoc.com` | 网页合集，**版权不明**（多为未授权转载），且需要写网页适配器 |
+| 知乎/公众号整理帖 | 同上，版权不明 |
+
+## 三、许可速查
+
+- **Apache-2.0 / MIT / CC-BY**：可入库，注明出处 ✅（前面两个大源都是 Apache-2.0）
+- **AGPL-3.0 / GPL-3.0**：传染性 ⚠️ 并入你的仓库会带来许可义务
+- **未声明（NONE）**：默认保留所有权利 ⚠️
+- 网页聚合站：几乎都未获授权 ❌
+
+> 脚本默认**拒绝写文件**，必须显式 `--accept-license=<许可>` 才生成 `collected-puzzles.ts`；
+> 生成文件头部会写清来源 / 许可 / 时间 / 题量。
+
+## 四、推荐操作顺序
 
 ```powershell
-# 1) 配好模型（用来给每道题补事实点表 —— 源题库只有汤面+汤底）
+# 0) 配好模型（每道题要调一次，用来补事实点表）
 $env:AI_BASE_URL="https://api.deepseek.com"; $env:AI_MODEL="deepseek-flash"; $env:AI_KEY="sk-..."
 
-# 2) 先 dry-run 看质量（不花钱、不写文件）
-pnpm import:puzzles --source=hf:lpj990/haiguitang --limit 20 --dry-run
+# 1) 先体检，看清质量（不花钱）：Turtle-Bench 只有 563 独立题，适合全量
+pnpm analyze:puzzles --source=modelscope:Narcissuses/Turtle-Bench/train_8k.json
 
-# 3) 正式导入 50 道（Apache-2.0 需要显式确认）
-pnpm import:puzzles --source=hf:lpj990/haiguitang --limit 50 --accept-license=apache-2.0
+# 2) 导入 Turtle-Bench（繁体会自动转简体；只导通过质检的）
+pnpm import:puzzles --source=modelscope:Narcissuses/Turtle-Bench/train_8k.json `
+                    --accept-license=apache-2.0 --limit 100
+
+# 3) 数量还不够，再从 HuggingFace 那 2 万题里补（先用体检挑出零风险的那批）
+pnpm analyze:puzzles --source=hf-file:lpj990/haiguitang/neww_clue_data.jsonl `
+                     --hf-endpoint=https://hf-mirror.com --dump
+pnpm import:puzzles --source=file:data/candidates.jsonl --accept-license=apache-2.0 --limit 100
 ```
 
-### 连不上 huggingface.co 怎么办
+**建议**：先用 Turtle-Bench 那 499 道经典题打底（质量优先），不够再从 2 万题里按体检结果补。
 
-国内网络直连 HF 常常超时。两种办法：
+## 五、额外收获：Turtle-Bench 可以当**判定评测集**
 
-```powershell
-# ① 用镜像直连文件（推荐）
-pnpm import:puzzles --source=hf-file:lpj990/haiguitang/neww_clue_data.jsonl `
-                    --hf-endpoint=https://hf-mirror.com --limit 50 --accept-license=apache-2.0
-
-# ② 手动下载后本地导入（最稳）
-#    浏览器打开 https://hf-mirror.com/datasets/lpj990/haiguitang/blob/main/neww_clue_data.jsonl
-#    存成 D:\tmp\soup.jsonl，然后：
-pnpm import:puzzles --source=file:D:/tmp/soup.jsonl --limit 50 --accept-license=apache-2.0
-```
-
-## 二、需要额外适配器（脚本暂未内置）
-
-| 源 | 形式 | 备注 |
-|---|---|---|
-| `wangyafu/haiguitangmcp` | GitHub：`puzzles/*.md`，一题一文件 | 题量小（个位数）；用 Markdown 适配器可导入 |
-| `Yuikij/DeepTurtle` | GitHub 项目 | 里面是生成/评测逻辑，题库需再确认 |
-| `gl.ali213.net` / `m.gamedog.cn` 等游戏站 | 网页合集（HTML 列表） | 几十~上百道，**版权不明**（多为转载聚合）；要做网页适配器 |
-| `renrendoc.com` 等文档站 | .doc / 网页 | 需要付费/登录，且版权不明，**不建议** |
-| 知乎/公众号整理帖 | 网页 | 版权不明，不建议直接入库 |
-
-## 三、许可速查（决定能不能进仓库）
-
-- **Apache-2.0 / MIT / CC-BY**：可以入库，注明出处即可 ✅
-- **AGPL-3.0 / GPL-3.0**：**传染性**，并入你的仓库会带来许可义务 ⚠️
-- **未声明许可（NONE）**：默认「保留所有权利」，严格来说不该复制 ⚠️
-- 网页聚合站：几乎都未授权转载，风险最高 ❌
-
-> 所以脚本默认**拒绝写文件**，必须显式传 `--accept-license=<许可>` 才生成 `collected-puzzles.ts`；
-> 生成的文件头部会写明来源、许可、生成时间与题量，方便日后追溯。
-
-## 四、更干净的替代：房主端「AI 创作」
-
-如果你不想碰第三方许可，还有个零风险的路子：**房主在房间里点「生成新题」**。
-- 每局现场出题，只存在该房间（`rooms.puzzle_json`），不进公共题库、不进仓库；
-- 走同一套坏题检测（汤面不得泄露关键事实点、结构、违禁词…）；
-- 缺点：每次都要调模型（花你自己的额度），且题目不可复用。
-
-**建议组合**：用 Apache-2.0 那个数据集导入 100–200 道作为公共题库打底 + 房主 AI 创作应急换题。
+它的每行是 `{surface, bottom, user_guess, label}`，`label` 是 T/F/N（这条猜测对不对）。
+这意味着我们可以拿它做一次**端到端回归**：把 `user_guess` 当玩家提问喂给我们的判定引擎，
+看引擎给出的 是/否 是否与 `label` 一致 —— 这是现成的、带标注的判准集，比自己造题靠谱得多。
+（想做的话我可以加一个 `pnpm eval:judge` 脚本。）

@@ -168,25 +168,29 @@ const rejected = rows.filter((r) => !r.screenOk);
 console.log(`   通过 ${pass.length} / 拒绝 ${rejected.length}（通过率 ${pct(pass.length, rows.length)}）`);
 
 console.log('② 精确去重 + 同题不同底检测…');
-const byNorm = new Map<string, number>();
+// 两种重复要分开算（评测集常见"同一道题多行、每行一个猜测"）：
+//   · 完全重复：汤面 + 汤底都相同（同一道题出现多次）
+//   · 冲突：汤面相同但汤底不同（同一道题配了两个"真相"，判定会自相矛盾）
+const bySurface = new Map<string, number>();
+const byPair = new Map<string, number>();
 for (const r of rows) {
-  const k = norm(r.surface);
-  const first = byNorm.get(k);
-  if (first === undefined) byNorm.set(k, r.idx);
-  else {
-    r.dupOf = first;
-    // 汤面相同但汤底不同 → 比单纯重复更糟：同一道题有两个"真相"，判定会自相矛盾
-    if (norm(rows[first]!.truth) !== norm(r.truth)) {
-      r.conflictOf = first;
-      bump(reasonHist, '同一汤面配了不同汤底（题目自相矛盾）');
-    } else {
-      bump(reasonHist, '与库内其它题目完全重复（汤面+汤底都相同）');
-    }
-  }
+  const sKey = norm(r.surface);
+  const pKey = `${sKey}|${norm(r.truth)}`;
+  const firstSameSurface = bySurface.get(sKey);
+  const firstSamePair = byPair.get(pKey);
+  if (firstSamePair !== undefined) r.dupOf = firstSamePair;
+  else if (firstSameSurface !== undefined && norm(rows[firstSameSurface]!.truth) !== norm(r.truth)) r.conflictOf = firstSameSurface;
+  if (firstSameSurface === undefined) bySurface.set(sKey, r.idx);
+  if (firstSamePair === undefined) byPair.set(pKey, r.idx);
 }
 const exactDups = rows.filter((r) => r.dupOf !== null).length;
 const conflicts = rows.filter((r) => r.conflictOf !== null).length;
-console.log(`   完全重复 ${exactDups} 条（其中"同汤面不同汤底"的矛盾题 ${conflicts} 条）`);
+const uniquePuzzles = rows.length - exactDups;
+console.log(`   独立题目 ${uniquePuzzles} 条 · 完全重复 ${exactDups} 条 · 同汤面不同汤底 ${conflicts} 条`);
+for (const r of rows) {
+  if (r.dupOf !== null) bump(reasonHist, '同一道题重复出现（汤面+汤底都相同）');
+  if (r.conflictOf !== null) bump(reasonHist, '同一汤面配了不同汤底（题目自相矛盾）');
+}
 
 console.log('③ 近似去重（SimHash 64 位，Hamming ≤ 3）…');
 if (nearDupOn) {
@@ -247,9 +251,10 @@ md.push('## 一、结论\n');
 md.push(`| 指标 | 数量 | 占比 |`);
 md.push(`|---|---|---|`);
 md.push(`| 原始条目 | ${rows.length} | 100% |`);
+md.push(`| **独立题目**（汤面+汤底去重后） | **${uniquePuzzles}** | ${pct(uniquePuzzles, rows.length)} |`);
 md.push(`| 文本级质检**通过** | ${pass.length} | ${pct(pass.length, rows.length)} |`);
 md.push(`| 质检**拒绝** | ${rejected.length} | ${pct(rejected.length, rows.length)} |`);
-md.push(`| 完全重复（汤面相同） | ${exactDups} | ${pct(exactDups, rows.length)} |`);
+md.push(`| 完全重复（汤面+汤底都相同） | ${exactDups} | ${pct(exactDups, rows.length)} |`);
 md.push(`| 近似重复（SimHash ≤3） | ${nearDups} | ${pct(nearDups, rows.length)} |`);
 md.push(`| 与现有题库撞题 | ${clashExisting} | ${pct(clashExisting, rows.length)} |`);
 md.push(`| 需要清洗（markdown/标签/客套话） | ${cleanedCount} | ${pct(cleanedCount, rows.length)} |`);

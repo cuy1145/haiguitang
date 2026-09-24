@@ -278,7 +278,13 @@ for (const [i, it] of candidates.entries()) {
     { surface: it.surface, truth: it.truth },
   );
   if (!factsRes.ok) { rejected.push({ surface: it.surface, why: `补事实点失败：${factsRes.errorClass}` }); continue; }
-  const checked = checkAndNormalizePuzzle({ surface: it.surface, truth: it.truth, ...(factsRes.raw as object) }, { idPrefix: 'imp' });
+  // 繁体题库（如 ModelScope 的 Turtle-Bench）：模型会顺手给出简体版，优先用它
+  const rawFacts = factsRes.raw as { surface_simplified?: string; truth_simplified?: string } & Record<string, unknown>;
+  const finalSurface = typeof rawFacts.surface_simplified === 'string' && rawFacts.surface_simplified.trim()
+    ? cleanPuzzleText(rawFacts.surface_simplified) : it.surface;
+  const finalTruth = typeof rawFacts.truth_simplified === 'string' && rawFacts.truth_simplified.trim()
+    ? cleanPuzzleText(rawFacts.truth_simplified) : it.truth;
+  const checked = checkAndNormalizePuzzle({ surface: finalSurface, truth: finalTruth, ...rawFacts }, { idPrefix: 'imp' });
   if (!checked.ok) { rejected.push({ surface: it.surface, why: summarizePuzzleIssues(checked.issues) }); continue; }
   acceptedPuzzles.push({ puzzle: checked.puzzle, from: it });
 }
