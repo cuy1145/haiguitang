@@ -9,14 +9,14 @@
  */
 import {
   PLATFORM, PROMPT_VERSION, assertNoLeak, canSubmit, checkAndNormalizePuzzle, emptyRoom, getMember, hintsExhausted,
-  isLeaky, judgeGuess, pickHintFact, pickNewHost, reduce, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
+  isLeaky, judgeGuess, normalize, pickHintFact, pickNewHost, reduce, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
   transferGate, validateConfigChange,
 } from '@ht/core';
 import type {
   ActionReject, CoreMember, CoreRoom, DomainEvent, GameConfig, Puzzle, ReduceCtx, SubmitReject,
 } from '@ht/core';
 import type { CredentialRecord } from './vault.ts';
-import type { QuestionRecord } from './store.ts';
+import type { QuestionRecord, ChatRecord } from './store.ts';
 import type { HostPort, LoggerPort, RoomStorePort } from './ports.ts';
 import { CODE_LENGTH, TEXT, credentialBaseUrl, generateCode } from './protocol.ts';
 import type { RoomView, TimelineEntry } from './protocol.ts';
@@ -779,6 +779,60 @@ export class RoomRuntime {
    *     这比"每人 N 次"更符合多人体验：不会出现"三个人各自闷头猜"。
    *   · 每人上限保留但默认 0=不限（房主想要防刷可以自己调大）。
    */
+  /**
+   * 全员讨论区：发一条房间内消息。**不参与判定**（不进模型、不占回合、不进缓存、不加线索）。
+   *
+   * 规则（设计稿 §12.8）：
+   *   · 纯文本、去控制字符、限长 PLATFORM.chatMaxLen；
+   *   · 限流独立于提问与心跳：10 秒 5 条 / 60 秒 30 条（超限回 CHAT_RATE_LIMITED + 剩余毫秒）；
+   *   · `clientMessageId` 幂等（表上有唯一约束，网络重试不会写出重复消息）；
+   *   · 谁能发：房间成员（含旁观者与待入席者）——离席/被移出的会话已经失效，进不来。
+   */
+  async postChat(
+    memberId: string,
+    text: string,
+    clientMessageId: string,
+    recentTimes: number[],
+  ): Promise<Result<{ message: ChatRecord }>> {
+    const member = getMember(this.room, memberId);
+    if (!member) return { ok: false, code: 'UNAUTHORIZED' };
+    if (this.room.status === 'destroyed') return { ok: false, code: 'MATCH_NOT_ACTIVE' };
+
+    const clean = normalize(text);
+    if (!clean) return { ok: false, code: 'CHAT_EMPTY' };
+    if (clean.length > PLATFORM.chatMaxLen) return { ok: false, code: 'CHAT_TOO_LONG' };
+
+    const now = this.now;
+    const within = (ms: number): number[] => recentTimes.filter((t) => now - t < ms).sort((a, b) => a - b);
+    const last10 = within(10_000);
+    const last60 = within(60_000);
+    if (last10.length >= PLATFORM.chatPer10s || last60.length >= PLATFORM.chatPer60s) {
+      // 还要等多久：等最早那条滑出窗口
+      const gate = last10.length >= PLATFORM.chatPer10s
+        ? (last10[last10.length - PLATFORM.chatPer10s] ?? last10[0]!) + 10_000
+        : (last60[last60.length - PLATFORM.chatPer60s] ?? last60[0]!) + 60_000;
+      return { ok: false, code: 'CHAT_RATE_LIMITED', detail: { retryAfterMs: Math.max(0, gate - now) } };
+    }
+
+    const message: ChatRecord = {
+      id: this.deps.newId('c'),
+      roomId: this.room.id,
+      // chatSeq 由存储层用 SQL 的 MAX+1 原子分配（返回给发送者时是 0，
+      // 前端只把轮询到的值当游标，动作响应里的这条靠 clientMessageId 去重）
+      chatSeq: 0,
+      memberId,
+      text: clean,
+      clientMessageId,
+      // 用房间时钟（生产环境就是 Date.now()；测试里是假时钟，这样限流窗口可被精确验证）
+      createdAt: now,
+    };
+    return this.enqueue(() => {
+      this.deps.store.appendChat(message);
+      this.deps.store.audit({ action: 'chat_posted', roomId: this.room.id, actor: memberId, subject: `len=${clean.length}` });
+      return { ok: true as const, data: { message } };
+    });
+  }
+
   async submitGuess(memberId: string, text: string): Promise<Result<{ verdict: string }>> {
     const puzzle = this.currentPuzzle();
     const member = getMember(this.room, memberId);

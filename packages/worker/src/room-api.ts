@@ -15,14 +15,14 @@
  * 顺序固定为 tickTurn → presenceTick → 移交 → 投票截止 → 中断超时自动投票（与 Node 版 tick 顺序一致）。
  */
 import {
-  DEFAULT_CONFIG, PLATFORM, PRESETS, validateConfig, getMember, toPublicPuzzle,
+  DEFAULT_CONFIG, PLATFORM, PRESETS, toPublicChat, validateConfig, getMember, toPublicPuzzle,
 } from '@ht/core';
 import type { CoreMember, GameConfig, Puzzle } from '@ht/core';
 import { RoomRuntime } from '../../server/src/rooms.ts';
 import { HostService } from '../../server/src/ai.ts';
 import type { Env } from './index.ts';
 import {
-  D1RoomStore, flushRoomStore, fetchEventsSince, findRoomByCode, loadSnapshot, lookupSession,
+  D1RoomStore, flushRoomStore, fetchChat, fetchEventsSince, findRoomByCode, loadSnapshot, lookupSession, recentChatTimes,
   roomCodeTaken, saveSession, purgeRoom,
 } from './store-d1.ts';
 import { ConsoleLogger } from './log.ts';
@@ -83,17 +83,27 @@ export async function handleApi(request: Request, env: Env, url: URL): Promise<R
   if (request.method === 'GET' && path === '/api/rooms/state') {
     // 前端轮询用这一个端点：一次拿到【视图快照 + 时间线 + 公共提问记录 + 自 since 起的新事件 + 最新 seq】
     const since = Number(url.searchParams.get('since') ?? 0);
-    return withRoom(env, roomId, async (runtime, store) => json({
-      view: viewFor(runtime, memberId),
+    // 讨论区用**自己的游标** chatSince（绝不能和事件 seq 混用，否则会错乱）
+    const chatSince = Number(url.searchParams.get('chatSince') ?? 0);
+    return withRoom(env, roomId, async (runtime2, store) => {
+      // 讨论消息的读路径直接在库上做（不进快照）；发送者名字从当前房间快照取
+      const chat = await fetchChat(env.DB, roomId, chatSince, 100);
+      const nameOf = (id: string): string => getMember(runtime2.room, id)?.name ?? '已离开的玩家';
+      return json({
+      view: viewFor(runtime2, memberId),
       timeline: await loadTimeline(env, roomId),
       // 公共提问 / 对话记录：所有人都能看到的问答流水（不含事实点、不含汤底）
-      questions: publicQuestionLog(runtime, store.listQuestions(roomId)),
-      seq: runtime.room.eventSeq,
-      stateVersion: runtime.room.stateVersion,
+      questions: publicQuestionLog(runtime2, store.listQuestions(roomId)),
+      // 全员讨论区：成员自由发言，跟判定完全无关（汤底/事实点/密钥绝不进这里）
+      chatMessages: chat.map((m) => toPublicChat(m, nameOf)),
+      chatSeq: chat.length > 0 ? chat[chat.length - 1]!.chatSeq : chatSince,
+      seq: runtime2.room.eventSeq,
+      stateVersion: runtime2.room.stateVersion,
       events: since > 0
         ? [...(await fetchEventsSince(env.DB, roomId, since)), ...store.emittedEvents.filter((e) => e.seq > since)]
         : store.emittedEvents,
-    }), { withQuestions: true });
+      });
+    }, { withQuestions: true });
   }
   if (request.method === 'GET' && path === '/api/rooms/events') {
     const since = Number(url.searchParams.get('since') ?? 0);
@@ -317,6 +327,14 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
       case 'kick': {
         const r = await runtime.kickMember(memberId, String(body.memberId ?? ''));
         return r.ok ? okWithView(r.data) : failWithView(r.code);
+      }
+      /** 全员讨论区：发一条房间内消息（不参与判定；限流独立于提问与心跳） */
+      case 'chat': {
+        const clientMessageId = String(body.clientMessageId ?? newId('cm'));
+        // 限流要看"这个成员最近发过什么"，所以先进库读一次（读路径不进快照）
+        const recent = await recentChatTimes(env.DB, roomId, memberId, Math.max(PLATFORM.chatPer60s, 30));
+        const r = await runtime.postChat(memberId, String(body.text ?? ''), clientMessageId, recent);
+        return r.ok ? okWithView(r.data) : failWithView(r.code, r.detail);
       }
       case 'skip_turn': { const r = await runtime.skipTurn(memberId); return r.ok ? okWithView() : failWithView(r.code); }
       case 'end_match': { const r = await runtime.endMatch(memberId); return r.ok ? okWithView() : failWithView(r.code); }

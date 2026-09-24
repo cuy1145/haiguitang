@@ -19,6 +19,7 @@ import type { HostService } from './ai.ts';
 export type RoomStorePort = Pick<
   Store,
   | 'audit'
+  | 'appendChat'
   | 'bumpUsage'
   | 'currentMatch'
   | 'destroyCredential'

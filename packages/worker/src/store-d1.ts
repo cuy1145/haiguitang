@@ -22,7 +22,7 @@ import type { CoreMember, CoreRoom, GameConfig, Puzzle, PuzzleFact, PuzzleMeta }
 import { PROMPT_VERSION, ngrams } from '@ht/core';
 import type { RoomStorePort, VerdictCachePort } from '../../server/src/ports.ts';
 import type { CredentialRecord, CredentialState } from '../../server/src/vault.ts';
-import type { QuestionRecord, VerdictCacheRow } from '../../server/src/store.ts';
+import type { QuestionRecord, ChatRecord, VerdictCacheRow } from '../../server/src/store.ts';
 import { seedPuzzles } from '../../server/src/data/seed-puzzles.ts';
 
 interface Row { [k: string]: unknown }
@@ -231,8 +231,21 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     });
   }
 
-  insertQuestion(q: QuestionRecord): void {
-    if (this.knownQuestions.some((x) => x.turnSeq === q.turnSeq)) return;
+  /**
+   * 全员讨论区：追加一条消息（与房间写入同事务）。
+   * `chat_seq` 由 SQL 里的 MAX+1 原子计算，并用 (room_id, client_message_id) 唯一约束保证幂等
+   * —— 网络重试不会写出重复消息。守卫仍挂在房间 state_version 上：房间被清理就不写了。
+   */
+  appendChat(msg: ChatRecord): void {
+    this.pending.push({
+      sql: `INSERT OR IGNORE INTO room_chat(id, room_id, chat_seq, member_id, text, client_message_id, created_at)
+            SELECT ?, ?, (SELECT COALESCE(MAX(chat_seq), 0) + 1 FROM room_chat WHERE room_id = ?), ?, ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
+      bindings: [msg.id, msg.roomId, msg.roomId, msg.memberId, msg.text, msg.clientMessageId, msg.createdAt, this.roomId, VERSION_PLACEHOLDER],
+    });
+  }
+
+  insertQuestion(q: QuestionRecord): void {    if (this.knownQuestions.some((x) => x.turnSeq === q.turnSeq)) return;
     this.knownQuestions.push(q);
     this.pending.push({
       sql: `INSERT OR IGNORE INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, client_submit_id, created_at)
@@ -482,6 +495,7 @@ export async function purgeRoom(db: D1Database, roomId: string): Promise<void> {
     db.prepare('DELETE FROM sessions WHERE room_id = ?').bind(roomId),
     db.prepare('DELETE FROM room_events WHERE room_id = ?').bind(roomId),
     db.prepare('DELETE FROM questions WHERE room_id = ?').bind(roomId),
+    db.prepare('DELETE FROM room_chat WHERE room_id = ?').bind(roomId),
     db.prepare('DELETE FROM votes WHERE room_id = ?').bind(roomId),
     db.prepare('DELETE FROM matches WHERE room_id = ?').bind(roomId),
     db.prepare('DELETE FROM credit_grants WHERE room_id = ?').bind(roomId),
@@ -533,6 +547,29 @@ function rowToRoom(row: Row): CoreRoom {
     result: row.result_json ? JSON.parse(String(row.result_json)) : null,
     createdAt: Number(row.created_at), updatedAt: Number(row.updated_at),
   };
+}
+
+/**
+ * 拉取讨论消息（`sinceSeq` 之后，最多 limit 条）。读路径直接用 DB，不进快照：
+ * 讨论消息不属于房间状态，没必要每轮都载入。
+ */
+export async function fetchChat(db: D1Database, roomId: string, sinceSeq = 0, limit = 200): Promise<ChatRecord[]> {
+  const res = await db.prepare(
+    'SELECT id, room_id, chat_seq, member_id, text, client_message_id, created_at FROM room_chat WHERE room_id = ? AND chat_seq > ? ORDER BY chat_seq LIMIT ?',
+  ).bind(roomId, sinceSeq, limit).all<Row>();
+  return (res.results ?? []).map((r) => ({
+    id: String(r.id), roomId: String(r.room_id), chatSeq: Number(r.chat_seq),
+    memberId: String(r.member_id), text: String(r.text),
+    clientMessageId: String(r.client_message_id), createdAt: Number(r.created_at),
+  }));
+}
+
+/** 限流用：某成员最近 N 条消息的时间戳（新→旧）。 */
+export async function recentChatTimes(db: D1Database, roomId: string, memberId: string, limit = 30): Promise<number[]> {
+  const res = await db.prepare(
+    'SELECT created_at FROM room_chat WHERE room_id = ? AND member_id = ? ORDER BY chat_seq DESC LIMIT ?',
+  ).bind(roomId, memberId, limit).all<Row>();
+  return (res.results ?? []).map((r) => Number(r.created_at));
 }
 
 function rowToMember(m: Row): CoreMember {

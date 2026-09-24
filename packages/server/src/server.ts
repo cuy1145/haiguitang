@@ -456,6 +456,14 @@ export class App {
           this.reply(ws, id, result.ok, result.ok ? undefined : result.code);
           break;
         }
+        case 'chat': {
+          // 全员讨论区：限流依据是该成员最近的消息时间戳（Store 里同步可读）
+          const recent = this.deps.store.recentChatTimes(runtime.room.id, memberId, Math.max(PLATFORM.chatPer60s, 30));
+          const result = await runtime.postChat(memberId, String(frame.text ?? ''), String(frame.clientMessageId ?? ''), recent);
+          if (result.ok) this.reply(ws, id, true, undefined, result.data as Record<string, unknown>);
+          else this.reply(ws, id, false, result.code, result.detail as Record<string, unknown> | undefined);
+          break;
+        }
         case 'resume_transfer': {
           const result = await runtime.resumeTransfer(memberId);
           this.reply(ws, id, result.ok, result.ok ? undefined : result.code);

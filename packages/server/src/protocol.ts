@@ -7,6 +7,7 @@
  *  - 文案由服务端模板渲染（不来自模型），保证所有客户端看到的一致
  */
 import type { CoreRoom, GameConfig, JudgeResult, PublicRoom } from '@ht/core';
+import { PLATFORM } from '@ht/core';
 
 /**
  * 凭据里保存的 Base URL。
@@ -72,6 +73,8 @@ export type ClientFrame =
   | { t: 'create_ai_puzzle'; id?: string }
   /** 回到选题：上一局结束后把房间放回等待状态（仅房主），房主接着选下一道题 */
   | { t: 'next_round'; id?: string }
+  /** 全员讨论区：发一条房间内消息（不参与判定，谁都能发，含旁观者） */
+  | { t: 'chat'; id?: string; text: string; clientMessageId: string }
   | { t: 'resume_transfer'; id?: string }
   | { t: 'return_host'; id?: string }
   | { t: 'decline_return'; id?: string }
@@ -130,6 +133,9 @@ export function messageOf(code: string): string {
     case 'ROOM_CLOSED': return '房间已经结束，不能再加入了。';
     case 'ROOM_FULL': return '房间人数已满。';
     case 'MID_JOIN_REJECTED': return '这一局已经开始了，房主设置为本局不接受中途加入，等下一局再来。';
+    case 'CHAT_EMPTY': return '消息是空的。';
+    case 'CHAT_TOO_LONG': return `消息太长了（上限 ${PLATFORM.chatMaxLen} 字）。`;
+    case 'CHAT_RATE_LIMITED': return '发得太频繁了：讨论区每人 10 秒最多 5 条，缓一缓再发。';
     case 'UNAUTHORIZED': return '会话无效或已过期，请重新加入房间。';
     case 'CONFLICT': return '房间状态刚被别的操作更新，请重试一次。';
     case 'UNKNOWN_ACTION': return '未知操作（客户端与服务端版本可能不一致）。';

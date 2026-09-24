@@ -45,6 +45,11 @@ export const PLATFORM = {
    * 超过这个数就只能纯旁观，避免有人拿排队占位。
    */
   midJoinPendingMax: 3,
+  /** 全员讨论区：单条消息长度上限 */
+  chatMaxLen: 500,
+  /** 讨论限流：10 秒内最多 5 条、60 秒内最多 30 条（独立于提问与心跳） */
+  chatPer10s: 5,
+  chatPer60s: 30,
   /** 判定单次超时（毫秒） */
   judgeTimeoutMs: 20000,
   /** 事件环形缓冲条数（超出后客户端需全量快照） */

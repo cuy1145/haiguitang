@@ -98,7 +98,10 @@ export type ActionReject =
   | 'NOT_HOST'
   | 'NOT_ALL_READY'
   | 'NOT_ALLOWED'
-  | 'PUZZLE_NOT_FOUND';
+  | 'PUZZLE_NOT_FOUND'
+  | 'CHAT_EMPTY'
+  | 'CHAT_TOO_LONG'
+  | 'CHAT_RATE_LIMITED';
 
 // ---------------------------------------------------------------- 题库
 /** 原子事实点（🔴 永不 下发）。isTrue 是判定结论的唯一权威来源。 */

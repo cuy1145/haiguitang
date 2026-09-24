@@ -122,8 +122,38 @@ export interface PublicRoom {
   pendingSeatCount: number;
 }
 
-export function toPublicPuzzle(p: Puzzle): PublicPuzzle {
+/**
+ * 全员讨论区的一条消息（房间内自由聊天，不参与判定）。
+ * 服务端只做长度/控制字符清洗与成员名补全，绝不会把汤底、事实点或密钥拼进来。
+ */
+export interface PublicChatMessage {
+  id: string;
+  /** 房间内单调递增；客户端用它做增量拉取游标 */
+  chatSeq: number;
+  memberId: string;
+  memberName: string;
+  text: string;
+  /** 发送者的客户端消息 ID：前端据此去重（网络重试/乐观显示） */
+  clientMessageId: string;
+  createdAt: number;
+}
+
+export function toPublicChat(
+  m: { id: string; chatSeq: number; memberId: string; text: string; clientMessageId: string; createdAt: number },
+  memberNameOf: (memberId: string) => string,
+): PublicChatMessage {
   return {
+    id: m.id,
+    chatSeq: m.chatSeq,
+    memberId: m.memberId,
+    memberName: memberNameOf(m.memberId),
+    text: m.text,
+    clientMessageId: m.clientMessageId,
+    createdAt: m.createdAt,
+  };
+}
+
+export function toPublicPuzzle(p: Puzzle): PublicPuzzle {  return {
     id: p.id,
     title: p.title,
     surface: p.surface,

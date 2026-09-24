@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import type { CoreMember, CoreRoom, GameConfig, Puzzle, PuzzleFact, PuzzleMeta } from '@ht/core';
 import type { CredentialRecord, CredentialState, EncryptedBlob } from './vault.ts';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export interface StoredMemberKeyState {
   hasKey: boolean;
@@ -36,6 +36,22 @@ export interface QuestionRecord {
   matchedFactIds: string[];
   /** 「是 / 否」时可选的一句补充说明（已过泄露检查；没有就是 null） */
   explain?: string | null;
+  createdAt: number;
+}
+
+/**
+ * 全员讨论区的一条消息（房间内自由聊天，**不参与判定**）。
+ * 只存成员输入的纯文本 + 最小元数据：服务端绝不会把汤底/事实点/密钥拼进来。
+ */
+export interface ChatRecord {
+  id: string;
+  roomId: string;
+  /** 房间内单调递增（客户端用它做增量拉取游标） */
+  chatSeq: number;
+  memberId: string;
+  text: string;
+  /** 客户端消息 ID：唯一约束，保证网络重试不会产生重复消息 */
+  clientMessageId: string;
   createdAt: number;
 }
 
@@ -176,10 +192,23 @@ export class Store {
         UNIQUE(room_id, client_submit_id)
       );
 
-      CREATE TABLE IF NOT EXISTS matches (
+      CREATE TABLE IF NOT EXISTS room_chat (
         id TEXT PRIMARY KEY,
         room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-        puzzle_id TEXT NOT NULL,
+        chat_seq INTEGER NOT NULL,
+        member_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        client_message_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        UNIQUE(room_id, member_id, client_message_id),
+        UNIQUE(room_id, chat_seq)
+      );
+      CREATE INDEX IF NOT EXISTS idx_room_chat ON room_chat(room_id, chat_seq);
+      CREATE INDEX IF NOT EXISTS idx_room_chat_member ON room_chat(room_id, member_id, chat_seq);
+
+      CREATE TABLE IF NOT EXISTS matches (
+        id TEXT PRIMARY KEY,
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,        puzzle_id TEXT NOT NULL,
         config_snapshot TEXT NOT NULL,
         turn_order_snapshot TEXT NOT NULL,
         credit_source TEXT NOT NULL,
@@ -493,8 +522,40 @@ export class Store {
     }
   }
 
-  listQuestions(roomId: string): QuestionRecord[] {
-    const rows = this.db.prepare('SELECT * FROM questions WHERE room_id = ? ORDER BY turn_seq').all(roomId) as Record<string, unknown>[];
+  // ---------------------------------------------------------------- 全员讨论区（房间内自由聊天）
+  /**
+   * 追加一条讨论消息。`chat_seq` 在房间内单调递增，由 SQL 自增（并发安全：以 MAX+1 计算）。
+   * `client_message_id` 唯一约束保证重试不会写出重复消息（幂等）。幂等键按
+   * **(room_id, member_id, client_message_id)** 划分：只有"同一个人重发同一条"才算重复。
+   */
+  appendChat(msg: ChatRecord): void {
+    this.db.prepare(`
+      INSERT OR IGNORE INTO room_chat(id, room_id, chat_seq, member_id, text, client_message_id, created_at)
+      VALUES (?, ?, (SELECT COALESCE(MAX(chat_seq), 0) + 1 FROM room_chat WHERE room_id = ?), ?, ?, ?, ?)
+    `).run(msg.id, msg.roomId, msg.roomId, msg.memberId, msg.text, msg.clientMessageId, msg.createdAt);
+  }
+
+  /** 拉取讨论消息：`sinceSeq` 之后的最多 `limit` 条（默认从头拉 200 条）。 */
+  listChat(roomId: string, sinceSeq = 0, limit = 200): ChatRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM room_chat WHERE room_id = ? AND chat_seq > ? ORDER BY chat_seq LIMIT ?',
+    ).all(roomId, sinceSeq, limit) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: String(r.id), roomId: String(r.room_id), chatSeq: Number(r.chat_seq),
+      memberId: String(r.member_id), text: String(r.text),
+      clientMessageId: String(r.client_message_id), createdAt: Number(r.created_at),
+    }));
+  }
+
+  /** 限流用：某成员最近 N 条消息的时间戳（新→旧）。 */
+  recentChatTimes(roomId: string, memberId: string, limit = 30): number[] {
+    const rows = this.db.prepare(
+      'SELECT created_at FROM room_chat WHERE room_id = ? AND member_id = ? ORDER BY chat_seq DESC LIMIT ?',
+    ).all(roomId, memberId, limit) as { created_at: number }[];
+    return rows.map((r) => Number(r.created_at));
+  }
+
+  listQuestions(roomId: string): QuestionRecord[] {    const rows = this.db.prepare('SELECT * FROM questions WHERE room_id = ? ORDER BY turn_seq').all(roomId) as Record<string, unknown>[];
     return rows.map((r) => ({
       id: String(r.id),
       roomId: String(r.room_id),

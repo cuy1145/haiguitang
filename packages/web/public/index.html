@@ -313,6 +313,19 @@
   .log .qa .a .verdict.unanswerable{color:var(--warn)}
   .log .qa .explain{color:#cfd5e6;font-style:italic;border-left:2px solid var(--line-2);padding-left:8px;margin-top:6px;display:block}
   .log .qa .late{color:var(--warn)}
+
+  /* ==========================================================================
+   * 全员讨论区（房间内自由发言，不参与判定）
+   * 自己的消息右对齐（暖色便笺），别人的左对齐；纯文本渲染，绝不注入 HTML
+   * ========================================================================*/
+  .chat{display:flex;flex-direction:column;gap:8px;max-height:34vh;overflow:auto;padding-right:3px}
+  .chat .msg{max-width:86%;border-radius:12px;padding:7px 11px;font-size:13px;
+    background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.02));border:1px solid var(--line)}
+  .chat .msg.mine{align-self:flex-end;background:linear-gradient(180deg,rgba(243,185,95,.20),rgba(243,185,95,.08));
+    border-color:rgba(243,185,95,.34)}
+  .chat .msg .who{font-size:10.5px;color:var(--fg3);margin-bottom:2px}
+  .chat .msg .txt{white-space:pre-wrap;word-break:break-word;line-height:1.6}
+  .chatcard .row input{flex:1 1 auto;min-width:0}
   .tl{background:rgba(255,255,255,.028);border:1px solid var(--line);border-radius:var(--radius-sm);padding:7px 11px;font-size:12.5px;color:var(--fg2);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
   .tl.sys{border-style:dashed}
   .tl.err{border-color:rgba(242,96,107,.35);background:rgba(242,96,107,.07);color:#ffc2c7}
@@ -457,8 +470,9 @@ const S = {
   lastFailMessage: '',
   drafts: {},                            // 弹窗输入的临时值：只在本页内存里，重渲染不丢；关闭即清
   serverOffset: 0,                      // 服务端时钟 - 本机时钟（计时用服务端时间为准）
-  hint: '',
-  recap: null,
+  hint: '',  recap: null,
+  // 全员讨论区：消息、增量游标、草稿（只在内存里，和正式提问草稿分开）、未读数
+  chat: [], chatSeq: 0, chatDraft: '', chatReadSeq: 0, chatUnread: 0,
   keyMask: null,
   keyTest: null,
   configModal: false,
@@ -474,6 +488,19 @@ const fmt = (ms) => { ms = Math.max(0, ms | 0); const t = Math.ceil(ms / 1000); 
 const nowMs = () => Date.now();
 /** 服务端当前时间（以服务端快照为基准对齐本机时钟） */
 const serverNow = () => Date.now() + S.serverOffset;
+
+/* ---------------------------------------------------------------- 全员讨论区
+ * 只统计"别人发的、我还没看到的"未读数；未读纯属前端提示，不改房间/对局状态。
+ * 打开讨论区并停在底部即视为已读（chatReadSeq 推进到最新）。
+ * ------------------------------------------------------------------------- */
+function countChatUnread() {
+  const meId = S.view && S.view.you ? S.view.you.memberId : '';
+  S.chatUnread = S.chat.filter((m) => (m.chatSeq || 0) > S.chatReadSeq && m.memberId !== meId).length;
+}
+function markChatRead() {
+  const newest = S.chat.reduce((mx, m) => Math.max(mx, m.chatSeq || 0), 0);
+  if (newest > S.chatReadSeq) { S.chatReadSeq = newest; countChatUnread(); }
+}
 /** 时刻 → HH:MM:SS（用于对话记录） */
 const fmtClock = (at) => { try { return new Date(at).toLocaleTimeString('zh-CN', { hour12: false }); } catch { return ''; } };
 
@@ -579,6 +606,13 @@ let pollTimer = null;
 let hbTimer = null;
 let pollInFlight = false;
 
+/**
+ * 讨论区乐观条目的 chatSeq 哨兵值：真实 seq 由服务端 SQL 分配（MAX+1），本地不等往返就先显示。
+ * 用最大整数是**故意**的 —— 排序时它必然落在最下面（自己刚发的就是最新一条），
+ * 而且它只活在 S.chat 数组里，服务端真值一到就按 clientMessageId 原地替换。
+ */
+const CHAT_LOCAL_SEQ = Number.MAX_SAFE_INTEGER;
+
 /** {t:...} 帧 → 服务端动作（保持原有调用点不变） */
 const ACTIONS = {
   next_round: () => ({ type: 'next_round' }),
@@ -623,7 +657,7 @@ async function pollOnce() {
   const epoch = sessionEpoch;
   pollInFlight = true;
   try {
-    const res = await fetch(`/api/rooms/state?since=${S.lastSeq}`, { headers: { authorization: `Bearer ${token()}` } });
+    const res = await fetch(`/api/rooms/state?since=${S.lastSeq}&chatSince=${S.chatSeq}`, { headers: { authorization: `Bearer ${token()}` } });
     // 响应回来时如果会话已经结束（用户已离开 / 房间被清理），整包丢弃：
     // 既不能把页面拉回房间，也不能写一句"连接中断（HTTP 404）"把入口页卡住。
     if (epoch !== sessionEpoch || !token()) return;
@@ -678,6 +712,22 @@ function applyViewPayload(data) {
     }));
   }
   S.log = buildLog(S.questions, S.pendingTimeline);
+  // 全员讨论区：按 clientMessageId 合并。自己刚发的那条是**乐观条目**（chatSeq 用哨兵值、pending=true），
+  // 服务端真值到了就原地替换 —— 不能当成重复直接丢掉，否则它永远停在哨兵位置、pending 也永远不消。
+  if (Array.isArray(data.chatMessages) && data.chatMessages.length > 0) {
+    let newest = 0;
+    for (const m of data.chatMessages) {
+      const i = S.chat.findIndex((x) => x.clientMessageId === m.clientMessageId);
+      if (i < 0) S.chat.push(m);
+      else if (S.chat[i].pending === true || !S.chat[i].chatSeq) S.chat[i] = m;
+      if (m.chatSeq > newest) newest = m.chatSeq;
+    }
+    S.chat.sort((a, b) => (a.chatSeq || a.createdAt) - (b.chatSeq || b.createdAt));
+    if (S.chat.length > 200) S.chat = S.chat.slice(-200);
+    if (typeof data.chatSeq === 'number' && data.chatSeq > S.chatSeq) S.chatSeq = data.chatSeq;
+    else if (newest > S.chatSeq) S.chatSeq = newest;
+    countChatUnread();
+  }
   if (typeof data.seq === 'number' && data.seq > S.lastSeq) S.lastSeq = data.seq;
   if (Array.isArray(data.events)) {
     for (const e of data.events) if (typeof e.seq === 'number' && e.seq > S.lastSeq) S.lastSeq = e.seq;
@@ -934,6 +984,8 @@ function stateFingerprint() {
   return JSON.stringify([
     S.screen, S.connected, S.notice, S.error, S.hint,
     S.configModal, S.guessModal, S.keyModal, S.truthModal,
+    // 讨论区：消息条数与未读数进指纹（否则新消息不会触发重渲染）；草稿刻意不进（打字不重渲染）
+    S.chat.length, S.chatUnread,
     S.keyMask, t ? [t.pending === true, t.ok === true, t.reasonCode, t.message, t.url] : null,
     S.recap ? 1 : 0,
     view, S.questions, S.log.length, S.pendingTimeline.length,
@@ -1137,6 +1189,8 @@ function viewRoom() {
 
       ${speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel)}
 
+      ${chatCard(room, you)}
+
       <div class="card creditcard">
         <div class="spread"><h3 style="margin:0">额度来源</h3>
           <span class="pill ${room.credit.mode === 'host_key' ? 'accent' : ''}">${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'}</span></div>
@@ -1305,6 +1359,40 @@ function aiBlockHint(code) {
     case 'PROVIDER_REFUSAL': return '上游因内容策略拒绝了这次判定。换一个模型名试试。';
     default: return '点「更新 API Key 并继续对局」重新做一次连接测试并提交，通过后会自动解除暂停。';
   }
+}
+
+/**
+ * 全员讨论区（设计稿 §12）：房间内自由发言，**不参与判定**
+ * —— 不进 AI 主持人、不占回合、不进判定缓存、不加线索、不触发猜汤底。
+ * 谁都能发（含旁观者与待入席者）；限长 500 字、独立限流（10 秒 5 条）。
+ */
+function chatCard(room, you) {
+  const meId = you.memberId;
+  const unread = S.chatUnread || 0;
+  const msgs = S.chat.slice(-80);
+  return `
+  <div class="card chatcard">
+    <div class="spread" style="margin-bottom:10px">
+      <h3 style="margin:0">讨论 <span class="dim">${S.chat.length} 条</span></h3>
+      <span class="pill ${unread ? 'live' : ''}">${unread ? `${unread > 99 ? '99+' : unread} 条新消息` : '房间内自由发言'}</span>
+    </div>
+    <div class="dim" style="margin-bottom:8px">只用来商量怎么问、怎么推理。这里说的话不会进判定，也不占提问回合。</div>
+    <div class="chat" id="chatLog">
+      ${msgs.length ? msgs.map((m) => chatEntry(m, meId)).join('') : '<div class="empty">还没人说话。想商量就打个招呼。</div>'}
+    </div>
+    <div class="row" style="margin-top:9px;align-items:flex-end">
+      <input id="chatInput" maxlength="${'500'}" autocomplete="off" spellcheck="false" placeholder="发消息…（Enter 发送 / Shift+Enter 换行）" value="${esc(S.chatDraft || '')}">
+      <button class="primary" id="btnChatSend" ${String(S.chatDraft || '').trim() ? '' : 'disabled'}>发送</button>
+    </div>
+  </div>`;
+}
+
+function chatEntry(m, meId) {
+  const mine = m.memberId === meId;
+  return `<div class="msg${mine ? ' mine' : ''}">
+    <div class="who">${mine ? '你' : esc(m.memberName || '—')}<span class="dim"> ${esc(fmtClock(m.createdAt))}</span></div>
+    <div class="txt">${esc(m.text)}</div>
+  </div>`;
 }
 
 /** 还没准备的"有资格"人数（离线/旁观/房主不阻塞开局）；房主据此决定是否二次确认 */
@@ -1960,6 +2048,7 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnStart': requestStart('pick'); break;
+      case 'btnChatSend': await sendChat(); break;
       case 'btnSeat': {
         // 待入席者的"举手"= 申请下一轮上桌（服务端按成员状态区分语义）
         const me = room ? room.members.find((m) => m.id === (S.view.you ? S.view.you.memberId : '')) : null;
@@ -2108,8 +2197,48 @@ document.addEventListener('click', async (e) => {
   }
 });
 
-function doSend() {
-  const ta = $('#ask');
+/**
+ * 发一条讨论消息。失败保留草稿（不吞用户输入），成功后立刻把自己那条挂上去（clientMessageId 去重）。
+ */
+async function sendChat() {
+  const text = String(S.chatDraft || '').trim();
+  if (!text) return;
+  const clientMessageId = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()));
+  const meId = S.view && S.view.you ? S.view.you.memberId : '';
+  const meName = S.view && S.view.you ? S.view.you.name : '';
+  // 乐观显示：**先挂上去再发请求**。弱网下往返可能要一两秒，等响应才显示的话，
+  // 用户会以为没发出去而重复点。chatSeq 用哨兵值，服务端真值回来后原地替换。
+  S.chat.push({
+    id: 'local:' + clientMessageId, chatSeq: CHAT_LOCAL_SEQ, memberId: meId, memberName: meName,
+    text, clientMessageId, createdAt: Date.now() + (S.serverOffset || 0), pending: true,
+  });
+  S.chatDraft = '';
+  countChatUnread();
+  render(true);
+  const el0 = $('#chatLog'); if (el0) el0.scrollTop = el0.scrollHeight;
+  const res = await sendAction({ type: 'chat', text, clientMessageId }, { silent: true });
+  if (!res) {
+    // 失败：把自己那条撤掉、草稿还回输入框（不吞用户写的东西）；错误信息已由 sendAction 显示
+    S.chat = S.chat.filter((m) => m.clientMessageId !== clientMessageId);
+    S.chatDraft = text;
+    countChatUnread();
+    render(true);
+    const back = $('#chatInput'); if (back) back.focus();
+    return;
+  }
+  const msg = res.data && res.data.message;
+  if (msg) {
+    // 动作响应里这条的 chatSeq 是 0（真值由服务端 SQL 分配）：能替换就替换，
+    // 但**只替换本地乐观条目**，绝不能覆盖轮询已经拿到的权威值。
+    const i = S.chat.findIndex((m) => m.clientMessageId === clientMessageId && m.pending === true);
+    if (i >= 0 && msg.chatSeq) S.chat[i] = msg;
+  }
+  render(true);
+  const el = $('#chatLog'); if (el) el.scrollTop = el.scrollHeight;
+  const input = $('#chatInput'); if (input) { input.value = ''; input.focus(); }
+}
+
+function doSend() {  const ta = $('#ask');
   const text = (ta ? ta.value : '').trim();
   if (!text) return;
   const v = S.view;
@@ -2124,6 +2253,13 @@ document.addEventListener('input', (e) => {
     // 预输入草稿：只写本机 localStorage，绝不上传
     localStorage.setItem(LS_DRAFT, t.value);
     S.drafts.ask = t.value;
+    return;
+  }
+  if (t.id === 'chatInput') {
+    // 讨论草稿只在本页内存里，与正式提问草稿（LS_DRAFT）完全分开，互不覆盖
+    S.chatDraft = t.value;
+    const btn = $('#btnChatSend');
+    if (btn) btn.disabled = !t.value.trim();
     return;
   }
   // 弹窗输入（API Key / Base URL / 模型名 / 推理）：只存内存，重渲染时不丢；
@@ -2188,6 +2324,13 @@ document.addEventListener('change', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('#ask')) { e.preventDefault(); doSend(); }
+  // 讨论区：Enter 发送 / Shift+Enter 换行；中文输入法组字期间（isComposing / keyCode 229）绝不发送
+  if (e.key === 'Enter' && e.target && e.target.id === 'chatInput' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    if (e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    void sendChat();
+    return;
+  }
   // 任何交互都算活动信号（服务端据此推导挂机状态；只上报"有活动"这一事实）
   if (S.connected) send({ t: 'activity', hidden: document.visibilityState !== 'visible' });
 });

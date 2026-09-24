@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
 import { boot, type BootedApp } from '../../packages/server/src/index.ts';
+import { PLATFORM } from '../../packages/core/src/index.ts';
 
 let booted: BootedApp;
 let dataDir: string;
@@ -621,6 +622,83 @@ test('I-23c: 房主不需要举手，也不会被算进"还差几个人"', async
 
   host.close();
   guest.close();
+});
+
+test('I-31: 全员讨论区：谁都能发、不进判定、限长限频幂等（设计稿 §12）', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const g2 = await Client.open(booted.url, p2.token, '阿伟');
+
+  // ① 等待阶段就能发（等着开局时商量题目）
+  const first = await host.request({ t: 'chat', text: '  先问门是不是锁着的  ', clientMessageId: 'c1' });
+  assert.equal(first.t, 'ack', `发送失败：${JSON.stringify(first)}`);
+  const msg = (first as unknown as { data?: { message?: { text?: string; memberId?: string } } }).data?.message;
+  assert.equal(msg?.text, '先问门是不是锁着的', '首尾空白要被清掉');
+  assert.ok(msg?.memberId, '要带发送者 id（前端据此判断"我的消息"）');
+  await settle();
+  let rows = booted.store.listChat(room.roomId, 0);
+  assert.equal(rows.length, 1, '落库了');
+  assert.equal(rows[0]!.chatSeq, 1, 'chatSeq 从 1 开始（房间内单调）');
+
+  // ② 不参与判定：提问记录、事件流都不受影响
+  assert.equal(booted.store.listQuestions(room.roomId).length, 0, '讨论不进 questions');
+  assert.equal(roomState(room.roomId).eventSeq, 0, '讨论不产生房间事件');
+  assert.equal(roomState(room.roomId).turn.seq, 0, '讨论不占回合');
+
+  // ③ 幂等：同一个 clientMessageId 重发不会写出第二条
+  await host.request({ t: 'chat', text: '先问门是不是锁着的', clientMessageId: 'c1' });
+  await settle();
+  rows = booted.store.listChat(room.roomId, 0);
+  assert.equal(rows.length, 1, '重试不产生重复消息');
+
+  // ③b 幂等键**按发送者划分**：另一个人用了同一个 clientMessageId，不该被静默吞掉。
+  // （早期实现按房间唯一 —— 两个人碰巧同 id 时后发者的消息会凭空消失，且返回成功，极难排查）
+  const dupByOther = await g2.request({ t: 'chat', text: '我也用 c1', clientMessageId: 'c1' });
+  assert.equal(dupByOther.t, 'ack', '别人的同 id 也要能发出去');
+  await settle();
+  rows = booted.store.listChat(room.roomId, 0);
+  assert.equal(rows.length, 2, '不同发送者的同 id 是两条消息');
+  assert.equal(rows.filter((m) => m.clientMessageId === 'c1').length, 2, '两条都留在库里');
+  assert.equal(rows[0]!.memberId === rows[1]!.memberId, false, '两条来自不同的人');
+  advance(11_000);                                  // 把这条滑出限流窗口，别干扰后面的限流断言
+
+  // ④ 旁观者也能发（§12.2：所有房间成员共同讨论）
+  const specRes = await fetch(`${booted.url}/api/rooms/${room.code}/join`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nickname: '看客', spectator: true }),
+  });
+  assert.equal(specRes.status, 200, '旁观者应当能进房');
+  const spec = await specRes.json() as { token: string };
+  const specClient = await Client.open(booted.url, spec.token, '看客');
+  const specAck = await specClient.request({ t: 'chat', text: '我帮你们记着时间', clientMessageId: 'c-spec' });
+  assert.equal(specAck.t, 'ack', '旁观者发讨论应当被接受');
+
+  // ⑤ 长度与空消息
+  const empty = await g2.request({ t: 'chat', text: '   ', clientMessageId: 'c2' });
+  assert.equal((empty as unknown as { code?: string }).code, 'CHAT_EMPTY');
+  const tooLong = await g2.request({ t: 'chat', text: 'x'.repeat(PLATFORM.chatMaxLen + 1), clientMessageId: 'c3' });
+  assert.equal((tooLong as unknown as { code?: string }).code, 'CHAT_TOO_LONG');
+
+  // ⑥ 限流：10 秒内最多 5 条（第 6 条才该被挡），独立于提问与心跳
+  for (let i = 0; i < 5; i++) {
+    const ack = await g2.request({ t: 'chat', text: `连发 ${i}`, clientMessageId: `burst-${i}` });
+    assert.equal(ack.t, 'ack', `第 ${i + 1} 条（上限内）应当被接受`);
+    advance(200);
+  }
+  const blocked = await g2.request({ t: 'chat', text: '再发一条', clientMessageId: 'burst-x' });
+  assert.equal((blocked as unknown as { code?: string }).code, 'CHAT_RATE_LIMITED', '超频要被挡');
+  assert.ok(Number((blocked as unknown as { data?: { retryAfterMs?: number } }).data?.retryAfterMs) > 0, '要告知还要等多久');
+  // 窗口滑出后恢复
+  advance(11_000);
+  const again = await g2.request({ t: 'chat', text: '缓过来了', clientMessageId: 'burst-y' });
+  assert.equal(again.t, 'ack', '冷却结束后可以继续发');
+
+  // ⑦ 讨论内容不参与判定，也不出现在汤底相关的任何投影里（只是普通文本）
+  const all = booted.store.listChat(room.roomId, 0);
+  assert.ok(all.every((m) => typeof m.text === 'string' && m.text.length <= PLATFORM.chatMaxLen), '长度都在上限内');
+
+  host.close(); g2.close(); specClient.close();
 });
 
 test('I-30: 房主可设「对局中进房」策略：拒绝 / 只允许旁观 / 排队（默认）', async () => {
