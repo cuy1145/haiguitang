@@ -639,6 +639,48 @@ test('I-24: 房主可以移出玩家：会话立即失效、名单里消失、�
   guest.close();
 });
 
+test('I-26: AI 创作在房主没填 Key 时回落到平台额度（与判定一致，不再直接拒绝）', async () => {
+  // 起一个"平台额度已配置"的实例（enabled=true 且带站点 Key）
+  const dir = mkdtempSync(join(tmpdir(), 'ht-aigen-'));
+  const app = await boot({
+    autoTick: false, now, openBrowser: false, webDir: join(dir, 'web'),
+    config: {
+      host: '127.0.0.1', port: 0, devTools: false, logLevel: 'error', dataDir: dir,
+      masterKey: Buffer.alloc(32, 7),
+      ai: { provider: 'test', baseUrl: 'https://example.invalid/v1', model: 'test-model', key: 'sk-site', timeoutMs: 800, maxRetries: 0, enabled: true },
+      site: { monthlyCallCap: 1000, monthlyCostCap: 0, grantBudgetCalls: 50, grantMaxPerMatch: 2, grantCooldownSec: 600 },
+    },
+  });
+  try {
+    const res = await fetch(`${app.url}/api/rooms`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ nickname: '房主', preset: 'standard' }),
+    });
+    const room = await res.json() as { token: string };
+    const host = await Client.open(app.url, room.token, '房主');   // 房主**不提交任何 Key**
+
+    const ack = await host.request({ t: 'create_ai_puzzle' });
+    assert.equal(ack.t, 'error');
+    const code = (ack as unknown as { code: string }).code;
+    // 上游地址是 example.invalid，必然连不上；关键是**不能是 AI_UNAVAILABLE** ——
+    // 那说明它已经拿着平台额度去调用了，而不是"没有凭据直接拒绝"
+    assert.notEqual(code, 'AI_UNAVAILABLE', '配了平台额度就应当用它出题，而不是报"没有凭据"');
+    host.close();
+  } finally {
+    await app.close();
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
+test('I-26b: 既没有平台额度也没填 Key → 明确返回 AI_UNAVAILABLE', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');   // 主测试实例的 ai.enabled=false
+  const ack = await host.request({ t: 'create_ai_puzzle' });
+  assert.equal(ack.t, 'error');
+  assert.equal((ack as unknown as { code: string }).code, 'AI_UNAVAILABLE');
+  host.close();
+});
+
 test('I-12: 进行中的对局不得提前拿到汤底；aborted 也不揭晓', async () => {
   const room = await createRoom('房主');
   const host = await Client.open(booted.url, room.token, '房主');

@@ -79,8 +79,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
   }
 
   const aiKey = get('AI_KEY').trim();
-  const baseUrl = get('AI_BASE_URL').trim();
-  const model = get('AI_MODEL').trim();
+  // 只配 AI_KEY 就够：地址与模型缺省时用 DeepSeek（与 Worker 端 siteAiConfig 保持一致）
+  const baseUrl = get('AI_BASE_URL').trim() || 'https://api.deepseek.com';
+  const model = get('AI_MODEL').trim() || 'deepseek-flash';
 
   return {
     host: get('HOST', '127.0.0.1'),
@@ -96,7 +97,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
       key: aiKey,
       timeoutMs: num('AI_TIMEOUT_MS', 20000),
       maxRetries: num('AI_MAX_RETRIES', 2),
-      enabled: Boolean(aiKey && baseUrl && model),
+      enabled: Boolean(aiKey),
     },
     site: {
       monthlyCallCap: num('SITE_MONTHLY_CALL_CAP', 2000),

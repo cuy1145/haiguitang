@@ -66,7 +66,7 @@ export function messageOf(code: string): string {
     case 'VOTE_NOT_ELIGIBLE': return '挂机或离线的成员不能表决。';
     case 'VOTE_NOT_OPEN': return '当前没有进行中的投票。';
     case 'HINTS_DISABLED': return '本局未开启提示（房主可在「对局参数」里打开）。';
-    case 'AI_UNAVAILABLE': return '还没有可用的模型凭据：房主先在「我的 API Key」里填一把可用的 Key（先点「测试连接」验证）。';
+    case 'AI_UNAVAILABLE': return '当前没有可用的模型凭据：服务端没配平台额度，你也没填自备 Key。填一把自己的 Key（先点「测试连接」验证）即可；或让运维配置 AI_KEY。';
     case 'PUZZLE_INVALID': return 'AI 出的题没通过坏题检测，已作废（逐条原因见下），换一次生成即可。';
     case 'NOT_ALL_READY': return '还有玩家没点「我准备好了」；等大家都准备好，或确认后强制开局。';
     case 'HINT_COOLDOWN': return '提示冷却中。';

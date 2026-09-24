@@ -71,6 +71,16 @@ export class HostService {
     return this.deps.config.enabled;
   }
 
+  /**
+   * 平台额度对应的凭据（站点自己的 Key）。
+   * 与 `judge()` 里的站点回落用的是同一份配置，供"房主没填 Key 时用平台额度出题"使用。
+   */
+  siteCredential(): { apiKey: string; baseUrl: string; model: string; provider: string } | null {
+    const { enabled, key, baseUrl, model, provider } = this.deps.config;
+    if (!enabled || !key) return null;
+    return { apiKey: key, baseUrl, model, provider };
+  }
+
   /** 判定缓存键（与 core 的 verdictCacheKey 一致，只是拆开存三列）。 */
   private cacheParts(puzzleId: string, question: string, factSetVersion: number) {
     return {

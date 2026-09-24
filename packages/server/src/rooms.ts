@@ -445,11 +445,18 @@ export class RoomRuntime {
    * 这道题只属于当前房间（Worker 写 rooms.puzzle_json、Node 写 puzzles 表），
    * 因此它既能被 `currentPuzzle()` 解析，也不会污染全局题库。
    */
-  async createAiPuzzle(memberId: string): Promise<Result<{ puzzleId: string; title: string; surface: string; warnings: string[] }>> {
+  async createAiPuzzle(memberId: string): Promise<Result<{ puzzleId: string; title: string; surface: string; warnings: string[]; usedSource: string }>> {
     if (this.room.hostId !== memberId) return { ok: false, code: 'NOT_HOST' };
     if (this.room.status === 'playing') return { ok: false, code: 'NOT_ALLOWED' };
 
-    const credential = await this.resolveCredential();
+    // 凭据选择与 judge() 完全一致：**房主自备 Key 优先，没有则用平台额度**（受月度上限约束）。
+    // 之前这里只看房主 Key，导致"后台配了平台额度、房主没填 Key"就出不了题 —— 属于实现疏漏。
+    let credential = await this.resolveCredential();
+    let usedSource = 'host_key';
+    if (!credential) {
+      const site = this.deps.host.siteCredential?.() ?? null;
+      if (site && this.deps.siteQuotaAllows()) { credential = site; usedSource = 'site_fallback'; }
+    }
     if (!credential) return { ok: false, code: 'AI_UNAVAILABLE' };
 
     const result = await this.deps.host.generatePuzzle!(credential, {
@@ -459,8 +466,8 @@ export class RoomRuntime {
       avoidTitles: this.deps.store.listPuzzles().slice(0, 30).map((p) => p.title),
     });
     if (!result.ok) {
-      this.deps.logger.warn('ai_puzzle_failed', { room_id: this.room.id, code: result.errorClass });
-      this.deps.store.bumpUsage('host', Date.now(), 0, 0, 1);
+      this.deps.logger.warn('ai_puzzle_failed', { room_id: this.room.id, code: result.errorClass, credit_source: usedSource });
+      this.deps.store.bumpUsage(usedSource === 'site_fallback' ? 'site' : 'host', Date.now(), 0, 0, 1);
       return { ok: false, code: result.errorClass as ActionReject };
     }
 
@@ -480,11 +487,11 @@ export class RoomRuntime {
     if (this.deps.store.getPuzzle(puzzle.id)) puzzle = { ...puzzle, id: `${puzzle.id}-${Date.now().toString(36).slice(-4)}` };
 
     this.deps.store.saveRoomPuzzle(puzzle);
-    this.deps.store.bumpUsage('host', Date.now(), 0, 1);
-    this.deps.store.audit({ action: 'ai_puzzle_created', roomId: this.room.id, actor: memberId, subject: puzzle.id });
-    this.deps.logger.info('ai_puzzle_created', { room_id: this.room.id, puzzle_id: puzzle.id, facts: puzzle.facts.length });
+    this.deps.store.bumpUsage(usedSource === 'site_fallback' ? 'site' : 'host', Date.now(), 0, 1);
+    this.deps.store.audit({ action: 'ai_puzzle_created', roomId: this.room.id, actor: memberId, subject: `${puzzle.id} via ${usedSource}` });
+    this.deps.logger.info('ai_puzzle_created', { room_id: this.room.id, puzzle_id: puzzle.id, facts: puzzle.facts.length, credit_source: usedSource });
     this.persist();
-    return { ok: true, data: { puzzleId: puzzle.id, title: puzzle.title, surface: puzzle.surface, warnings: checked.warnings } };
+    return { ok: true, data: { puzzleId: puzzle.id, title: puzzle.title, surface: puzzle.surface, warnings: checked.warnings, usedSource } };
   }
 
   /**

@@ -10,7 +10,7 @@
  */
 // 房主自备 Key 的默认提供方常量与 API 一起放在 room-api.ts（单一来源）
 import { json, securityHeaders } from './http.ts';
-import { handleApi, DEFAULT_HOST_BASE_URL, DEFAULT_HOST_MODEL } from './room-api.ts';
+import { handleApi, siteAiConfig, DEFAULT_HOST_BASE_URL, DEFAULT_HOST_MODEL } from './room-api.ts';
 import { listPurgeableRooms, purgeRoom } from './store-d1.ts';
 import { ConsoleLogger } from './log.ts';
 
@@ -62,10 +62,12 @@ export default {
     }
 
     if (url.pathname === '/api/config') {
+      const site = siteAiConfig(env);
       return json({
         presets: ['quick', 'standard', 'casual'],
         vaultEnabled: Boolean(env.MASTER_KEY),
-        realModelEnabled: Boolean(env.AI_KEY && env.AI_BASE_URL && env.AI_MODEL),
+        // 只配 AI_KEY 就算启用（地址/模型缺省时自动用 DeepSeek）
+        realModelEnabled: site.enabled,
         storage: 'd1',
         // 房主自备 Key 的默认提供方（只下发非敏感字段，用于预填表单）
         defaultProvider: env.AI_PROVIDER ?? 'openai-compatible',

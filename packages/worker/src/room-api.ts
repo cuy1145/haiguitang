@@ -40,6 +40,24 @@ const logger = new ConsoleLogger('info');
 export const DEFAULT_HOST_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_HOST_MODEL = 'deepseek-flash';
 
+/**
+ * 平台额度的 AI 配置（判定 / AI 创作共用）。
+ *
+ * 关键：**只配 AI_KEY 就够** —— 地址与模型缺省时自动用 DeepSeek。
+ * 以前要求 AI_KEY + AI_BASE_URL + AI_MODEL 三个齐全才算"启用"，
+ * 结果是"后台明明加了 Key 却仍然 realModelEnabled=false"，非常容易踩。
+ */
+export function siteAiConfig(env: Env): { enabled: boolean; provider: string; baseUrl: string; model: string; key: string } {
+  const key = env.AI_KEY ?? '';
+  return {
+    enabled: Boolean(key),                                  // 有 Key 就算启用
+    provider: env.AI_PROVIDER ?? 'openai-compatible',
+    baseUrl: env.AI_BASE_URL ?? DEFAULT_HOST_BASE_URL,
+    model: env.AI_MODEL ?? DEFAULT_HOST_MODEL,
+    key,
+  };
+}
+
 // ---------------------------------------------------------------- 公共入口
 export async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname;
@@ -127,15 +145,16 @@ async function withRoom(
     if (!snapshot) return json({ error: 'ROOM_NOT_FOUND' }, 404);
 
     const store = new D1RoomStore(env.DB, snapshot);
+    const site = siteAiConfig(env);
     const host = new HostService({
       store,
       logger,
       config: {
-        enabled: Boolean(env.AI_KEY && env.AI_BASE_URL && env.AI_MODEL),
-        provider: env.AI_PROVIDER ?? 'openai-compatible',
-        baseUrl: env.AI_BASE_URL ?? '',
-        model: env.AI_MODEL ?? '',
-        key: env.AI_KEY ?? '',
+        enabled: site.enabled,
+        provider: site.provider,
+        baseUrl: site.baseUrl,
+        model: site.model,
+        key: site.key,
         timeoutMs: Number(env.AI_TIMEOUT_MS ?? 20000),
         maxRetries: Number(env.AI_MAX_RETRIES ?? 2),
       },
