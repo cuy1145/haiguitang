@@ -454,9 +454,22 @@ npx wrangler secret list                # 只列名字，看不到值
 **三个注意事项**：
 
 - ⚠️ **别改 `MASTER_KEY`**：它用来加密房主自备的 API Key，一换，房里已存的 Key 全部解不开（房主得重新提交）。
+- 🔴 **在面板里加密钥时，务必确认列表里 `MASTER_KEY` 还在！**
+  面板保存的是**整个变量列表快照**：如果面板上只显示了 `AI_KEY`（用 CLI 加的密钥有时不会列出来），
+  点保存就会把没列出来的 `MASTER_KEY` **覆盖掉** —— 后果是保险箱关闭（`vaultEnabled:false`），
+  房主连自己的 Key 都提交不了。**加完立刻用 `npx wrangler secret list` 核对两个名字都在。**
+  最稳的做法是用 CLI（`wrangler secret put`），它只动一个名字，不会碰其他密钥。
 - ✅ **`git push` 重新部署不会删掉密钥**（加密密钥是独立的），所以面板/CLI 配过就一直有效。
-- ⚠️ 面板里加的**明文变量（Type=Text）**会被 `wrangler.toml` 的 `[vars]` 覆盖 ——
-  非敏感的开关请写进 `wrangler.toml`，只有密钥才放面板/CLI。
+
+**平台额度只要配一个 `AI_KEY` 就够**：`AI_BASE_URL` / `AI_MODEL` 缺省时自动用
+`https://api.deepseek.com` + `deepseek-flash`（`wrangler.toml` 的 `DEFAULT_HOST_*` 可改）。
+配好后 `/api/config` 的 `realModelEnabled` 会变成 `true`。
+
+**谁在用哪把 Key（判定与 AI 创作同一套优先级）**：
+
+1. 房主在房间里提交的自备 Key（加密存储，优先级最高）
+2. 平台额度（`AI_KEY`，受 `SITE_MONTHLY_CALL_CAP` 月度上限约束）
+3. 都没有 → 内置模拟汤主（关键词表；AI 创作会直接报 `AI_UNAVAILABLE`）
 
 **改完怎么确认生效**：
 
