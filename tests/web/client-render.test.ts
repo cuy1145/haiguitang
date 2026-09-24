@@ -16,6 +16,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+/**
+ * 这组回归测试是给**旧版界面**写的（W1–W9 抓的是它当年的渲染/竞态缺陷）。
+ * M6 把「深夜档案桌」提升为主力 / 之后，旧版移到 /classic/，测试也跟着指过去 ——
+ * 否则它们会在新界面上跑，测的却是另一份 DOM 结构。
+ */
+const CLIENT = 'packages/web/public/classic/index.html';
 
 /** 最小 DOM/浏览器桩：只提供 index.html 内联脚本启动时真正会碰到的那些东西 */
 interface HarnessOpts {
@@ -26,7 +32,7 @@ const jsonRes = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 function loadClientScript(opts: HarnessOpts = {}) {
-  const html = readFileSync(join(root, 'packages/web/public/index.html'), 'utf8');
+  const html = readFileSync(join(root, CLIENT), 'utf8');
   const m = html.match(/<script>([\s\S]*?)<\/script>/);
   assert.ok(m, 'index.html 里应当有内联脚本');
   const script = m![1]!;
@@ -183,7 +189,7 @@ function playingRoom(serverTime: number, canSubmit: boolean) {
 }
 
 test('W4: 手机上「汤面 → 记录 → 输入框」必须紧挨着（类名 + 排序契约）', () => {
-  const html = readFileSync(join(root, 'packages/web/public/index.html'), 'utf8');
+  const html = readFileSync(join(root, CLIENT), 'utf8');
   // 1) 卡片类名齐全（CSS 靠它们排序）
   assert.match(html, /<div class="card puzzle-card">/, '汤面卡片需要 puzzle-card 类');
   assert.match(html, /class="card composer\$\{composerSticky \? ' sticky' : ''\}"/, '提问卡片需要 composer 类');
@@ -466,3 +472,4 @@ test('W8: 离开后可以立刻重开房间：入口页不该残留旧会话的�
   assert.equal(c.S.notice, '', '也不能带着上一次的说明');
   assert.ok(c.token(), '要有新令牌');
 });
+

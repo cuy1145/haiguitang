@@ -13,683 +13,463 @@
 -->
 <style>
   /* ==========================================================================
-   * 深夜档案桌 · 设计令牌（docs/前端设计方案.md §2.3 / §2.4 / §2.5）
-   * 禁区：蓝紫霓虹渐变、玻璃拟态（背景模糊）、发光、悬浮阴影、emoji 图标。
-   * 层级靠"三种纸 + 三种标签 + 描边"建立，不靠阴影和圆角。
+   * 设计令牌
    * ========================================================================*/
   :root{
-    /* 桌面与结构 */
-    --desk-950:#0b1012; --desk-900:#11191b; --desk-800:#182225; --desk-700:#223034;
-    --rule-dark:#344347; --rule-soft:#26332f;
-    /* 案卷纸 */
-    --paper-100:#eee9dc; --paper-200:#ded7c7; --paper-300:#c8bfad;
-    --ink-900:#202526; --ink-600:#596264;
-    /* 功能色 */
-    --brass:#b99255; --brass-light:#d4b477;
-    --stamp-yes:#287b68; --stamp-no:#a64e45; --stamp-unknown:#a5742f; --stamp-irrelevant:#647176;
-    --signal:#83a69e; --danger:#bd554b;
-    /* 文本 */
-    --text-on-dark:#e9e5da; --text-secondary:#aeb8b6; --text-muted:#75817f;
-    /* 交互 */
-    --focus:#d4b477; --selection:rgba(185,146,85,.28);
-    /* 便笺（讨论区） */
-    --note-other:#2b3a37; --note-other-ink:#e4e7e2; --note-mine:#4a3c25; --note-mine-ink:#f3e9d6;
-    /* 字体 */
-    --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
-    --font-mono:"Cascadia Mono","SFMono-Regular",Consolas,monospace;
-    --font-story:"Songti SC",SimSun,serif;
-    /* 形状 */
-    --r-xs:2px; --r-sm:4px; --r-md:6px;
-    --shadow-paper:0 2px 0 rgba(0,0,0,.35);
-    --shadow-modal:0 10px 26px -18px rgba(0,0,0,.9);
+    --bg:#0b0d14;
+    --panel:rgba(26,30,45,.78);
+    --panel-2:rgba(20,23,35,.9);
+    --line:rgba(255,255,255,.075);
+    --line-2:rgba(255,255,255,.14);
+    --fg:#e9ecf5;--fg2:#a7aec4;--fg3:#6d7690;
+    --ok:#41d69b;--warn:#f3b95f;--bad:#f2606b;--info:#5aa9f8;
+    --accent:#7c6cf5;--accent-2:#5a49d8;--cyan:#48c9e8;
+    --radius:16px;--radius-sm:10px;
+    --shadow:0 18px 40px -24px rgba(0,0,0,.9);
+    --ring:0 0 0 3px rgba(124,108,245,.28);
   }
-
-  /* ==========================================================================
-   * 基础与桌面背景（§2.6）
-   * ========================================================================*/
   *{box-sizing:border-box}
   html,body{margin:0;min-height:100%}
   body{
-    background-color:var(--desk-950);
-    background-image:
-      linear-gradient(rgba(255,255,255,.012) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(255,255,255,.008) 1px,transparent 1px);
-    background-size:24px 24px;
-    color:var(--text-on-dark);
-    font:14px/1.6 var(--font-ui);
+    background:
+      radial-gradient(1100px 620px at 12% -10%, rgba(124,108,245,.20), transparent 60%),
+      radial-gradient(900px 520px at 105% 0%, rgba(72,201,232,.14), transparent 62%),
+      radial-gradient(700px 500px at 50% 120%, rgba(65,214,155,.10), transparent 60%),
+      var(--bg);
+    background-attachment:fixed;
+    color:var(--fg);
+    font:15px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
     -webkit-font-smoothing:antialiased;
   }
-  ::selection{background:var(--selection)}
-  a{color:var(--brass-light)}
-  h1,h2,h3,h4{margin:0 0 10px;font-weight:700;letter-spacing:.01em}
-  h3{font-size:13px}
-  p{margin:0 0 10px}
-  table{border-collapse:collapse;width:100%;font-size:12.5px}
-  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
-  th{color:var(--text-muted);font-weight:600;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
-  /* 焦点可见（§23）：黄铜细线 + 2px 外线，不做发光 */
-  :focus-visible{outline:2px solid var(--focus);outline-offset:2px}
-  .wrap{max-width:1440px;margin:0 auto;padding:0 18px 40px}
-
-  /* 眉题（§2.4：11px / 700 / 字距 .16em） */
-  .eyebrow{font-size:11px;font-weight:700;letter-spacing:.16em;color:var(--text-muted);text-transform:uppercase}
-  .eyebrow b{color:var(--brass);font-weight:700}
-  .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
-  .dim{color:var(--text-muted);font-size:12px}
-  .grow{flex:1 1 auto;min-width:0}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-  .spread{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-  .hr{height:1px;background:var(--rule-dark);margin:12px 0;border:0}
+  ::selection{background:rgba(124,108,245,.35)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.10);border-radius:99px;border:3px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.18);background-clip:content-box}
 
   /* ==========================================================================
-   * 顶栏：档案柜索引条（§2.7）
-   * ========================================================================*/
-  .topbar{
-    position:sticky;top:0;z-index:40;height:58px;display:flex;align-items:center;gap:14px;
-    background:var(--desk-900);border-bottom:1px solid var(--brass);
-    padding:0 18px;margin:0 -18px 18px;
-  }
-  .brand{display:flex;align-items:center;gap:10px;min-width:0}
-  .logo{width:30px;height:30px;flex:0 0 auto;color:var(--brass);display:grid;place-items:center}
-  .logo svg{width:26px;height:26px;display:block}
-  .brand .name{font-size:15px;font-weight:700;letter-spacing:.06em;line-height:1.2}
-  .brand .sub{font-size:10.5px;color:var(--text-muted);letter-spacing:.08em}
-  .topchips{display:flex;align-items:center;gap:10px;margin-left:auto}
-  .chip{
-    display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;
-    border:1px solid var(--rule-dark);border-radius:var(--r-xs);background:var(--desk-800);
-    color:var(--text-secondary);font-size:11.5px;white-space:nowrap;
-  }
-  .chip.clickable{cursor:pointer}
-  .chip.clickable:hover{border-color:var(--brass);color:var(--text-on-dark)}
-  /* 连接信号灯：6px 实心点 + 短文字（不做发光圆点） */
-  .lamp{width:6px;height:6px;border-radius:0;background:var(--signal);flex:0 0 auto}
-  .lamp.off{background:var(--danger)}
-  .lamp.warn{background:var(--stamp-unknown)}
-
-  /* ==========================================================================
-   * 三栏骨架（§5.1 / §22）
-   * ========================================================================*/
-  .grid{display:grid;grid-template-columns:280px minmax(0,1fr) 320px;gap:16px;align-items:start}
-  .col-side,.col-main{min-width:0;display:flex;flex-direction:column;gap:14px}
-  .col-rail{min-width:0;display:flex;flex-direction:column;gap:14px;position:sticky;top:74px}
-  @media(max-width:1199px){
-    .grid{grid-template-columns:280px minmax(0,1fr)}
-    .col-rail{grid-column:1 / -1;position:static}
-  }
-
-  /* ==========================================================================
-   * 深色面板（普通面板：1px 描边，无阴影、无模糊）
-   * ========================================================================*/
-  .card,.panel{
-    background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);
-    padding:14px;position:relative;
-  }
-  .card>h3,.panel>h3{
-    font-size:11px;font-weight:700;letter-spacing:.16em;color:var(--text-muted);text-transform:uppercase;
-    margin:0 0 10px;
-  }
-  /* 面板标题带编号短线（§2.5） */
-  .card.hd,.panel.hd{padding-top:12px}
-  .card.hd::before,.panel.hd::before{content:'';position:absolute;left:14px;right:14px;top:0;height:2px;background:var(--brass);opacity:.5}
-
-  /* 键值行 */
-  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:12.5px}
-  .kv .k{color:var(--text-muted);white-space:nowrap}
-  .k{color:var(--text-muted)}.v{color:var(--text-on-dark)}
-  .field{margin-bottom:12px}
-  .field>label{display:block;font-size:11.5px;color:var(--text-muted);margin-bottom:6px;letter-spacing:.04em}
-
-  /* ==========================================================================
-   * 控件：按钮（§2.26）
+   * 基础控件
    * ========================================================================*/
   button{
-    font:inherit;font-size:12.5px;color:var(--text-on-dark);background:transparent;
-    border:1px solid var(--rule-dark);border-radius:var(--r-sm);
-    padding:8px 12px;min-height:36px;cursor:pointer;transition:background .14s ease,border-color .14s ease,transform .06s ease;
+    font:inherit;font-weight:500;color:var(--fg);
+    background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03));
+    border:1px solid var(--line-2);border-radius:var(--radius-sm);
+    padding:9px 14px;cursor:pointer;
+    transition:transform .12s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease;
   }
-  button:hover{border-color:var(--brass);background:rgba(185,146,85,.06)}
-  button:active{transform:translateY(1px)}
-  button.primary{background:var(--brass);border-color:var(--brass);color:#1b1408;font-weight:700}
-  button.primary:hover{background:var(--brass-light);border-color:var(--brass-light)}
-  button.ghost{background:transparent;border-color:var(--rule-dark);color:var(--text-secondary)}
-  button.note{background:#3c3220;border-color:#5c4a2a;color:var(--note-mine-ink)}
-  button.note:hover{background:#473a25;border-color:var(--brass)}
-  button.reason{background:transparent;border-color:var(--stamp-no);color:#e0a49c}
-  button.reason:hover{background:rgba(166,78,69,.14)}
-  button.danger{background:transparent;border-color:transparent;color:#d98a80;padding-left:6px;padding-right:6px}
-  button.danger:hover{background:rgba(189,85,75,.12);border-color:var(--danger)}
-  button.danger.solid{background:var(--danger);border-color:var(--danger);color:#fff}
-  button:disabled,button[disabled]{
-    color:var(--text-muted);border-color:var(--rule-soft);background:transparent;cursor:not-allowed;
+  button:hover:not(:disabled){border-color:rgba(124,108,245,.55);box-shadow:0 6px 18px -12px rgba(124,108,245,.9);transform:translateY(-1px)}
+  button:active:not(:disabled){transform:translateY(0)}
+  button:focus-visible{outline:none;box-shadow:var(--ring)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:linear-gradient(180deg,var(--accent),var(--accent-2));border-color:transparent;color:#fff;font-weight:650;box-shadow:0 12px 28px -16px rgba(124,108,245,1)}
+  button.primary:hover:not(:disabled){filter:brightness(1.08)}
+  button.danger{border-color:rgba(242,96,107,.42);color:#ffc2c7}
+  button.danger:hover:not(:disabled){border-color:rgba(242,96,107,.8);box-shadow:0 6px 18px -12px rgba(242,96,107,.9)}
+  button.ghost{background:transparent}
+  input,textarea,select{
+    font:inherit;color:var(--fg);background:rgba(9,11,18,.72);
+    border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:10px 12px;width:100%;
+    transition:border-color .18s ease,box-shadow .18s ease;
   }
-  button.primary:disabled,button.primary[disabled]{background:#2c2a20;border-color:#463f2c;color:#8a8272}
-  button.icon{min-width:36px;display:inline-flex;align-items:center;justify-content:center;gap:6px}
-  button svg{width:16px;height:16px;flex:0 0 auto}
-  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-
-  /* 输入框：深色平面 + 单条底边（§2.26） */
-  input[type=text],input[type=number],input:not([type]),textarea,select{
-    width:100%;background:var(--desk-800);color:var(--text-on-dark);
-    border:1px solid var(--rule-dark);border-bottom:2px solid var(--rule-dark);
-    border-radius:var(--r-xs);padding:9px 10px;font:inherit;font-size:13.5px;
-  }
-  input:focus,textarea:focus,select:focus{outline:none;border-bottom-color:var(--brass)}
-  input::placeholder,textarea::placeholder{color:#5d6866}
-  textarea{min-height:76px;resize:vertical;line-height:1.7}
-  select{font-family:var(--font-mono);font-size:12.5px}
-  input.err,textarea.err,select.err{border-bottom-color:var(--stamp-no)}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:rgba(124,108,245,.7);box-shadow:var(--ring)}
+  textarea{resize:vertical;min-height:74px;line-height:1.7}
+  code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.92em;background:rgba(255,255,255,.06);padding:1px 5px;border-radius:6px}
 
   /* ==========================================================================
-   * 标签与印章（§2.26：三类不能共用一种样式）
+   * 布局
    * ========================================================================*/
-  /* 身份纸签：窄矩形、浅底深字 */
-  .slip{
-    display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:var(--r-xs);
-    background:var(--paper-200);color:var(--ink-900);font-size:10.5px;font-weight:700;letter-spacing:.04em;
-  }
-  .slip.dim{background:#3a4442;color:var(--text-secondary)}
-  .slip.brass{background:var(--brass);color:#1b1408}
-  /* 状态印章：方角描边 */
-  .seal{
-    display:inline-flex;align-items:center;padding:1px 7px;border:1px solid currentColor;border-radius:var(--r-xs);
-    font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--text-secondary);
-  }
-  .seal.yes{color:var(--stamp-yes)}.seal.no{color:var(--stamp-no)}
-  .seal.unknown{color:var(--stamp-unknown)}.seal.irrelevant{color:var(--stamp-irrelevant)}
-  .seal.brass{color:var(--brass)}
-  /* 属性文本：短竖线分隔，不加容器 */
-  .attrs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--text-secondary);font-size:11.5px;letter-spacing:.03em}
-  .attrs>span{display:inline-flex;align-items:center;gap:5px}
-  .attrs>span+span::before{content:'';width:1px;height:11px;background:var(--rule-dark);margin-right:3px}
-  .attrs .mono{color:var(--text-on-dark)}
-  .attrs .warn{color:var(--stamp-unknown)}
-  .attrs .sensitive{color:#d98a80;border:1px solid rgba(217,138,128,.5);border-radius:var(--r-xs);padding:0 5px}
-  /* 旧的 pill 名字保留（老组件还在用），但改成"纸签"样式而不是胶囊 */
-  .pill{
-    display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:var(--r-xs);
-    border:1px solid var(--rule-dark);color:var(--text-secondary);font-size:10.5px;letter-spacing:.03em;background:var(--desk-800);
-  }
-  .pill.accent{border-color:var(--brass);color:var(--brass-light)}
-  .pill.live{border-color:var(--brass);color:var(--brass-light)}
-  .pill.l2{border-color:var(--stamp-unknown);color:var(--stamp-unknown)}
-  .pill.l3{border-color:var(--danger);color:#d98a80}
-  .pill.jump{cursor:pointer;background:transparent}
-  .badge{
-    display:inline-block;min-width:16px;padding:0 4px;margin-left:5px;border-radius:999px;
-    background:var(--brass);color:#1b1408;font:700 10.5px/16px var(--font-mono);text-align:center;
-  }
-
-  /* 提示 / 错误 / 通知 */
-  .notice,.err{
-    border:1px solid var(--rule-dark);border-left:3px solid var(--signal);
-    background:var(--desk-800);border-radius:var(--r-xs);padding:9px 11px;font-size:12.5px;color:var(--text-secondary);
-  }
-  .err{border-left-color:var(--danger);color:#e6b3ac}
-  .notice.warn{border-left-color:var(--stamp-unknown)}
-
+  .wrap{max-width:1180px;margin:0 auto;padding:18px 18px 96px}
+  .grid{display:grid;grid-template-columns:308px minmax(0,1fr);gap:16px;align-items:start}
   /* ==========================================================================
-   * 当前回合：机械计时牌（§2.9）
-   * ========================================================================*/
-  .speakerbox{
-    background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);
-    padding:14px;display:grid;gap:12px;position:relative;
-  }
-  .speakerbox.head::before{content:'';position:absolute;left:14px;right:14px;top:0;height:2px;background:var(--brass);opacity:.45}
-  /* 轮到自己：左边缘黄铜标尺 */
-  .speakerbox.myturn{border-left:3px solid var(--brass)}
-  .speakerbox .top{display:flex;align-items:flex-start;gap:10px}
-  .avatar{
-    width:32px;height:32px;flex:0 0 auto;display:grid;place-items:center;border-radius:var(--r-xs);
-    background:var(--desk-700);color:var(--paper-100);font-weight:700;font-size:14px;border:1px solid var(--rule-dark);
-  }
-  .avatar.me{border-color:var(--brass);color:var(--brass-light)}
-  .who{font-size:10.5px;color:var(--text-muted);font-family:var(--font-mono)}
-  .nm{font-size:15px;font-weight:700;line-height:1.3}
-  .timer{
-    font-family:var(--font-mono);font-size:32px;font-weight:700;line-height:1;
-    font-variant-numeric:tabular-nums;letter-spacing:.02em;
-  }
-  .timer.warn{color:var(--stamp-unknown)}
-  .timer.danger{color:var(--stamp-no)}
-  /* 刻度条：一排细刻度，从右向左熄灭（§2.9） */
-  .ticks{display:flex;gap:2px;height:12px;align-items:stretch}
-  .ticks i{flex:1 1 0;background:var(--desk-700);border-radius:1px}
-  .ticks i.on{background:var(--brass)}
-  .ticks.danger i.on{background:var(--stamp-no)}
-  .bar{display:none}
-  /* 旧类名映射（老渲染器还在用 .meter/.timer/.dots 等） */
-  .meter{height:10px;display:flex;gap:2px}
-  .meter span{background:var(--desk-700);flex:1 1 0}
-  .meter span.on{background:var(--brass)}
-  .meta{font-size:11.5px;color:var(--text-muted)}
-  .dots{display:flex;gap:3px;align-items:center}
-  .dots i,.dot{width:6px;height:6px;background:var(--desk-700);border-radius:1px;display:inline-block}
-  .dots i.on,.dot.on{background:var(--brass-light)}
-  .dot.live{background:var(--signal)}
-  .dot.away{background:var(--stamp-unknown)}
-  .dot.off{background:transparent;border:1px solid var(--rule-dark)}
-
-  /* ==========================================================================
-   * 汤面：全页唯一的大纸张（§2.10）
-   * ========================================================================*/
-  .puzzle-card,.puzzler,.sheet{
-    background:var(--paper-100);color:var(--ink-900);border:1px solid var(--paper-300);
-    border-radius:var(--r-xs);padding:20px 22px 18px;box-shadow:var(--shadow-paper);
-  }
-  .puzzle-card h3,.sheet h3{color:var(--ink-600);font-size:11px;letter-spacing:.16em;text-transform:uppercase}
-  .puzzle-card .ptitle{
-    font-family:var(--font-story);font-size:24px;line-height:1.35;font-weight:700;color:var(--ink-900);
-    margin:6px 0 4px;padding-bottom:8px;border-bottom:1px solid rgba(32,37,38,.22);
-  }
-  .puzzle-card .surface{
-    font-family:var(--font-story);font-size:17px;line-height:1.95;color:var(--ink-900);
-    max-width:42em;white-space:pre-wrap;margin:12px 0 0;
-  }
-  .puzzle-card .puz-src{margin-top:14px;font-size:11px;color:var(--ink-600)}
-  .puzzle-card .attrs{color:var(--ink-600)}
-  .puzzle-card .attrs>span+span::before{background:rgba(32,37,38,.25)}
-  .puzzle-card .attrs .mono{color:var(--ink-900)}
-  .puzzle-card .seal{color:var(--ink-600)}
-  .puzzle-card .seal.yes{color:var(--stamp-yes)}
-  .puzzle-card .seal.no{color:var(--stamp-no)}
-  .puzzle-card .actions button{border-color:rgba(32,37,38,.3);color:var(--ink-900);background:rgba(255,255,255,.35)}
-  .puzzle-card .actions button:hover{border-color:var(--brass);background:rgba(185,146,85,.16)}
-  .puzzle-card .actions button.primary{background:var(--brass);color:#1b1408;border-color:var(--brass)}
-  /* 案卷工具条：提示 / 猜汤底放在纸张下方的深色条上（§2.10） */
-  .toolbar{
-    background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);
-    padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;
-  }
-  .hintbtn{
-    display:inline-flex;flex-direction:column;align-items:center;gap:1px;min-width:64px;min-height:44px;
-    padding:5px 10px;border-radius:var(--r-xs);border:1px solid var(--rule-dark);background:var(--desk-800);
-  }
-  .hintbtn .t{font-family:var(--font-mono);font-size:12px;font-weight:700}
-  .hintbtn .c{font-size:10px;color:var(--text-muted)}
-  .hintbtn.t1{border-color:#3d5147}.hintbtn.t2{border-color:#5c4a2a}.hintbtn.t3{border-color:#5a3630}
-  .hintbtn.t1 .t{color:var(--signal)}.hintbtn.t2 .t{color:var(--brass-light)}.hintbtn.t3 .t{color:#d98a80}
-  .guessquick{border-color:var(--stamp-no);color:#e0a49c}
-
-  /* 统计索引尺（§2.11）：一条细线串联四组数据 */
-  .stats{
-    display:flex;align-items:stretch;gap:0;background:transparent;border:0;border-top:1px solid var(--rule-dark);
-    border-bottom:1px solid var(--rule-dark);padding:8px 0;
-  }
-  .stat{flex:1 1 0;min-width:0;padding:0 12px;border-left:1px solid var(--rule-soft);display:grid;gap:2px}
-  .stat:first-child{border-left:0;padding-left:0}
-  .stat .n{font-family:var(--font-mono);font-size:19px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
-  .stat .l{font-size:11px;color:var(--text-muted);letter-spacing:.06em}
-  .stat .meter{margin-top:4px}
-
-  /* AI / 额度：设备铭牌（§2.18） */
-  .engine,.creditcard,.roomcard{
-    background:var(--desk-800);border:1px solid var(--rule-dark);border-radius:var(--r-xs);padding:12px;
-  }
-  .engine .lamp,.creditcard .lamp{width:8px;height:8px}
-  .mask{font-family:var(--font-mono);background:var(--desk-950);border:1px solid var(--rule-dark);border-radius:var(--r-xs);padding:3px 8px;font-size:12px}
-
-  /* ==========================================================================
-   * 正式记录：审讯记录册（§2.12）
-   * ========================================================================*/
-  .records{background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);padding:14px}
-  .log{display:flex;flex-direction:column;gap:0;max-height:46vh;overflow:auto;padding-right:4px}
-  .log .tl{
-    display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--rule-soft);
-    background:transparent;border-radius:0;flex-wrap:wrap;
-  }
-  .log .tl .q{font-size:15px;line-height:1.7;font-weight:500;color:var(--text-on-dark);flex:1 1 100%}
-  .log .tl .head{display:flex;gap:8px;align-items:center;width:100%;font-family:var(--font-mono);font-size:11px;color:var(--text-muted)}
-  .log .tl.mine{border-left:3px solid var(--brass);padding-left:10px}
-  .log .tl .who-line{display:flex;align-items:center;gap:6px}
-  /* 答案印章：略旋转的方角章，文字始终水平 */
-  .verdict{
-    display:inline-flex;align-items:center;justify-content:center;min-width:56px;padding:3px 8px;
-    border:2px solid currentColor;border-radius:var(--r-xs);font-weight:700;font-size:12px;letter-spacing:.08em;
-    transform:rotate(-1.6deg);
-  }
-  .verdict.yes{color:var(--stamp-yes)}.verdict.no{color:var(--stamp-no)}
-  .verdict.unknown{color:var(--stamp-unknown)}.verdict.irrelevant{color:var(--stamp-irrelevant)}
-  /* 铅笔批注：灰字 + 左侧短线 */
-  .explain{border-left:2px solid var(--rule-dark);padding-left:8px;color:var(--text-muted);font-size:12px;margin-top:4px;flex:1 1 100%}
-  /* 系统事件：细分隔线 + 居中文字 */
-  .tl.sys{
-    justify-content:center;text-align:center;border-bottom:0;color:var(--text-muted);font-size:11.5px;
-  }
-  .tl.sys::before,.tl.sys::after{content:'';flex:1 1 auto;height:1px;background:var(--rule-soft)}
-  .tl.err{border-left:3px solid var(--danger);padding-left:10px;color:#e0a49c}
-  .tl.vote{border-left:3px solid var(--brass);padding-left:10px}
-  .tl .meta{margin-left:auto}
-  .log .empty{color:var(--text-muted);font-size:12.5px;padding:18px 4px;text-align:center;border:1px dashed var(--rule-dark);border-radius:var(--r-xs)}
-
-  /* ==========================================================================
-   * 全员讨论：便笺栏（§2.13）
-   * ========================================================================*/
-  .chatcard{background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);padding:14px}
-  .chat{display:flex;flex-direction:column;gap:7px;max-height:38vh;overflow:auto;padding-right:4px}
-  .chat .msg{
-    max-width:88%;padding:7px 10px;border-radius:var(--r-sm);
-    background:var(--note-other);color:var(--note-other-ink);border:1px solid #354744;
-  }
-  .chat .msg.mine{align-self:flex-end;background:var(--note-mine);color:var(--note-mine-ink);border-color:#5c4a2a}
-  .chat .msg .who{font:11px/1.4 var(--font-mono);color:var(--text-muted);margin-bottom:2px}
-  .chat .msg .txt{font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
-  .chat .chatsep{display:flex;align-items:center;gap:8px;margin:3px 0;color:var(--text-muted);font:11px/1 var(--font-mono);white-space:nowrap}
-  .chat .chatsep::before,.chat .chatsep::after{content:'';flex:1 1 auto;height:1px;background:var(--rule-soft)}
-  .chatcard .row input{flex:1 1 auto;min-width:0}
-  .chatcard .counter{font:11px/1 var(--font-mono);color:var(--text-muted);white-space:nowrap;align-self:center}
-  .chat-back,.btnchat{display:none}
-  .chat-hint{font-size:11.5px}
-
-  /* 页签：文字 + 底部短线（§2.26） */
-  .tabs{display:flex;gap:14px;border-bottom:1px solid var(--rule-dark);margin-bottom:12px}
-  .tab{
-    background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;padding:7px 2px;min-height:40px;
-    color:var(--text-muted);font-size:12.5px;letter-spacing:.04em;position:relative;
-  }
-  .tab:hover{background:transparent;color:var(--text-on-dark)}
-  .tab.on{color:var(--text-on-dark);border-bottom-color:var(--brass);background:transparent}
-  .tab .badge{position:absolute;top:2px;right:-10px;margin:0}
-
-  /* ==========================================================================
-   * 玩家名册（§2.14）
-   * ========================================================================*/
-  .memlist{background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);padding:8px 12px 10px}
-  .playercard{
-    display:flex;align-items:center;gap:10px;min-height:50px;padding:6px 0;border-bottom:1px solid var(--rule-soft);
-    background:transparent;border-radius:0;position:relative;
-  }
-  .playercard:last-child{border-bottom:0}
-  .playercard.speaking{border-left:3px solid var(--brass);padding-left:9px;margin-left:-12px;padding-right:0}
-  .playercard .nm{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:6px}
-  .playercard .meta{font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px}
-  .playercard .avatar{position:relative;width:30px;height:30px;font-size:13px}
-  .playercard .avatar .dot{position:absolute;right:-2px;bottom:-2px;border:1px solid var(--desk-900)}
-  .playercard .kick{margin-left:auto}
-  .playercard.away .nm{color:var(--text-secondary)}
-  .playercard.off .nm{color:var(--text-muted)}
-  .playercard.eligible{background:transparent}
-
-  /* ==========================================================================
-   * 底部书写板：正式提问（§2.15）
-   * ========================================================================*/
-  .composer{
-    background:var(--desk-900);border:1px solid var(--rule-dark);border-top:2px solid var(--brass);
-    border-radius:var(--r-sm);padding:14px;
-  }
-  .composer.grace{border-top-color:var(--stamp-unknown)}
-  .composer textarea{min-height:64px}
-  .composer .askrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
-  .composer .askrow .primary{min-width:120px}
-  .composer .hintbar{margin-top:10px}
-  @media(max-width:900px){
-    .composer.sticky{
-      position:sticky;bottom:0;z-index:30;margin:0 -14px -10px;border-radius:0;border-left:0;border-right:0;
-      padding:12px 14px calc(12px + env(safe-area-inset-bottom));
-    }
-  }
-
-  /* 等待与候选（§7.3 / §2.22） */
-  .waitcard,.candcard,.aicard,.bannerbox,.settled,.truthcard,.pendingcard{
-    background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);padding:14px;
-  }
-  .cands{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:10px}
-  .cand{
-    background:var(--paper-200);color:var(--ink-900);border:1px solid var(--paper-300);border-radius:var(--r-xs);
-    padding:12px;display:flex;flex-direction:column;gap:8px;position:relative;
-  }
-  .cand .cbody{font-family:var(--font-story);font-size:14.5px;line-height:1.7;max-height:7.6em;overflow:hidden}
-  .cand .row{gap:6px}
-  .cand .pill{border-color:rgba(32,37,38,.28);background:rgba(255,255,255,.4);color:var(--ink-600)}
-  .cand .pill.l3{border-color:var(--stamp-no);color:var(--stamp-no)}
-  .cand .seal{color:var(--ink-600)}
-  .cand button.primary{align-self:flex-start}
-  .cand.on::after{
-    content:'选中';position:absolute;top:8px;right:8px;padding:1px 6px;border:2px solid var(--brass);
-    color:var(--brass);font-size:10.5px;font-weight:700;letter-spacing:.08em;transform:rotate(-2deg);border-radius:var(--r-xs);
-  }
-
-  /* 入口页（§2.8 / §4） */
-  .entry{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:22px;align-items:start;padding-top:8px}
-  .entry .hero{
-    background:var(--paper-100);color:var(--ink-900);border:1px solid var(--paper-300);border-radius:var(--r-xs);
-    padding:26px 24px 22px;box-shadow:var(--shadow-paper);position:relative;
-  }
-  .entry .hero h1{font-family:var(--font-story);font-size:30px;line-height:1.25;margin-bottom:10px}
-  .entry .hero p{font-size:14.5px;line-height:1.9;color:#333a3b;max-width:34em}
-  .entry .hero ol{margin:12px 0 0;padding-left:20px;font-size:13.5px;line-height:1.9;color:#333a3b}
-  .entry .hero .secret{
-    margin-top:18px;padding-top:12px;border-top:1px solid rgba(32,37,38,.2);
-    font-size:11.5px;letter-spacing:.14em;color:var(--stamp-no);font-weight:700;
-  }
-  .entry .hero .stampmark{position:absolute;top:16px;right:18px;color:var(--brass);opacity:.9}
-  .entry .hero .stampmark svg{width:34px;height:34px}
-  .entry .form{background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-sm);padding:18px}
-  .modes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-  .mode{
-    background:var(--desk-800);border:1px solid var(--rule-dark);border-radius:var(--r-xs);padding:10px 9px;cursor:pointer;
-    position:relative;min-height:76px;
-  }
-  .mode:hover{border-color:var(--brass)}
-  .mode .idx{font:700 10.5px/1 var(--font-mono);color:var(--text-muted);letter-spacing:.1em}
-  .mode .t{font-size:13.5px;font-weight:700;margin:6px 0 3px}
-  .mode .d{font-size:11px;color:var(--text-muted);line-height:1.5}
-  .mode.on{border-color:var(--brass);background:#1d1c16}
-  .mode.on::after{content:'';position:absolute;top:8px;right:8px;width:14px;height:14px;border:2px solid var(--brass);border-radius:2px}
-  @media(max-width:900px){.entry{grid-template-columns:minmax(0,1fr)}}
-
-  /* 轮到你（§10.1） */
-  .your-turn{
-    background:var(--desk-800);border:1px solid var(--brass);border-left:3px solid var(--brass);
-    border-radius:var(--r-xs);padding:10px 12px;font-size:13px;color:var(--paper-100);
-  }
-  .topmsg{display:grid;gap:8px}
-
-  /* ==========================================================================
-   * 弹窗与抽屉（§2.26）
-   * ========================================================================*/
-  .overlay{
-    position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.68);
-    display:flex;align-items:flex-start;justify-content:center;padding:5vh 16px;overflow:auto;
-  }
-  .modal{
-    width:100%;max-width:720px;background:var(--desk-900);border:1px solid var(--rule-dark);border-radius:var(--r-md);
-    box-shadow:var(--shadow-modal);padding:18px 18px 16px;position:relative;
-  }
-  .modal::before{content:'';position:absolute;left:18px;right:18px;top:0;height:2px;background:var(--brass);opacity:.6}
-  .modal h3{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-muted)}
-  .modal .fieldrow{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px 14px;align-items:center;padding:9px 0;border-bottom:1px solid var(--rule-soft)}
-  .modal .fieldrow .lab{font-size:12.5px;color:var(--text-secondary)}
-  .modal .fieldrow .hint{grid-column:2;font-size:11px;color:var(--text-muted);margin-top:-4px}
-  .modal .foot{display:flex;gap:10px;justify-content:space-between;align-items:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--rule-dark)}
-  .modal .papernote{background:var(--paper-100);color:var(--ink-900);border-radius:var(--r-xs);padding:12px;border:1px solid var(--paper-300)}
-  .modal .papernote textarea{background:transparent;border:0;border-bottom:1px dashed rgba(32,37,38,.35);color:var(--ink-900);font-family:var(--font-story)}
-  .modal table td{font-size:12.5px}
-  .truthcard{background:var(--paper-100);color:var(--ink-900);border-color:var(--paper-300)}
-  .truthcard h3{color:var(--ink-600)}
-  .truthcard .surface{font-family:var(--font-story);font-size:16.5px;line-height:1.9;white-space:pre-wrap}
-  @media(max-width:560px){.overlay{padding:0}.modal{max-width:none;min-height:100vh;border-radius:0}}
-
-  /* ==========================================================================
-   * 短提示：窄收据（§2.23）
-   * ========================================================================*/
-  .toasts{position:fixed;top:70px;right:18px;z-index:70;display:grid;gap:8px;width:300px;max-width:calc(100vw - 36px)}
-  .toast{
-    background:var(--desk-900);border:1px solid var(--rule-dark);border-left:3px solid var(--signal);
-    border-radius:var(--r-xs);padding:9px 11px;font-size:12.5px;color:var(--text-secondary);
-  }
-  .toast.warn{border-left-color:var(--stamp-unknown)}
-  .toast.err{border-left-color:var(--danger);color:#e6b3ac}
-
-  /* ==========================================================================
-   * 移动端：逐张翻阅档案（§6 / §22）
+   * 移动端（≤900px）：单列 + 重新排序
+   * 目标：把「谁在发言 → 汤面 → 记录 → 提问输入框」连成一条线，输入框停在拇指边，
+   *       不用在题目和输入框之间来回滚。
+   * 做法：两栏容器 display:contents 摘掉外壳，让每张卡片在盒模型上变成 .grid 的
+   *       直接子项，再用 order 逐个排序。桌面端（>900px）仍是原来的两栏 grid。
+   * 注意：这里**不能**写 `.grid>.speakerbox` 这类子选择器 —— display:contents 只改
+   *       盒模型，DOM 树上卡片仍然是 .col-main 的子节点，`>` 一个都匹配不到
+   *       （踩过一次：order 全部静默失效，手机上顺序毫无变化）。所以统一用类名选择器；
+   *       下面这些类名只在房间视图里出现，不会误伤别的页面。
    * ========================================================================*/
   @media(max-width:900px){
-    .wrap{padding:0 14px 26px}
-    .topbar{margin:0 -14px 14px;height:52px;gap:10px;padding:0 14px}
-    .brand .sub{display:none}
-    .grid{grid-template-columns:minmax(0,1fr);gap:12px}
-    .col-side,.col-main,.col-rail{display:contents}
-    /* 单列顺序：状态 → 汤面 → 输入(吸附) → 记录 → 讨论 → 名册 → 其他 */
-    .speakerbox{order:10}
-    .puzzle-card,.puzzler,.sheet{order:20}
-    .toolbar{order:22}
-    .stats{order:24}
-    .engine{order:26}
-    .your-turn{order:15}
-    .topmsg{order:8}
-    .pendingcard{order:16}
-    .candcard,.waitcard,.aicard{order:30}
+    .grid{display:flex;flex-direction:column;gap:0;align-items:stretch}
+    .col-main,.col-side{display:contents}
+    .topmsg{order:10}
+    .speakerbox{order:15}
+    .puzzle-card{order:30}
+    .your-turn{order:35}
     .records{order:38}
     .composer{order:40}
-    .chatcard{order:46}
-    .bannerbox{order:60}
-    .settled,.truthcard{order:70}
-    .roomcard{order:82}
-    /* 右栏整块（页签 + 名册/便笺）要排在主内容之后：它是 .col-rail 的直接子元素，
-       不给它 order 的话默认是 0 —— 手机上会跑到最顶端去（真实踩到过） */
-    .col-rail>.card{order:84}
-    .memlist{order:84}
-    .creditcard{order:86}
-    .playercard{display:flex}
-    .puzzle-card .ptitle{font-size:21px}
-    .puzzle-card .surface{font-size:16px;line-height:1.9}
-    .stat{padding:0 9px}
-    .stat .n{font-size:17px}
-    /* 触控目标 44px（§23） */
-    button,.tab,.hintbtn,.chip.clickable{min-height:44px}
-    /* 窄屏：讨论收成入口按钮 + 近全屏面板（§12.4） */
+    .stats{order:50}
+    .engine{order:60}
+    .settled{order:75}
+    .bannerbox{order:80}
+    .aicard,.waitcard,.candcard{order:85}
+    .roomcard{order:90}
+    .memlist{order:92}
+    .creditcard{order:94}
+
+    /* 玩家卡片在手机上拆开：发言者 / 倒计时置顶，名单沉到底部当参考信息 */
+    .playercard{display:contents}
+    .speakerbox,.memlist{
+      background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+      padding:13px;margin-bottom:12px;box-shadow:var(--shadow);backdrop-filter:blur(10px);
+    }
+
+    /* 汤面卡片：把「提示 / 提交推理·揭秘」这一行抬到卡片顶部。
+       手机上输入框吸附在底部时会盖住卡片末尾，而这一行是**操作**（揭秘是胜负手），
+       放在下面等于被永久遮住；抬到顶部就永远看得见。 */
+    .puzzle-card{display:flex;flex-direction:column}
+    .puzzle-card>.spread{order:-2}
+    .puzzle-card .actions{order:-1;margin-bottom:12px}
+    .puzzle-card>.hr{display:none}
+
+    /* 输入框：只要对局在进行中就吸附在屏幕底部 —— 边看题/边看记录边打字。
+       吸附时收掉标题行、压矮输入区，把屏幕让给汤面和记录。 */
+    .composer.sticky{
+      position:sticky;bottom:0;z-index:30;
+      background:linear-gradient(180deg,rgba(18,20,32,.97),rgba(12,14,23,.99));
+      border-color:rgba(124,108,245,.45);
+      box-shadow:0 -14px 34px -16px rgba(0,0,0,.92);
+      padding-bottom:calc(13px + env(safe-area-inset-bottom,0px));
+    }
+    .composer.sticky .spread{display:none}
+    .composer.sticky textarea{min-height:52px}
+
+    /* 收紧留白的那几条放在本文件末尾的同名媒体查询里：它们和基础规则同权重，
+       必须写在基础规则之后才生效（否则被上面的 .card / .log 覆盖成没写）。 */
+  }
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .spread{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  .stack{display:flex;flex-direction:column;gap:14px}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px;margin-bottom:14px;box-shadow:var(--shadow);backdrop-filter:blur(10px);
+  }
+  .card>h3{margin:0 0 12px;font-size:13px;font-weight:650;letter-spacing:.06em;color:var(--fg2);text-transform:none}
+  .dim{color:var(--fg3);font-size:12px;line-height:1.6}
+  .muted{color:var(--fg2)}
+  .hr{height:1px;background:var(--line);margin:12px 0}
+  .empty{padding:18px 8px;text-align:center;color:var(--fg3);font-size:13px}
+
+  /* 顶部品牌条 */
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:2px 0 18px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:11px}
+  .brand .logo{
+    width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-size:20px;
+    background:linear-gradient(140deg,var(--accent),var(--cyan));box-shadow:0 12px 26px -14px rgba(124,108,245,1);
+  }
+  .brand .name{font-size:16.5px;font-weight:700;letter-spacing:.01em}
+  .brand .sub{font-size:11.5px;color:var(--fg3)}
+  .topchips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{
+    font-size:11.5px;color:var(--fg2);border:1px solid var(--line);border-radius:999px;
+    padding:4px 10px;background:rgba(255,255,255,.035);display:inline-flex;align-items:center;gap:6px;
+  }
+  .chip b{color:var(--fg);font-weight:650}
+
+  .pill{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-size:11.5px;
+    border:1px solid var(--line-2);background:rgba(255,255,255,.05);color:var(--fg2);white-space:nowrap}
+  .pill.l1{color:#9fe3c0;border-color:rgba(65,214,155,.4);background:rgba(65,214,155,.10)}
+  .pill.l2{color:#f3d69a;border-color:rgba(243,185,95,.4);background:rgba(243,185,95,.10)}
+  .pill.l3{color:#ffb0b7;border-color:rgba(242,96,107,.4);background:rgba(242,96,107,.10)}
+  .pill.accent{color:#d9d3ff;border-color:rgba(124,108,245,.5);background:rgba(124,108,245,.16)}
+  .pill.live{color:#c9f7e4;border-color:rgba(65,214,155,.5);background:rgba(65,214,155,.16)}
+
+  .notice{
+    font-size:12.5px;color:#ffe0ab;background:linear-gradient(180deg,rgba(243,185,95,.14),rgba(243,185,95,.07));
+    border:1px solid rgba(243,185,95,.32);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:12px;
+  }
+  .err{
+    font-size:12.5px;color:#ffc2c7;background:linear-gradient(180deg,rgba(242,96,107,.14),rgba(242,96,107,.06));
+    border:1px solid rgba(242,96,107,.34);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:12px;
+  }
+
+  /* ==========================================================================
+   * 玩家列表（与"谁在发言"合并展示）
+   * ========================================================================*/
+  .speaker{
+    display:flex;align-items:center;gap:12px;padding:12px;border-radius:var(--radius-sm);
+    background:linear-gradient(140deg,rgba(124,108,245,.22),rgba(72,201,232,.10));
+    border:1px solid rgba(124,108,245,.42);box-shadow:0 14px 30px -22px rgba(124,108,245,1);
+  }
+  .speaker.idle{background:rgba(255,255,255,.035);border-color:var(--line);box-shadow:none}
+  .speaker .who{font-size:14.5px;font-weight:700}
+  .speaker .what{font-size:11.5px;color:var(--fg2)}
+  .speaker .time{margin-left:auto;text-align:right}
+  .speaker .time .t{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+  .speaker .time .l{font-size:10.5px;color:var(--fg3);letter-spacing:.08em}
+
+  /* 统计条（提问 / 线索 / 提示 / 探索度） */
+  .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .stat{
+    flex:1 1 92px;min-width:92px;border:1px solid var(--line);border-radius:var(--radius-sm);
+    padding:10px 12px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+  }
+  .stat.grow{flex:2 1 220px}
+  .stat .v{font-size:19px;font-weight:750;font-variant-numeric:tabular-nums;line-height:1.25}
+  .stat .l{font-size:11px;color:var(--fg3);letter-spacing:.06em}
+  .meter{height:8px;border-radius:99px;background:rgba(0,0,0,.45);border:1px solid var(--line);overflow:hidden}
+  .meter>i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--cyan),var(--accent));transition:width .35s ease}
+  .dots{letter-spacing:2px;color:#ffd79a;font-size:12px}
+  .dots .dim{color:var(--fg3)}
+
+  /* 汤主状态条 */
+  .engine{
+    display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:12.5px;
+    border:1px solid var(--line-2);border-left:3px solid var(--accent);border-radius:var(--radius-sm);
+    padding:10px 12px;margin-bottom:14px;background:linear-gradient(90deg,rgba(124,108,245,.14),rgba(255,255,255,.02));
+  }
+  .engine b{font-size:13px}
+  .engine button{padding:5px 10px;font-size:12px}
+
+  /* 轮到你的提醒 */
+  .your-turn{
+    border:1px solid rgba(65,214,155,.5);background:linear-gradient(90deg,rgba(65,214,155,.18),rgba(65,214,155,.05));
+    color:#c9f7e4;border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:14px;font-size:13px;font-weight:600;
+    animation:glow 1.6s ease-in-out infinite;
+  }
+  @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(65,214,155,.35)}50%{box-shadow:0 0 0 7px rgba(65,214,155,0)}}
+  .puz-src{font-size:11.5px;color:var(--fg3)}
+  .puz-src a{color:var(--cyan);text-decoration:none}
+
+  .mem{
+    display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:var(--radius-sm);
+    border:1px solid transparent;transition:background .18s ease,border-color .18s ease;
+  }
+  .mem+.mem{margin-top:2px}
+  .mem:hover{background:rgba(255,255,255,.04)}
+  .mem.turn{background:rgba(124,108,245,.14);border-color:rgba(124,108,245,.42)}
+  .mem.turn .nm{font-weight:700}
+  .mem.away{opacity:.55}
+  .avatar{
+    width:34px;height:34px;flex:0 0 34px;border-radius:11px;display:grid;place-items:center;
+    font-size:13.5px;font-weight:700;color:#fff;position:relative;
+    background:linear-gradient(140deg,hsl(var(--h,255) 68% 58%),hsl(calc(var(--h,255) + 42) 64% 46%));
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.25);
+  }
+  .mem.turn .avatar{box-shadow:0 0 0 2px rgba(124,108,245,.55),inset 0 1px 0 rgba(255,255,255,.3);animation:breathe 2.4s ease-in-out infinite}
+  @keyframes breathe{0%,100%{box-shadow:0 0 0 2px rgba(124,108,245,.5)}50%{box-shadow:0 0 0 6px rgba(124,108,245,.12)}}
+  .mem .nm{font-size:13.5px;font-weight:550;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .mem .meta{margin-left:auto;text-align:right;font-size:11.5px;color:var(--fg3);white-space:nowrap;display:flex;align-items:center;gap:8px}
+  .mem .meta .kick{padding:3px 8px;font-size:11px;color:#ffc2c7;border-color:rgba(242,96,107,.35);opacity:.75}
+  .mem .meta .kick:hover{opacity:1}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 8px}
+  .dot.active{background:var(--ok);box-shadow:0 0 8px rgba(65,214,155,.8)}
+  .dot.idle{background:var(--warn)}
+  .dot.off{background:#59607a}
+
+  /* ==========================================================================
+   * 回合条 / 计时
+   * ========================================================================*/
+  .turnbar{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:14px 16px;margin-bottom:14px;box-shadow:var(--shadow);backdrop-filter:blur(10px);
+  }
+  .turnbar .head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .turnbar .round{font-size:15px;font-weight:700}
+  .turnbar .timer{font-size:22px;font-weight:750;font-variant-numeric:tabular-nums;margin-left:auto;letter-spacing:.02em}
+  .bar{height:9px;background:rgba(0,0,0,.45);border-radius:99px;overflow:hidden;margin-top:11px;border:1px solid var(--line)}
+  .bar>i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--ok),#7ee0b8);transition:width .2s linear}
+  .bar.grace>i{background:linear-gradient(90deg,var(--warn),#ffd79a)}
+  .bar.paused>i{background:linear-gradient(90deg,#5a6070,#7b8296)}
+  .bar.urgent>i{background:linear-gradient(90deg,var(--bad),#ff9aa3);animation:pulseBar 1s ease-in-out infinite}
+  @keyframes pulseBar{0%,100%{opacity:1}50%{opacity:.6}}
+
+  /* ==========================================================================
+   * 汤面
+   * ========================================================================*/
+  .puzzle{
+    position:relative;border-radius:var(--radius-sm);padding:16px;
+    background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.02));
+    border:1px solid var(--line-2);overflow:hidden;
+  }
+  .puzzle::before{content:'';position:absolute;inset:0 auto 0 0;width:3px;background:linear-gradient(180deg,var(--accent),var(--cyan))}
+  .puzzle .ptitle{font-size:18px;font-weight:750;letter-spacing:.01em}
+  .puzzle .surface{font-size:15.5px;line-height:1.85;white-space:pre-wrap;margin-top:10px;color:#eef1f9}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+  /* ==========================================================================
+   * 公共记录（只放记录）
+   * ========================================================================*/
+  .log{display:flex;flex-direction:column;gap:9px;max-height:52vh;overflow:auto;padding:2px 4px 2px 0}
+  .log .qa{
+    background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));
+    border:1px solid var(--line);border-left:3px solid var(--line-2);
+    border-radius:var(--radius-sm);padding:10px 12px;
+  }
+  .log .qa.mine{border-left-color:var(--accent);background:linear-gradient(180deg,rgba(124,108,245,.14),rgba(124,108,245,.04))}
+  .log .qa.yes{border-left-color:rgba(65,214,155,.75)}
+  .log .qa.no{border-left-color:rgba(242,96,107,.75)}
+  .log .qa.irrelevant{border-left-color:rgba(255,255,255,.16)}
+  .log .qa.unanswerable{border-left-color:rgba(243,185,95,.7)}
+  .log .qa .head{display:flex;justify-content:space-between;gap:10px;font-size:11.5px;color:var(--fg2)}
+  .log .qa .head .who{font-weight:650;color:var(--fg)}
+  .log .qa .q{margin-top:5px;white-space:pre-wrap;font-size:14.5px}
+  .log .qa .a{margin-top:7px;font-size:12.5px;color:var(--fg2);display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+  .log .qa .a .verdict{font-weight:750;font-size:13px}
+  .log .qa .a .verdict.yes{color:var(--ok)}
+  .log .qa .a .verdict.no{color:var(--bad)}
+  .log .qa .a .verdict.irrelevant{color:var(--fg2)}
+  .log .qa .a .verdict.unanswerable{color:var(--warn)}
+  .log .qa .explain{color:#cfd5e6;font-style:italic;border-left:2px solid var(--line-2);padding-left:8px;margin-top:6px;display:block}
+  .log .qa .late{color:var(--warn)}
+
+  /* ==========================================================================
+   * 全员讨论区（房间内自由发言，不参与判定）
+   * 自己的消息右对齐（暖色便笺），别人的左对齐；纯文本渲染，绝不注入 HTML
+   * ========================================================================*/
+  .chat{display:flex;flex-direction:column;gap:8px;max-height:34vh;overflow:auto;padding-right:3px}
+  .chat .msg{max-width:86%;border-radius:12px;padding:7px 11px;font-size:13px;
+    background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.02));border:1px solid var(--line)}
+  .chat .msg.mine{align-self:flex-end;background:linear-gradient(180deg,rgba(243,185,95,.20),rgba(243,185,95,.08));
+    border-color:rgba(243,185,95,.34)}
+  .chat .msg .who{font-size:10.5px;color:var(--fg3);margin-bottom:2px}
+  .chat .msg .txt{white-space:pre-wrap;word-break:break-word;line-height:1.6}
+  /* 跨局分隔线：居中的细线 + 小字，和消息便笺明显区分（§12.8） */
+  .chat .chatsep{display:flex;align-items:center;gap:8px;margin:2px 0;color:var(--fg3);font-size:11px;white-space:nowrap}
+  .chat .chatsep::before,.chat .chatsep::after{content:'';flex:1 1 auto;height:1px;background:var(--line)}
+  .chatcard .row input{flex:1 1 auto;min-width:0}
+  .chatcard .counter{font-size:11px;color:var(--fg3);white-space:nowrap;align-self:center}
+  .chatcard .badge{display:inline-block;min-width:16px;padding:0 4px;margin-left:5px;border-radius:999px;
+    background:var(--accent);color:#1b1305;font-size:10.5px;font-weight:700;line-height:16px;text-align:center}
+  .chatcard .pill.jump{cursor:pointer;border:1px solid rgba(243,185,95,.5)}
+  /* 「讨论」入口按钮与面板返回键：只在窄屏出现（桌面端一直有侧栏讨论卡片，不需要入口） */
+  .btnchat,.chat-back{display:none}
+  body.chat-open{overflow:hidden}
+  @media(max-width:900px){
+    /* 手机端不把讨论做成长卡片塞进正文流（会把题目顶下去），收成底部一个入口；
+       点开后是近全屏面板，输入框自然贴着软键盘上方（§12.4） */
     .chatcard{display:none}
-    .btnchat{display:inline-flex;align-items:center;gap:2px;min-height:44px}
+    .btnchat{display:inline-flex;align-items:center;gap:2px}
     .chatcard.open{
       display:flex;flex-direction:column;position:fixed;inset:0;z-index:70;margin:0;border-radius:0;
       height:100vh;height:100dvh;max-height:none;overflow:hidden;
-      background:var(--desk-950);
       padding:calc(12px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom));
     }
     .chatcard.open .chat{flex:1 1 auto;min-height:0;max-height:none}
-    .chatcard.open .chat-back{display:inline-flex;align-items:center;padding:6px 10px;margin-right:7px}
+    .chatcard.open .chat-back{display:inline-flex;align-items:center;padding:2px 10px;margin-right:7px;vertical-align:middle}
     .chatcard.open .chat-hint{display:none}
-    body.chat-open{overflow:hidden}
-    .toasts{top:60px;right:10px;left:10px;width:auto}
   }
-  @media(min-width:901px){.chat-back{display:none}}
-
-  /* 减少动态效果（§2.24 / §23） */
-  @media(prefers-reduced-motion:reduce){
-    *{animation:none !important;transition:none !important}
-    button:active{transform:none}
-  }
-  @keyframes note-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-  @keyframes paper-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-  .chat .msg{animation:note-in .14s ease-out}
-  .log .tl{animation:paper-in .16s ease-out}
-
-  /* ---------- 补充：新版结构与旧渲染器的对齐 ---------- */
-  /* 问答记录：上下分区（回合/提问者/时间 → 完整问题 → 答案章），不是聊天气泡（§2.12） */
-  .log .qa{display:flex;flex-direction:column;gap:6px;padding:11px 0;border-bottom:1px solid var(--rule-soft)}
-  .log .qa:last-child{border-bottom:0}
-  .log .qa .head{display:flex;gap:10px;align-items:center;font-family:var(--font-mono);font-size:11px;color:var(--text-muted)}
-  .log .qa .head .who{color:var(--text-secondary);font-family:var(--font-ui);font-size:12px;font-weight:600}
-  .log .qa .q{font-size:15px;line-height:1.7;font-weight:500;color:var(--text-on-dark)}
-  .log .qa .a{display:flex;gap:9px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-secondary)}
-  .log .qa.mine{border-left:3px solid var(--brass);padding-left:10px}
-  .log .qa .late{color:var(--stamp-unknown);font-size:11px}
-  /* 统计尺：旧渲染器用 .stat .v，新结构用 .stat .n */
-  .stat .v{font-family:var(--font-mono);font-size:19px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums}
-  .stat .meter i{display:block;height:100%;background:var(--brass)}
-  /* 入口页主按钮：盖章器式方角 + 字距（§2.8） */
-  .entry .form button.primary{border-radius:var(--r-xs);letter-spacing:.08em;min-height:44px}
-  /* 房主操作行距 */
-  .roomcard .actions button{font-size:12px}
-  /* 便笺栏嵌在右栏页签里时不要再套一层卡片边框 */
-  .chatcard.bare{background:transparent;border:0;border-radius:0;padding:0}
-  /* 名册行尾的"更多"（§2.14：移出默认藏起来） */
-  details.more{margin-left:auto;position:relative}
-  details.more>summary{list-style:none;cursor:pointer;color:var(--text-muted);font-size:11px;padding:4px 6px;border:1px solid transparent;border-radius:var(--r-xs)}
-  details.more>summary::-webkit-details-marker{display:none}
-  details.more>summary:hover{color:var(--text-on-dark);border-color:var(--rule-dark)}
-  details.more[open]>summary{color:var(--text-on-dark);border-color:var(--rule-dark)}
-  details.more>button{position:absolute;right:0;top:calc(100% + 4px);z-index:5;white-space:nowrap;background:var(--desk-800);border-color:var(--danger)}
-  /* 底部书写板整行：桌面上横跨三栏（移动端由 order 插到记录之后） */
-  .composer{grid-column:1 / -1;position:sticky;bottom:0;z-index:30;box-shadow:0 -1px 0 var(--rule-dark)}
-  .composer .askrow .dim{font-size:11.5px}
-  /* 汤面下方的案卷工具条 */
-  .toolbar{margin-top:-8px}
-  .toolbar .eyebrow{margin-right:4px}
+  .tl{background:rgba(255,255,255,.028);border:1px solid var(--line);border-radius:var(--radius-sm);padding:7px 11px;font-size:12.5px;color:var(--fg2);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+  .tl.sys{border-style:dashed}
+  .tl.err{border-color:rgba(242,96,107,.35);background:rgba(242,96,107,.07);color:#ffc2c7}
+  .tl.vote{border-color:rgba(124,108,245,.4);background:rgba(124,108,245,.08)}
+  .tl .meta{color:var(--fg3);font-size:11px;margin-left:auto;white-space:nowrap}
 
   /* ==========================================================================
-   * 设备手册式弹窗（§2.19）：分组左侧窄索引 + 章节编号
+   * 题目候选 / 表格 / 掩码
    * ========================================================================*/
-  .fieldgroup{border-left:2px solid var(--rule-dark);padding:2px 0 2px 12px;margin:14px 0 0}
-  .fieldgroup>h4{margin:0 0 8px;font-size:11px;letter-spacing:.16em;color:var(--brass);text-transform:uppercase}
-  .fieldgroup .fieldrow{border-bottom:1px dotted var(--rule-soft)}
-  .fieldgroup .fieldrow:last-child{border-bottom:0}
-  .modal .chapter{display:flex;align-items:baseline;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--rule-dark);margin-bottom:12px}
-  .modal .chapter .no{font:700 12px/1 var(--font-mono);color:var(--brass);letter-spacing:.1em}
-  .modal .chapter h3{margin:0}
-  /* 开关：短拨杆（不用手机系统风格的大滑块） */
-  .switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
-  .switch input{position:absolute;opacity:0;width:0;height:0}
-  .switch .track{width:34px;height:18px;border:1px solid var(--rule-dark);border-radius:2px;background:var(--desk-800);position:relative;transition:background .14s ease}
-  .switch .track::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;background:var(--text-muted);transition:transform .14s ease,background .14s ease}
-  .switch input:checked+.track{background:#2b2a1c;border-color:var(--brass)}
-  .switch input:checked+.track::after{transform:translateX(16px);background:var(--brass-light)}
-  .switch input:focus-visible+.track{outline:2px solid var(--focus);outline-offset:2px}
-  .switch .lab{font-size:12.5px;color:var(--text-secondary)}
-  /* 结案推理的稿纸输入（§2.17）：暖纸 + 淡横线 */
-  .modal .papernote textarea{
-    background-image:repeating-linear-gradient(180deg,transparent 0 27px,rgba(32,37,38,.16) 27px 28px);
-    line-height:28px;min-height:140px;
+  .cands{display:grid;grid-template-columns:repeat(auto-fit,minmax(248px,1fr));gap:12px}
+  .cand{
+    background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+    border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:13px;
+    display:flex;flex-direction:column;gap:9px;transition:transform .14s ease,border-color .2s ease,box-shadow .2s ease;
   }
-  .reason.solid{background:var(--stamp-no);border-color:var(--stamp-no);color:#fff;font-weight:700}
-  .reason.solid:hover{background:#c05a50;border-color:#c05a50}
-  /* 汤底开封（§2.20）：横向封套，封条从中间向两侧退开；总时长 800ms */
-  .envelope{position:relative;background:var(--desk-800);border:1px solid var(--rule-dark);border-radius:var(--r-xs);padding:16px;overflow:hidden}
-  .envelope .sealband{position:absolute;top:0;bottom:0;left:50%;width:52%;display:flex;transform:translateX(-50%);pointer-events:none}
-  .envelope .sealband i{flex:1 1 50%;background:linear-gradient(180deg,#3a3020,#2a2318);border:1px solid #514328;animation:seal-open .8s ease-out forwards}
-  .envelope .sealband i:first-child{transform-origin:left center}
-  .envelope .sealband i:last-child{transform-origin:right center}
-  @keyframes seal-open{0%{transform:scaleX(1)}55%{transform:scaleX(1)}100%{transform:scaleX(0)}}
-  .envelope .truthsheet{background:var(--paper-100);color:var(--ink-900);border:1px solid var(--paper-300);border-radius:var(--r-xs);padding:18px 20px;position:relative}
-  .envelope .truthsheet h2{font-family:var(--font-story);font-size:24px;margin:6px 0 10px}
-  .envelope .truthsheet .surface{font-family:var(--font-story);font-size:16.5px;line-height:1.95;white-space:pre-wrap}
-  .seal.big{font-size:12px;padding:3px 10px;border-width:2px;letter-spacing:.12em}
-  /* 复盘的"仅房主可见"窄红条（§2.21） */
-  .redbar{background:var(--danger);color:#fff;font-size:11.5px;font-weight:700;letter-spacing:.08em;padding:5px 10px;border-radius:var(--r-xs);margin-bottom:12px}
-  .recap h4{margin:16px 0 6px;font-size:11px;letter-spacing:.16em;color:var(--text-muted);text-transform:uppercase}
-  .recap h4 .no{font-family:var(--font-mono);color:var(--brass);margin-right:6px}
-  .recap .sheet{background:var(--paper-100);color:var(--ink-900);border:1px solid var(--paper-300);border-radius:var(--r-xs);padding:14px 16px}
-  .recap .sheet .surface{font-family:var(--font-story);font-size:16px;line-height:1.9;white-space:pre-wrap}
+  .cand:hover{transform:translateY(-2px);border-color:rgba(124,108,245,.55);box-shadow:0 18px 34px -26px rgba(124,108,245,1)}
+  .cand.win{border-color:rgba(65,214,155,.6)}
+  .cand .cbody{font-size:13.5px;line-height:1.7;color:#e6eaf5}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;align-items:baseline}
+  .kv .k{color:var(--fg3);font-size:12px;white-space:nowrap}
+  .mask{background:rgba(0,0,0,.4);border:1px dashed var(--line-2);border-radius:8px;padding:3px 9px;font-family:ui-monospace,monospace;font-size:12px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--fg3);font-size:11.5px;font-weight:600;letter-spacing:.04em}
+  tbody tr:hover{background:rgba(255,255,255,.03)}
+
+  /* ==========================================================================
+   * 弹窗
+   * ========================================================================*/
+  .overlay{position:fixed;inset:0;background:rgba(5,7,12,.74);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:18px;z-index:50;animation:fade .16s ease}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .modal{
+    background:linear-gradient(180deg,rgba(30,34,50,.99),rgba(21,24,36,.99));
+    border:1px solid var(--line-2);border-radius:18px;padding:20px;max-width:760px;width:100%;max-height:88vh;overflow:auto;
+    box-shadow:0 40px 90px -40px rgba(0,0,0,1);animation:rise .18s ease;
+  }
+  @keyframes rise{from{transform:translateY(10px) scale(.99);opacity:.6}to{transform:none;opacity:1}}
+  .modal h3{font-size:16px}
+  .field{display:grid;grid-template-columns:1fr 140px;gap:10px;align-items:center;margin-bottom:9px}
+  .field label{color:var(--fg2);font-size:12.5px}
+  /* 弹窗里的表单一律「标签在上、输入框整行」：输入长 Key / URL 时需要足够宽度 */
+  .modal .field{grid-template-columns:1fr;gap:5px;align-items:start}
+  .modal .row{margin-top:10px}
+
+  /* Key 输入框：不用 type=password，避免浏览器/密码管理器介入 */
+  .secret{-webkit-text-security:disc;font-family:ui-monospace,monospace;letter-spacing:.08em}
+
+  /* ==========================================================================
+   * 入口页
+   * ========================================================================*/
+  .hero{
+    border-radius:22px;padding:30px 26px;margin-bottom:18px;position:relative;overflow:hidden;
+    background:linear-gradient(135deg,rgba(124,108,245,.28),rgba(72,201,232,.12) 55%,rgba(65,214,155,.10));
+    border:1px solid var(--line-2);box-shadow:var(--shadow);
+  }
+  .hero h1{margin:0 0 6px;font-size:26px;font-weight:800;letter-spacing:.01em}
+  .hero p{margin:0;color:#d5daea;font-size:13.5px;max-width:640px}
+  .entry{max-width:560px;margin:0 auto}
+  .entry .card{padding:20px}
+  .modes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:4px 0 14px}
+  @media(max-width:560px){.modes{grid-template-columns:1fr}}
+  .mode{border:1px solid var(--line-2);border-radius:12px;padding:11px;cursor:pointer;background:rgba(255,255,255,.035);transition:all .16s ease;text-align:center}
+  .mode:hover{border-color:rgba(124,108,245,.6);transform:translateY(-2px)}
+  .mode.on{border-color:var(--accent);background:rgba(124,108,245,.18);box-shadow:0 14px 30px -22px rgba(124,108,245,1)}
+  .mode .t{font-size:13px;font-weight:650}
+  .mode .d{font-size:11px;color:var(--fg3);margin-top:3px}
+
+  /* ==========================================================================
+   * 移动端收紧留白（必须放在样式表最后）
+   * 这些选择器（.card / .log / .stat …）和上面的基础规则**同权重**，
+   * 只有写在它们后面才会生效 —— 放在前面等于没写。
+   * ========================================================================*/
+  @media(max-width:900px){
+    .wrap{padding:12px 12px 28px}
+    .topbar{margin:0 0 12px;gap:10px}
+    .topchips .chip{font-size:11px;padding:3px 8px}
+    .card{padding:13px;margin-bottom:12px}
+    .puzzle{padding:13px}
+    .puzzle .ptitle{font-size:17px}
+    .puzzle .surface{font-size:15px;line-height:1.8}
+    .log{max-height:32vh}
+    .stats{gap:8px;margin-bottom:12px}
+    .stat{flex:1 1 68px;min-width:0;padding:8px 10px}
+    .stat .v{font-size:17px}
+    .engine{margin-bottom:12px;padding:9px 11px}
+    textarea{min-height:64px}
+    /* 吸附时把记录压矮一点，保证刚判完的那一条不被输入框盖住 */
+    .grid:has(.composer.sticky) .records{padding-bottom:22px}
+    .grid:has(.composer.sticky) .log{max-height:24vh}
+    /* 记录卡片末尾那句静态说明会被吸附的输入框压住半行，干脆收起来（滚动一下就能看到全文也没意义） */
+    .grid:has(.composer.sticky) .records>.dim{display:none}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header class="topbar">
+  <div class="topbar">
     <div class="brand">
-      <div class="logo" id="brandLogo" aria-hidden="true"></div>
+      <div class="logo">🐢</div>
       <div>
-        <div class="name">海龟汤</div>
-        <div class="sub">情境推理档案</div>
+        <div class="name">AI 海龟汤</div>
+        <div class="sub">情境推理 · 只能问「是 / 否」</div>
       </div>
     </div>
     <div class="topchips">
-      <span class="chip mono clickable" id="roomChip" hidden></span>
-      <span class="chip" id="connChip"><i class="lamp"></i>连接中…</span>
-      <button class="chip clickable" id="btnRoomInfo" type="button" title="房间信息与设置">房间信息与设置</button>
+      <span class="chip" id="roomChip" hidden></span>
+      <span class="chip">🔒 密钥只在服务端加密存储</span>
+      <span class="chip" id="connChip">⚡ Cloudflare Workers + D1</span>
     </div>
-  </header>
+  </div>
   <div id="app"></div>
 </div>
-<div class="toasts" id="toasts" aria-live="polite"></div>
+
 <script>
 /* ============================================================================
  * 客户端状态与工具
  * ==========================================================================*/
-// 主力前端用 ht.* 键（与旧版一致：升级不该把正在玩的人的会话弄丢）
-const LS_TOKEN = 'ht.token';
-const LS_DRAFT = 'ht.draft';      // 预输入草稿：只存本机，绝不上传（隐私红线）
-const LS_NICK = 'ht.nickname';
+const LS_TOKEN = 'ht.classic.token';
+const LS_DRAFT = 'ht.classic.draft';           // 预输入草稿：只存本机，绝不上传（隐私红线）
+const LS_NICK = 'ht.classic.nickname';
 
 const S = {
   screen: 'entry',                      // entry | room
@@ -720,14 +500,9 @@ const S = {
   // chatOpen：窄屏的讨论面板是否打开（桌面端忽略，侧栏一直看得见）
   // chatPinned：讨论列表是否停在底部 —— 停在底部才自动跟随新消息，也才算"已读"
   chatOpen: false, chatPinned: true, chatScrollToBottom: false,
-  // 右栏页签：crew（在桌成员）/ notes（全员讨论）。切页签不动中央记录的滚动位置。
-  railTab: 'crew',
   keyMask: null,
   keyTest: null,
   configModal: false,
-  roomInfo: false,                       // 顶栏「房间信息与设置」抽屉
-  modalTriggerId: '',                    // 打开弹窗的那个按钮（关闭后把焦点还回去）
-  noticeShown: '',                       // 已经弹过的短提示（同一条不重复弹）
   guessModal: false,
   truthModal: false,                     // "汤底公示"弹窗（被猜出时自动弹一次）
   truthDismissedKey: '',                 // 已经点过"返回"的那一局（避免每轮重渲染又弹出来）
@@ -747,47 +522,12 @@ const serverNow = () => Date.now() + S.serverOffset;
  * ------------------------------------------------------------------------- */
 /** 单条讨论消息长度上限，与服务端 `PLATFORM.chatMaxLen` 对齐（这里只用于输入框提示与字数显示） */
 const CHAT_MAXLEN = 500;
-/**
- * 短提示：窄收据从右上角滑入，4.6 秒后收起（§2.23）。
- * 容器 #toasts 在 #app 之外，所以整页重渲染不会把它冲掉；左侧细线的颜色表示性质。
- */
-function pushToast(text, kind = 'ok') {
-  const box = document.getElementById('toasts');
-  if (!box || !text) return;
-  const el = document.createElement('div');
-  el.className = `toast${kind === 'err' ? ' err' : kind === 'warn' ? ' warn' : ''}`;
-  el.textContent = text;
-  box.appendChild(el);
-  while (box.children.length > 4) box.removeChild(box.firstChild);
-  setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 4600);
-}
-
-/**
- * 关闭"最上面那一层"（§23：Esc 关弹窗）。返回真值表示确实关掉了什么。
- * 顺序与视觉层级一致：复盘 → Key → 参数 → 猜底 → 汤底 → 房间信息 → 窄屏讨论面板。
- */
-function closeTopModal() {
-  if (S.recap) { S.recap = null; return true; }
-  if (S.keyModal) { S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; return true; }
-  if (S.configModal) { S.configModal = false; return true; }
-  if (S.guessModal) { S.guessModal = false; delete S.drafts.guessText; return true; }
-  if (S.truthModal) {
-    const r = S.view ? S.view.room : null;
-    S.truthModal = false;
-    if (r && r.truth) S.truthDismissedKey = `${r.id}:${r.roundNo}`;   // 关掉就别再自动弹
-    return true;
-  }
-  if (S.roomInfo) { S.roomInfo = false; return true; }
-  if (S.chatOpen) { S.chatOpen = false; return true; }
-  return false;
-}
-
 function countChatUnread() {
   const meId = S.view && S.view.you ? S.view.you.memberId : '';
   S.chatUnread = S.chat.filter((m) => (m.chatSeq || 0) > S.chatReadSeq && m.memberId !== meId).length;
 }
 function markChatRead() {
-  // 注意：必须跳过本地乐观条目：它的 chatSeq 是哨兵值（CHAT_LOCAL_SEQ = 最大整数），
+  // ⚠️ 必须跳过本地乐观条目：它的 chatSeq 是哨兵值（CHAT_LOCAL_SEQ = 最大整数），
   // 一旦算进 max，chatReadSeq 会被顶到最大整数 → 之后**所有**新消息都被判成"已读"，
   // 未读角标再也不出现（真缺陷，E2E 抓到的）。
   const newest = S.chat.reduce((mx, m) => (m.pending === true ? mx : Math.max(mx, m.chatSeq || 0)), 0);
@@ -868,8 +608,6 @@ function tickUi() {
   const now = serverNow();
   let anyExpired = false;
   document.querySelectorAll('[data-deadline]').forEach((el) => {
-    // 刻度条也带 data-deadline（用来算点亮格数），但它的内容是 <i> 格子 —— 绝不能被当成倒计时文本写进去
-    if (el.hasAttribute('data-ticks')) return;
     const left = Math.max(0, Number(el.getAttribute('data-deadline')) - now);
     const text = el.getAttribute('data-format') === 'plain' ? `${Math.ceil(left / 1000)} 秒` : fmt(left);
     if (el.textContent !== text) el.textContent = text;
@@ -880,21 +618,6 @@ function tickUi() {
     const total = Math.max(1, Number(el.getAttribute('data-total')) || 1);
     const pct = Math.max(0, Math.min(100, (left / total) * 100));
     el.style.width = `${pct}%`;
-  });
-  // 机械计时牌的刻度条（§2.9）：从右向左逐格熄灭 —— 只改 class，不重渲染。
-  document.querySelectorAll('[data-ticks]').forEach((el) => {
-    const left = Math.max(0, Number(el.getAttribute('data-deadline')) - now);
-    const total = Math.max(1, Number(el.getAttribute('data-total')) || 1);
-    const pct = Math.max(0, Math.min(100, (left / total) * 100));
-    const cells = el.children;
-    const lit = Math.ceil((pct / 100) * cells.length);
-    for (let i = 0; i < cells.length; i++) {
-      const on = i < lit;
-      if (cells[i].classList.contains('on') !== on) cells[i].classList.toggle('on', on);
-    }
-    // 最后 5 秒：只让数字和刻度变印泥红，不闪整块区域
-    const danger = left <= 5000;
-    if (el.classList.contains('danger') !== danger) el.classList.toggle('danger', danger);
   });
   if (anyExpired && S.view && token() && !pollInFlight && Date.now() - zeroNudgedAt > 1500) {
     zeroNudgedAt = Date.now();
@@ -1274,9 +997,9 @@ function setTitleAlert(on) {
     let flip = false;
     titleTimer = setInterval(() => {
       flip = !flip;
-      document.title = flip ? '轮到你发言了 — 海龟汤' : titleBase;
+      document.title = flip ? '🎤 轮到你了！' : titleBase;
     }, 900);
-    document.title = '轮到你发言了 — 海龟汤';
+    document.title = '🎤 轮到你了！';
   } else {
     if (titleTimer) { clearInterval(titleTimer); titleTimer = null; }
     document.title = 'AI 海龟汤';
@@ -1286,7 +1009,7 @@ function setTitleAlert(on) {
 /* ============================================================================
  * 渲染
  *
- * 注意：这里是全量 innerHTML 重渲染，而轮询每 1.8 秒就会调一次 render()。
+ * ⚠️ 这里是全量 innerHTML 重渲染，而轮询每 1.8 秒就会调一次 render()。
  *    **正在输入时绝不重渲染**：整页 innerHTML 会把输入框整个换掉，
  *    中文输入法正在组字的内容会直接被打断、光标丢失 —— 表现就是"打不进字/一闪一闪"。
  *    输入结束后（失焦或停手 700ms）再补一次渲染，把期间收到的状态追上。
@@ -1335,7 +1058,7 @@ function flushDeferredRender() {
 /**
  * 状态指纹：只有它变了才重渲染。
  *
- * 注意：这里**必须剔除每轮都在变的字段**（`room.serverTime`）：时间戳每 1.2 秒变一次，
+ * ⚠️ 这里**必须剔除每轮都在变的字段**（`room.serverTime`）：时间戳每 1.2 秒变一次，
  * 一旦进指纹，指纹就永远不同，"状态没变就不动 DOM"直接失效 ——
  * 表现就是整个页面（尤其是弹窗）每 1.2 秒重建一次、入场动画反复重播 = **闪回**。
  * 倒计时不走这里：它由 tickUi() 直接改 `data-deadline` 元素的文本，不需要重渲染。
@@ -1347,10 +1070,10 @@ function stateFingerprint() {
     : null;
   return JSON.stringify([
     S.screen, S.connected, S.notice, S.error, S.hint,
-    S.configModal, S.guessModal, S.keyModal, S.truthModal, S.roomInfo,
+    S.configModal, S.guessModal, S.keyModal, S.truthModal,
     // 讨论区：消息条数与未读数进指纹（否则新消息不会触发重渲染）；草稿刻意不进（打字不重渲染）；
     // chatOpen 进指纹（打开/关闭面板要立刻重画）；chatPinned 不进（只看不重画，改了由滚动处理器显式 render）
-    S.chat.length, S.chatUnread, S.chatOpen, S.railTab,
+    S.chat.length, S.chatUnread, S.chatOpen,
     S.keyMask, t ? [t.pending === true, t.ok === true, t.reasonCode, t.message, t.url] : null,
     S.recap ? 1 : 0,
     view, S.questions, S.log.length, S.pendingTimeline.length,
@@ -1362,13 +1085,6 @@ function stateFingerprint() {
 
 function render(force = false) {
   const app = $('#app');
-  // 短提示（§2.23）：notice 表示"刚发生了什么"，像一张窄收据从右上角滑入后自动收起。
-  // 持续状态（连接中断 / AI 异常 / 投票 / 移交）走各自区域的常驻提示，不走这里；
-  // 入口页（会话失效、房间已清理）也仍然内联显示，不放 toast。
-  if (S.notice && S.notice !== S.noticeShown && S.screen === 'room') {
-    S.noticeShown = S.notice;
-    pushToast(S.notice, 'ok');
-  }
   if (!app.firstChild) force = true;                 // 首次渲染必须画
   if (!force && isBusy()) {
     S.renderPending = true;
@@ -1390,7 +1106,7 @@ function render(force = false) {
   const oldLog = $('#log');
   const pinned = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 48) : S.logPinned;
   // 讨论列表同理：重渲染前先记住"是不是停在底部"和滚动位置。
-  // 注意：不可见时（手机上面板没打开）**不能**当成停在底部 —— 否则会把人没看过的消息算成已读。
+  // ⚠️ 不可见时（手机上面板没打开）**不能**当成停在底部 —— 否则会把人没看过的消息算成已读。
   const oldChat = $('#chatLog');
   const chatVisible = isVisible(oldChat);
   // S.chatScrollToBottom：点「有 N 条新消息 ↓」或打开面板时的一次性指令 ——
@@ -1444,26 +1160,21 @@ function render(force = false) {
     if (modal) modal.scrollTop = modalScroll;
   }
 
-  // 顶部连接状态（§2.7：6px 信号灯 + 短文字，不做发光圆点）
+  // 顶部连接状态（不在房间时不显示连接问题）
   const chip = document.getElementById('connChip');
   if (chip) {
     const inRoom = Boolean(S.view && S.screen === 'room');
-    const bad = inRoom && !S.connected;
-    chip.innerHTML = bad
-      ? '<i class="lamp off"></i>连接中断，正在重试…'
-      : '<i class="lamp"></i>已连接 · Cloudflare Workers + D1';
+    chip.innerHTML = inRoom && !S.connected ? '⚠ 连接中断，正在重试…' : '⚡ Cloudflare Workers + D1';
   }
 
-  // 房号实时显示在顶栏（§2.7：ROOM / K7M2QX，等宽字体，点整个编号复制）
+  // 房号实时显示在顶栏（滚动到哪儿都能看见、随时能念给朋友听）
   const roomChip = document.getElementById('roomChip');
   if (roomChip) {
     const inRoom = Boolean(S.view && S.screen === 'room' && S.view.room);
     if (inRoom) {
       roomChip.hidden = false;
-      roomChip.innerHTML = `ROOM / <b>${esc(S.view.room.code)}</b> <span class="dim">复制</span>`;
+      roomChip.innerHTML = `房号 <b style="letter-spacing:.14em">${esc(S.view.room.code)}</b> · 点我复制`;
       roomChip.style.cursor = 'pointer';
-      roomChip.setAttribute('role', 'button');
-      roomChip.title = '点一下复制房号';
       roomChip.onclick = async () => {
         const okCopy = await copyText(S.view.room.code);
         S.notice = okCopy ? `房号 ${S.view.room.code} 已复制` : `房号：${S.view.room.code}`;
@@ -1475,43 +1186,17 @@ function render(force = false) {
     }
   }
 
-  // 弹窗焦点（§23）：打开时把焦点送进弹窗；关闭后把焦点还给触发它的按钮
-  const dlg = document.querySelector('.overlay .modal');
-  if (dlg) {
-    if (!dlg.contains(document.activeElement)) {
-      const first = dlg.querySelector('input:not([type=hidden]),textarea,select,button');
-      if (first && first.focus) first.focus();
-    }
-    S.modalWasOpen = true;
-  } else if (S.modalWasOpen) {
-    S.modalWasOpen = false;
-    const back = S.modalTriggerId ? document.getElementById(S.modalTriggerId) : null;
-    if (back && back.focus) back.focus();
-  }
-
   // 轮到你/没轮到你：标题栏提醒（只在自己需要动手时闪）
   const myTurnNow = Boolean(S.view && S.screen === 'room' && S.view.you && S.view.you.canSubmit);
   setTitleAlert(myTurnNow && document.visibilityState !== 'visible');
 }
 
 const PRESET_INFO = [
-  { key: 'quick', idx: '01', title: '快速', desc: '30 秒 / 人 · 15 轮上限', cool: '猜底冷却 90 秒' },
-  { key: 'standard', idx: '02', title: '标准', desc: '60 秒 / 人 · 20 轮上限', cool: '猜底冷却 180 秒' },
-  { key: 'casual', idx: '03', title: '休闲', desc: '120 秒 / 人 · 30 轮上限', cool: '猜底冷却 300 秒' },
+  { key: 'quick', title: '快速', desc: '30 秒/人 · 10 轮' },
+  { key: 'standard', title: '标准', desc: '60 秒/人 · 15 轮' },
+  { key: 'casual', title: '休闲', desc: '120 秒/人 · 25 轮' },
 ];
 
-/** 海龟图章：全站唯一的品牌插画（§2.26 图标），单色线性，不用 emoji */
-function turtleSvg() {
-  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
-    <ellipse cx="12" cy="12" rx="7" ry="5.5"/><path d="M12 6.5v11M5.2 10.5h13.6M5.2 13.5h13.6"/>
-    <circle cx="12" cy="3.6" r="1.6"/><path d="M5 17.5 3.4 20M9 18.2 7.8 21M15 18.2l1.2 2.8M19 17.5l1.6 2.5"/>
-  </svg>`;
-}
-
-/**
- * 入口页（§2.8 / §4）：左边是案卷封面，右边是深色登记台。
- * 控件 id 与旧版一致（#nick/#code/#preset/#btnGo/#btnResume），业务逻辑完全没变。
- */
 function viewEntry() {
   const nickname = S.drafts.nick ?? (localStorage.getItem(LS_NICK) || '');
   const preset = S.preset || 'standard';
@@ -1520,53 +1205,34 @@ function viewEntry() {
   const code = S.drafts.code ?? fromLink.toUpperCase();
   return `
   <div class="entry">
-    <section class="hero">
-      <div class="stampmark">${turtleSvg()}</div>
-      <div class="eyebrow">CASE FILE / 情境推理档案</div>
-      <h1>一个古怪的故事结局，<br>一群只能问「是或否」的人</h1>
-      <p>出题人只给出结局（汤面）。你们轮流提问，主持人回答「是 / 不是 / 与此无关 / 无法回答」，
-        靠这些问题把真相拼出来。</p>
-      <ol>
-        <li>建房或输入房号加入，等房主选一道题。</li>
-        <li>轮到你时问一句，答案立刻公开进正式记录。</li>
-        <li>想清楚了就「猜汤底」——猜中全桌同时看到真相。</li>
-      </ol>
-      <div class="secret">汤底在猜中前保密 · 猜中后全桌同时揭晓</div>
-    </section>
-
-    <section class="form">
-      <div class="eyebrow">REGISTER / 加入或创建房间</div>
-      ${fromLink ? `<div class="notice" style="margin:10px 0">正在加入好友的房间 <b class="mono">${esc(fromLink.toUpperCase())}</b> —— 填个昵称点「创建 / 加入」即可。</div>` : ''}
-      <div class="field" style="margin-top:10px">
-        <label for="nick">玩家署名</label>
-        <input id="nick" autocomplete="off" spellcheck="false" value="${esc(nickname)}" maxlength="12" placeholder="例如：阿伟">
-      </div>
-      <div class="field">
-        <label for="code">房间编号（留空则新建一间）</label>
-        <input id="code" class="mono" autocomplete="off" spellcheck="false" value="${esc(code)}" placeholder="6 位房间码" maxlength="8">
-      </div>
+    <div class="hero">
+      <h1>AI 海龟汤</h1>
+      <p>出题人给出一个古怪的结局（汤面），你们只能问「是不是……」，主持人回答 是 / 否 / 无关 / 无法回答。
+        靠这些问题把真相拼出来 —— 汤底在结束前对所有人保密，只有房主能揭晓。</p>
+    </div>
+    ${fromLink ? `<div class="notice">正在加入好友的房间 <b>${esc(fromLink.toUpperCase())}</b> —— 填个昵称点「创建 / 加入」即可。</div>` : ''}
+    <div class="card">
+      <h3>加入或创建房间</h3>
+      <div class="field"><label>你的昵称</label><input id="nick" autocomplete="off" spellcheck="false" value="${esc(nickname)}" maxlength="12" placeholder="例如：阿伟"></div>
+      <div class="field"><label>房间码（加入已有房间，留空则新建）</label><input id="code" autocomplete="off" spellcheck="false" value="${esc(code)}" placeholder="6 位房间码" maxlength="8"></div>
       <input type="hidden" id="preset" value="${esc(preset)}">
-      <div class="eyebrow" style="margin:14px 0 8px">NEW ROOM / 新房间预设</div>
+      <div style="margin-top:12px"><span class="dim">新房间的对局预设</span></div>
       <div class="modes">
         ${PRESET_INFO.map((p) => `
-          <div class="mode${preset === p.key ? ' on' : ''}" data-preset="${p.key}" role="button" tabindex="0" aria-pressed="${preset === p.key ? 'true' : 'false'}">
-            <div class="idx">${p.idx}</div>
-            <div class="t">${p.title}</div>
-            <div class="d">${p.desc}<br>${p.cool}</div>
+          <div class="mode${preset === p.key ? ' on' : ''}" data-preset="${p.key}">
+            <div class="t">${p.title}</div><div class="d">${p.desc}</div>
           </div>`).join('')}
       </div>
-      <div class="actions" style="margin-top:16px">
-        <button class="primary" id="btnGo" style="flex:1 1 160px">创建 / 加入</button>
+      <div class="row" style="margin-top:14px">
+        <button class="primary" id="btnGo">创建 / 加入</button>
         <button id="btnResume" ${token() ? '' : 'disabled'}>回到我的房间</button>
       </div>
       ${S.error ? `<div class="err" style="margin-top:12px">${esc(S.error)}</div>` : ''}
       ${S.notice ? `<div class="notice" style="margin-top:12px">${esc(S.notice)}</div>` : ''}
-      <div class="hr"></div>
-      <div class="eyebrow" style="margin-bottom:6px">DEVICE / 设备状态</div>
-      <div class="dim">
-        ${S.config ? `服务端模型：${S.config.realModelEnabled ? '已配置平台额度' : '未配置（可由房主自备 API Key）'} · 密钥保险箱：${S.config.vaultEnabled ? '已启用' : '未启用'}` : '正在读取服务端配置…'}
+      <div class="dim" style="margin-top:12px">
+        ${S.config ? `服务端模型：${S.config.realModelEnabled ? '已配置平台额度' : '未配置（可由房主自备 API Key）'} · 密钥保险箱：${S.config.vaultEnabled ? '已启用' : '未启用'}` : ''}
       </div>
-    </section>
+    </div>
   </div>`;
 }
 
@@ -1608,20 +1274,6 @@ function bindEntry() {
   };
 }
 
-/** 中文阶段文案（§24：界面不出现 waiting/playing/settled 这类内部枚举） */
-function roomStatusLabel(room) {
-  if (!room) return '';
-  if (room.status === 'waiting') return '等待开局';
-  if (room.status === 'playing') return '推理进行中';
-  if (room.status === 'settled') return '本局结束';
-  if (room.status === 'suspended') return room.pauseReason === 'AI_BLOCKED' ? '已暂停 · AI 异常' : '已暂停';
-  return room.status;
-}
-
-/**
- * 房间页总体布局（§5.1）：左「当前回合」/ 中「主内容」/ 右「玩家与讨论」，底部整行书写板。
- * 手机上 .grid 变成 display:contents，各区块按 §6 的玩法顺序单列排开。
- */
 function viewRoom() {
   const v = S.view;
   const room = v.room;
@@ -1630,45 +1282,56 @@ function viewRoom() {
   const puzzle = room.puzzle;
   const draft = S.drafts.ask ?? (localStorage.getItem(LS_DRAFT) || '');
   const myTurn = you.canSubmit;
-  const phaseLabel = { ACTIVE: '正在提问', GRACE: '宽限期（提交仍有效）', JUDGING: '主持人判定中', SETTLED: '本轮结束', SKIPPED: '已跳过', PAUSED: '已暂停', IDLE: '等待开局' }[turn.phase] || turn.phase;
+  // 手机上输入框是否吸附在屏幕底部：对局进行中就一直吸附（随时能打字），
+  // 另外只要写了草稿也吸附（等待阶段预输入完不被收走）
+  const composerSticky = room.status === 'playing' || Boolean(String(draft).trim());
+  const phaseLabel = { ACTIVE: '提问中', GRACE: '宽限期（提交仍有效）', JUDGING: '主持人判定中', SETTLED: '本轮结束', SKIPPED: '已跳过', PAUSED: '已暂停', IDLE: '—' }[turn.phase] || turn.phase;
+  // 计时：以服务端时间为准，按秒走（真正的刷新由 tickUi() 每 250ms 打到 #tickLeft 上，不整页重渲染）
   const counting = turn.phase === 'ACTIVE' || turn.phase === 'GRACE';
   const deadline = turn.phase === 'GRACE' ? turn.graceDeadlineAt : turn.deadlineAt;
-  // 计时窗口长度：**不能**用 turn.startedAt —— 房间投影里根本没有这个字段（它只在服务端内部），
-  // 之前用它算出来是 NaN，进度条/刻度会一直是空的。这里直接按本局配置的时长算。
+  // ⚠️ 计时窗口长度不能用 turn.startedAt：房间投影里没有这个字段（只存在于服务端内部状态），
+  //    用它算出来是 NaN —— 进度条的 `width:NaN%` 会被浏览器丢弃，于是进度条**永远是空的**。
+  //    这里按本局配置的时长算（宽限期用 graceSec），既准确又不依赖内部字段。
   const total = turn.phase === 'GRACE'
     ? Math.max(1, (room.config.graceSec || 5) * 1000)
     : Math.max(1, (room.config.perTurnSec || 60) * 1000);
   const left = counting ? Math.max(0, deadline - serverNow()) : 0;
   const pct = counting ? Math.max(0, Math.min(100, (left / total) * 100)) : 0;
-  const railTab = S.railTab === 'notes' ? 'notes' : 'crew';
-  const waiting = room.status === 'waiting';
 
   return `
   <div class="grid">
     <div class="col-side">
-      ${speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel)}
-      ${engineBar(room, you)}
-      <div class="card roomcard hd">
-        <h3>ROOM / 房间</h3>
+      <div class="card roomcard"><h3>房间</h3>
         <div class="kv">
-          <div class="k">房号</div><div class="mono" style="letter-spacing:.18em">${esc(room.code)}</div>
-          <div class="k">状态</div><div>${esc(roomStatusLabel(room))}</div>
-          <div class="k">进度</div><div class="mono">第 ${room.roundNo} 轮 · 本房间第 ${room.matchNo || 0} 局</div>
+          <div class="k">房间码</div><div><b style="font-size:19px;letter-spacing:.16em">${esc(room.code)}</b></div>
+          <div class="k">状态</div><div>${esc(room.status)}${room.pauseReason ? ' · ' + esc(room.pauseReason) : ''}</div>
+          <div class="k">轮次</div><div>第 ${room.roundNo} 轮 · turn_seq ${turn.seq}</div>
         </div>
-        <div class="actions">
+        <div class="row" style="margin-top:10px">
           <button id="btnCopyCode" class="ghost">复制房号</button>
           <button id="btnCopyInvite" class="ghost">复制邀请链接</button>
         </div>
-        ${you.isHost ? `
         <div class="hr"></div>
-        <div class="eyebrow" style="margin-bottom:8px">HOST / 房主操作</div>
-        <div class="actions">
-          ${waiting ? '<button class="primary" id="btnStart">开局（随机一道）</button><button id="btnStartVote">投票选汤</button>' : ''}
-          <button id="btnCfg">对局参数</button>
-          ${turn.phase === 'ACTIVE' ? '<button id="btnSkip">跳过本轮</button>' : ''}
-        </div>` : ''}
-        <div class="hr"></div>
-        <button id="btnLeave" class="danger">离开房间</button>
+        <div class="row">
+          ${you.isHost ? `<button class="primary" id="btnStart">开局（房主指定）</button><button id="btnStartVote">开局（投票选汤）</button>` : ''}
+          ${you.isHost ? `<button id="btnCfg">对局参数</button><button id="btnSkip">跳过本轮</button>` : ''}
+          <button id="btnLeave" class="danger ghost">离开</button>
+        </div>
+      </div>
+
+      ${speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel)}
+
+      ${chatCard(room, you)}
+
+      <div class="card creditcard">
+        <div class="spread"><h3 style="margin:0">额度来源</h3>
+          <span class="pill ${room.credit.mode === 'host_key' ? 'accent' : ''}">${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'}</span></div>
+        <div class="kv">
+          <div class="k">原因码</div><div>${esc(room.credit.reason)}</div>
+          ${room.credit.grantLeft ? `<div class="k">临时授权</div><div>${room.credit.grantLeft} 次</div>` : ''}
+          <div class="k">房主 Key</div><div>${hostKeyMask(room) ? `<span class="mask">${esc(hostKeyMask(room))}</span>` : '<span class="dim">未配置</span>'}</div>
+        </div>
+        <div class="dim" style="margin-top:8px">原文不可回读：任何角色（含房主本人）都取不回明文。调用失败时系统不会自动改用平台额度。</div>
       </div>
     </div>
 
@@ -1680,33 +1343,29 @@ function viewRoom() {
 
       ${pendingSeatCard(room, you)}
 
-      ${myTurn && room.status === 'playing' ? `<div class="your-turn"><b>轮到你发言</b> · 想好就直接问，超时会自动跳过本轮</div>` : ''}
+      ${myTurn && room.status === 'playing' ? `<div class="your-turn">🎤 轮到你发言了 —— 想好就直接问，超时会自动跳过本轮</div>` : ''}
 
       ${puzzle ? puzzleCard(puzzle, room, you) : ''}
       ${puzzle ? statStrip(room, you) : ''}
+      ${engineBar(room, you)}
 
       ${(you.isHost && room.status === 'waiting') ? aiPuzzleCard(room, you) : ''}
 
-      ${(waiting && !you.isHost) ? `
-      <div class="waitcard hd">
-        <div class="spread"><h3 style="margin:0">WAIT / 等待房主选题</h3><span class="seal">选题中</span></div>
-        <div class="dim">房主可以自己挑一道、让大家投票选，或者让 AI 现写一道新题。选好后你会看到汤面。</div>
-      </div>` : ''}
+      ${(room.status === 'waiting' && !you.isHost) ? `
+      <div class="card waitcard"><div class="spread"><h3 style="margin:0">选题</h3><span class="pill">等待房主选题…</span></div>
+        <div class="dim">房主可以自己挑一道、让大家投票选，或者让 AI 现写一道新题。</div></div>` : ''}
 
-      ${(you.isHost && v.candidates && v.candidates.length > 0 && waiting) ? `
-      <div class="candcard hd"><div class="spread"><h3 style="margin:0">CANDIDATES / 候选题（${v.candidates.length} 道）</h3>
-        <span class="dim">点「选这道」直接开局，或发起「投票选汤」让大家一起选</span></div>
+      ${(you.isHost && v.candidates && v.candidates.length > 0 && room.status === 'waiting') ? `
+      <div class="card candcard"><div class="spread"><h3 style="margin:0">选题（${v.candidates.length} 道可选）</h3>
+        <span class="dim">点「选这道」直接开局，或发起「投票选汤」让成员一起选</span></div>
         <div class="cands">
           ${v.candidates.map((c) => `
             <div class="cand">
-              <div class="attrs">
-                <span class="seal">${esc(c.rating)}</span>
-                <span>难度 <span class="mono">${c.difficulty}</span>/5</span>
-                <span>约 <span class="mono">${c.estMinutes}</span> 分钟</span>
-              </div>
+              <div class="row"><span class="pill ${String(c.rating).toLowerCase()}">${esc(c.rating)}</span>
+                <span class="pill">难度 ${c.difficulty}</span><span class="pill">约 ${c.estMinutes} 分钟</span></div>
               <div class="cbody">${esc(c.surface)}</div>
-              <div class="row">${(c.tags || []).map((t) => `<span class="pill">#${esc(t)}</span>`).join('')}
-                ${(c.sensitiveTags || []).map((t) => `<span class="pill l3">内容提示：${esc(t)}</span>`).join('')}</div>
+              <div class="row">${(c.tags || []).map((t) => `<span class="pill">${esc(t)}</span>`).join('')}
+                ${(c.sensitiveTags || []).map((t) => `<span class="pill l3">含：${esc(t)}</span>`).join('')}</div>
               ${you.isHost ? `<button class="primary" data-pick="${esc(c.id)}">选这道</button>` : ''}
             </div>`).join('')}
         </div>
@@ -1714,73 +1373,40 @@ function viewRoom() {
 
       ${bannersBox(room, you)}
 
+      ${recordsCard(room, you)}
+
+      <div class="card composer${composerSticky ? ' sticky' : ''}">
+        <div class="spread"><h3 style="margin:0">提问</h3>
+          <span class="dim">草稿只存在本机浏览器，不上传、不广播</span></div>
+        <textarea id="ask" placeholder="随时可以打字（预输入）。轮到你时才能发送。">${esc(draft)}</textarea>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${turn.phase === 'GRACE' && myTurn ? '发送（宽限期内仍有效）' : '发送'}</button>
+          ${room.status === 'playing' ? `<button id="btnGuessQuick" class="guessquick" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>` : ''}
+          <button id="btnChatOpen" class="btnchat">讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
+          <span class="dim">${myTurn ? '轮到你发言了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}</span>
+          ${turn.lateSubmit ? '<span class="pill l2">上一轮为临界提交</span>' : ''}
+        </div>
+        ${S.hint ? `<div class="notice" style="margin-top:12px">${esc(S.hint)}</div>` : ''}
+      </div>
+
       ${room.truth ? truthCard(room, you) : ''}
 
       ${room.status === 'settled' ? `
-      <div class="settled hd"><div class="spread"><h3 style="margin:0">CLOSED / 本局结束</h3>
-        ${you.isHost ? '<span class="row"><button class="primary" id="btnRecap">查看复盘</button><button id="btnNextRound">回到选题（下一局）</button></span>' : '<span class="seal">等房主开下一局</span>'}</div>
+      <div class="card settled"><div class="spread"><h3 style="margin:0">对局结束</h3>
+        ${you.isHost ? '<button class="primary" id="btnRecap">查看复盘</button><button id="btnNextRound">回到选题（下一局）</button>' : '<span class="pill">等房主开下一局</span>'}</div>
         <div class="dim">${room.truth
           ? '汤底已经公示（见上方）。房主点「回到选题」就能选下一道题；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。'
           : you.isHost
             ? '本局没被猜出来：复盘含汤底揭晓（含事实点与全部提问），只有你能看到；中止的对局不予揭晓。'
             : '本局没被猜出来。汤底只有房主能揭晓。'}</div></div>` : ''}
-
-      ${recordsCard(room, you)}
     </div>
-
-    <div class="col-rail">
-      <div class="card hd">
-        <div class="tabs" role="tablist">
-          <button class="tab${railTab === 'crew' ? ' on' : ''}" id="btnTabCrew" role="tab" aria-selected="${railTab === 'crew' ? 'true' : 'false'}">CREW / 玩家 <span class="dim">${room.members.length}</span></button>
-          <button class="tab${railTab === 'notes' ? ' on' : ''}" id="btnTabNotes" role="tab" aria-selected="${railTab === 'notes' ? 'true' : 'false'}">NOTES / 讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
-        </div>
-        ${railTab === 'crew' ? crewPanel(room, you, turn) : chatCard(room, you, true)}
-      </div>
-      <div class="creditcard hd">
-        <h3>CREDIT / 额度来源</h3>
-        <div class="kv">
-          <div class="k">模式</div><div>${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'}</div>
-          <div class="k">原因</div><div class="mono">${esc(room.credit.reason)}</div>
-          ${room.credit.grantLeft ? `<div class="k">临时授权</div><div class="mono">${room.credit.grantLeft} 次</div>` : ''}
-          <div class="k">房主 Key</div><div>${hostKeyMask(room) ? `<span class="mask">${esc(hostKeyMask(room))}</span>` : '<span class="dim">未配置</span>'}</div>
-        </div>
-        <div class="dim" style="margin-top:8px">原文不可回读：任何角色（含房主本人）都取不回明文。调用失败时不会自动改用平台额度。</div>
-      </div>
-    </div>
-
-    ${composerCard(room, you, turn, myTurn, draft)}
   </div>
 
-  ${S.roomInfo ? roomInfoModal(room, you) : ''}
   ${S.configModal ? cfgModal(room) : ''}
   ${S.guessModal ? guessModal(v) : ''}
   ${(S.truthModal && room.truth) ? truthModal(room, you) : ''}
   ${S.keyModal ? keyModal(v) : ''}
   ${S.recap ? recapModal(S.recap) : ''}`;
-}
-
-/**
- * 底部书写板（§2.15）：唯一黄铜实底按钮是「发送」，猜汤底印泥红细框，讨论用便笺按钮。
- * 未轮到时输入框照常可用（只写本机草稿），只有发送按钮禁用 —— 不把整块降透明度。
- */
-function composerCard(room, you, turn, myTurn, draft) {
-  const grace = turn.phase === 'GRACE';
-  return `
-  <div class="composer${grace ? ' grace' : ''} sticky">
-    <div class="spread">
-      <div class="eyebrow">ASK / <b>正式提问</b></div>
-      <span class="dim">发送后公开且不可撤回 · 草稿只存在本机浏览器</span>
-    </div>
-    <textarea id="ask" style="margin-top:10px" placeholder="随时可以打字（预输入）。轮到你时才能发送。">${esc(draft)}</textarea>
-    ${grace && myTurn ? '<div class="notice warn hintbar">宽限期内仍有效：现在发送依然算这一轮。</div>' : ''}
-    <div class="askrow">
-      <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${grace && myTurn ? '发送（宽限期内仍有效）' : (myTurn ? '发送' : '等待回合')}</button>
-      ${room.status === 'playing' ? `<button id="btnGuessQuick" class="reason" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>` : ''}
-      <button id="btnChatOpen" class="note">讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
-      <span class="dim">${myTurn ? '轮到你发言了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}${turn.lateSubmit ? ' · 上一轮为临界提交' : ''}</span>
-    </div>
-    ${S.hint ? `<div class="notice hintbar">提示：${esc(S.hint)}</div>` : ''}
-  </div>`;
 }
 
 /**
@@ -1790,36 +1416,39 @@ function composerCard(room, you, turn, myTurn, draft) {
 function puzzleCard(puzzle, room, you) {
   const hintsOn = Boolean(room.config && room.config.hintsEnabled);
   const playing = room.status === 'playing';
-  const diff = Math.max(1, Math.min(5, Number(puzzle.difficulty) || 1));
   return `
-  <div class="puzzle-card">
-    <div class="spread">
-      <div class="eyebrow" style="color:var(--ink-600)">CASE SURFACE / <b style="color:var(--ink-900)">汤面</b></div>
-      <div class="attrs">
-        <span class="seal">${esc(puzzle.rating)}</span>
-        <span title="难度 ${diff}/5">难度 ${diffDots(diff)}</span>
-        ${puzzle.estMinutes ? `<span>约 <span class="mono">${puzzle.estMinutes}</span> 分钟</span>` : ''}
-      </div>
+  <div class="card puzzle-card">
+    <div class="spread" style="margin-bottom:12px">
+      <h3 style="margin:0">题目 · 汤面</h3>
+      ${you.isHost && playing ? `<button id="btnCfgQuick" class="ghost">对局参数</button>` : ''}
     </div>
-    <h1 class="ptitle">《${esc(puzzle.title)}》</h1>
-    <div class="surface">${esc(puzzle.surface)}</div>
-    ${(puzzle.tags || []).length || (puzzle.sensitiveTags || []).length ? `
-    <div class="attrs" style="margin-top:12px">
-      ${(puzzle.tags || []).map((t) => `<span>#${esc(t)}</span>`).join('')}
-      ${(puzzle.sensitiveTags || []).map((t) => `<span class="sensitive">内容提示：${esc(t)}</span>`).join('')}
-    </div>` : ''}
-    ${puzzle.attribution ? `<div class="puz-src">题库来源：${esc(puzzle.attribution.author)}${puzzle.attribution.url ? ` · <a href="${esc(puzzle.attribution.url)}" target="_blank" rel="noopener noreferrer">${esc(puzzle.attribution.url)}</a>` : ''}</div>` : ''}
-  </div>
-  <div class="toolbar">
-    <span class="eyebrow">TOOLS / 案卷工具</span>
-    ${you.isHost && playing ? '<button id="btnCfgQuick" class="ghost">对局参数</button>' : ''}
-    ${hintsOn ? `
-      <button class="hintbtn t1" data-hint="1" ${you.canHintT12 ? '' : 'disabled'}><span class="t">T1</span><span class="c">轻</span></button>
-      <button class="hintbtn t2" data-hint="2" ${you.canHintT12 ? '' : 'disabled'}><span class="t">T2</span><span class="c">中</span></button>
-      <button class="hintbtn t3" data-hint="3" ${you.canHintT3 ? '' : 'disabled'}><span class="t">T3</span><span class="c">深</span></button>`
-    : '<span class="dim">本局未开启提示（房主可在「对局参数」里打开）</span>'}
-    <span class="grow"></span>
-    <button class="reason" id="btnGuess" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>
+    <div class="puzzle">
+      <div class="spread">
+        <div class="ptitle">《${esc(puzzle.title)}》</div>
+        <div class="row">
+          <span class="pill ${String(puzzle.rating).toLowerCase()}">${esc(puzzle.rating)}</span>
+          <span class="pill">难度 ${diffDots(puzzle.difficulty)}</span>
+          ${puzzle.estMinutes ? `<span class="pill">约 ${puzzle.estMinutes} 分钟</span>` : ''}
+        </div>
+      </div>
+      <div class="surface">${esc(puzzle.surface)}</div>
+      <div class="row" style="margin-top:10px">
+        ${(puzzle.tags || []).map((t) => `<span class="pill">${esc(t)}</span>`).join('')}
+        ${(puzzle.sensitiveTags || []).map((t) => `<span class="pill l3">含：${esc(t)}</span>`).join('')}
+      </div>
+      ${puzzle.attribution ? `<div class="puz-src" style="margin-top:8px">题库来源：${esc(puzzle.attribution.author)}${puzzle.attribution.url ? ` · <a href="${esc(puzzle.attribution.url)}" target="_blank" rel="noopener noreferrer">${esc(puzzle.attribution.url)}</a>` : ''}</div>` : ''}
+    </div>
+    <div class="hr"></div>
+    <div class="actions">
+      ${hintsOn ? `
+        <span class="dim" style="margin-right:2px">提示：</span>
+        <button data-hint="1" ${you.canHintT12 ? '' : 'disabled'}>T1</button>
+        <button data-hint="2" ${you.canHintT12 ? '' : 'disabled'}>T2</button>
+        <button data-hint="3" ${you.canHintT3 ? '' : 'disabled'}>T3</button>`
+      : '<span class="dim">本局未开启提示（房主可在「对局参数」里打开）</span>'}
+      <span style="flex:1"></span>
+      <button class="primary" id="btnGuess" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>
+    </div>
   </div>`;
 }
 
@@ -1870,23 +1499,21 @@ function aiBlockHint(code) {
  * —— 不进 AI 主持人、不占回合、不进判定缓存、不加线索、不触发猜汤底。
  * 谁都能发（含旁观者与待入席者）；限长 500 字、独立限流（10 秒 5 条）。
  */
-function chatCard(room, you, bare = false) {
+function chatCard(room, you) {
   const draftLen = String(S.chatDraft || '').length;
   return `
-  <div class="chatcard${bare ? ' bare' : ' card'}${S.chatOpen ? ' open' : ''}">
-    ${bare ? '' : `
+  <div class="card chatcard${S.chatOpen ? ' open' : ''}">
     <div class="spread" style="margin-bottom:10px">
-      <h3 style="margin:0"><button class="chat-back" id="btnChatClose" title="返回房间">← 返回</button>NOTES / 全员讨论 <span class="dim" id="chatCount">${S.chat.length} 条</span></h3>
+      <h3 style="margin:0"><button class="chat-back" id="btnChatClose" title="返回房间">← 返回</button>全员讨论 <span class="dim" id="chatCount">${S.chat.length} 条</span></h3>
       <span id="chatPill">${chatPillHtml()}</span>
-    </div>`}
-    ${bare ? `<div class="spread" style="margin-bottom:8px"><span class="chat-hint dim">便笺只贴在桌边：不进判定、不占回合</span><span id="chatPill">${chatPillHtml()}</span></div>` : ''}
-    ${bare ? '' : `<div class="dim chat-hint" style="margin-bottom:8px">房号 ${esc(room.code)} · 只用来商量怎么问、怎么推理。这里说的话不会进判定，也不占提问回合。</div>`}
+    </div>
+    <div class="dim chat-hint" style="margin-bottom:8px">房号 ${esc(room.code)} · 只用来商量怎么问、怎么推理。这里说的话不会进判定，也不占提问回合。</div>
     <div class="chat" id="chatLog">
       ${chatListHtml()}
     </div>
     <div class="row" style="margin-top:9px;align-items:flex-end">
       <input id="chatInput" maxlength="${CHAT_MAXLEN}" autocomplete="off" spellcheck="false" placeholder="发消息…（Enter 发送 / Shift+Enter 换行）" value="${esc(S.chatDraft || '')}">
-      <button class="note" id="btnChatSend" ${String(S.chatDraft || '').trim() ? '' : 'disabled'}>贴上</button>
+      <button class="primary" id="btnChatSend" ${String(S.chatDraft || '').trim() ? '' : 'disabled'}>发送</button>
       <span class="counter">${draftLen}/${CHAT_MAXLEN}</span>
     </div>
   </div>`;
@@ -2003,11 +1630,10 @@ function aiPuzzleCard(room, you) {
   return h && h.keyMask ? h.keyMask : null;
 }
 
-/** 难度刻度：五格细竖线（§2.10 用短竖刻度而不是圆点，也不用彩色胶囊） */
+/** 难度圆点（●●●○○）——比数字更直观 */
 function diffDots(n) {
   const v = Math.max(1, Math.min(5, Number(n) || 1));
-  const cell = (on) => `<i style="display:inline-block;width:3px;height:11px;background:${on ? 'currentColor' : 'rgba(32,37,38,.22)'};margin:0 1px"></i>`;
-  return `<span class="diffs" title="难度 ${v}/5" aria-label="难度 ${v} / 5">${cell(true).repeat(v)}${cell(false).repeat(5 - v)}</span>`;
+  return `<span class="dots" title="难度 ${v}/5">${'●'.repeat(v)}<span class="dim">${'○'.repeat(5 - v)}</span></span>`;
 }
 
 /** 判定来源 → 人话标签（透明化：让玩家知道这条是谁给的） */
@@ -2090,113 +1716,87 @@ function hueOf(name) {
   return h;
 }
 
-/** 钥匙图标：房主实心、原房主空心（§2.14），单色线性 */
-function keySvg(solid) {
-  return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" style="width:12px;height:12px;vertical-align:-1px">
-    <circle cx="5" cy="5" r="2.6" ${solid ? 'fill="currentColor"' : ''}/><path d="M6.9 6.9 13 13M10.6 10.6l-1.4 1.4M12.2 12.2l-1.4 1.4"/>
-  </svg>`;
-}
-
 /**
- * 当前回合：机械计时牌（§2.9）。
- * 倒计时只由 tickUi() 每 250ms 改写文本与刻度，**不触发整页重渲染**；
- * 等待阶段同一块牌子切换成「落座记录」（准备人数 + 准备按钮）。
+ * 「谁在发言」+ 玩家列表**合并**成一块：
+ *   · 顶部是当前发言者的醒目卡片（头像 + 名字 + 剩余时间 + 进度条）
+ *   · 下面就是完整玩家列表：当前发言者高亮、准备状态、房主的踢人入口
  */
 function speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel) {
   const current = turn.memberId ? room.members.find((m) => m.id === turn.memberId) : null;
   const isMe = Boolean(current && current.id === you.memberId);
   const urgent = counting && left <= 5000;
+  const barCls = turn.phase === 'GRACE' ? ' grace' : room.status === 'suspended' ? ' paused' : urgent ? ' urgent' : '';
+  const canReady = room.status !== 'playing';                    // 开局后就没有"准备"一说了
   const me = room.members.find((m) => m.id === you.memberId);
   const iAmReady = Boolean(me && me.ready);
   const eligible = room.readyEligible || 0;
   const readyCount = room.readyCount || 0;
   const allReady = eligible > 0 && readyCount >= eligible;
-  const waiting = room.status === 'waiting';
-  const TICKS = 24;
-  return `
-  <div class="speakerbox head${isMe ? ' myturn' : ''}">
-    <div class="spread">
-      <div class="eyebrow">TURN / <b>当前回合</b></div>
-      <span class="mono dim">${waiting ? '未开局' : `第 ${room.roundNo} 轮 · 第 ${turn.seq} 问`}</span>
-    </div>
-    <div class="top">
-      <div class="avatar${isMe ? ' me' : ''}">${current ? esc(initialOf(current.name)) : '·'}</div>
-      <div class="grow">
-        <div class="nm">${current ? esc(current.name) + (isMe ? ' · 你' : '') : (waiting ? '等待开局' : '没有人在发言')}</div>
-        <div class="who">${current ? esc(phaseLabel) : (waiting ? '房主选好题目后开始' : '—')}</div>
-      </div>
-      <div style="text-align:right">
-        ${counting
-          ? `<div class="timer${urgent ? ' danger' : ''}" id="tickLeft" data-deadline="${deadline}">${fmt(left)}</div><div class="meta">剩余</div>`
-          : '<div class="timer" style="color:var(--text-muted)">--:--</div><div class="meta">未计时</div>'}
-      </div>
-    </div>
-    ${counting ? `<div class="ticks${urgent ? ' danger' : ''}" data-ticks data-deadline="${deadline}" data-total="${total}" aria-hidden="true">${'<i></i>'.repeat(TICKS)}</div>` : ''}
-    ${waiting ? `
-      <div class="hr" style="margin:2px 0"></div>
-      <div class="spread">
-        <span class="eyebrow">SEATS / 落座记录</span>
-        <span class="seal${allReady && eligible ? ' yes' : ''}">已准备 ${readyCount}/${eligible}</span>
-      </div>
-      ${you.isHost
-        ? '<div class="dim">你是房主：不用举手。等大家准备好，或在点名确认后强制开局。</div>'
-        : `<div class="row">
-             <button class="${iAmReady ? '' : 'primary'}" id="btnReady">${iAmReady ? '已准备（点一下收回）' : '我准备好了'}</button>
-             <span class="dim">${eligible === 0 ? '房间只有你一个人，开局由房主决定' : allReady ? '全员已准备，等房主开局' : `还有 ${Math.max(0, eligible - readyCount)} 人没准备（离线/旁观不算数）`}</span>
-           </div>`}
-    ` : ''}
-  </div>`;
-}
 
-/**
- * 在桌成员名册（§2.14）：行分隔线、方形姓名牌、身份纸签、状态小圆点、当前发言刻度线。
- * 「移出」藏在行尾的更多操作里，展开后才出现（避免误触）。
- */
-function crewPanel(room, you, turn) {
-  const eligible = room.readyEligible || 0;
-  const readyCount = room.readyCount || 0;
-  const allReady = eligible > 0 && readyCount >= eligible;
   return `
-  <div class="spread" style="margin-bottom:8px">
-    <span class="mono dim">已准备 ${readyCount}/${eligible}${allReady && eligible ? ' · 可以开局' : ''}</span>
-    <span class="dim">${room.members.length} 人</span>
-  </div>
-  <div class="memlist" style="border:0;padding:0;background:transparent">
+  <div class="card playercard">
+    <div class="speakerbox">
+    <div class="speaker${current ? '' : ' idle'}">
+      <div class="avatar" style="--h:${hueOf(current ? current.name : '空')}">${current ? esc(initialOf(current.name)) : '·'}</div>
+      <div>
+        <div class="who">${current ? esc(current.name) + (isMe ? '（你）' : '') : '等待开局'}</div>
+        <div class="what">${current ? esc(phaseLabel) + (isMe ? ' · 该你问了' : ' · 正在提问') : '房主选好题目后开始'}</div>
+      </div>
+      <div class="time">
+        ${counting
+          ? `<div class="t timer" id="tickLeft" data-deadline="${deadline}">${fmt(left)}</div><div class="l">剩余</div>`
+          : '<div class="t">—</div><div class="l">未计时</div>'}
+      </div>
+    </div>
+    ${counting ? `<div class="bar${barCls}"><i data-bar data-deadline="${deadline}" data-total="${total}" style="width:${pct}%"></i></div>` : ''}
+
+    ${canReady && !you.isHost ? `
+    <div class="row" style="margin-top:12px">
+      <button class="${iAmReady ? '' : 'primary'}" id="btnReady">${iAmReady ? '✓ 已准备（点一下收回）' : '我准备好了'}</button>
+      <span class="dim">${eligible === 0 ? '房间只有你一个人，开局由房主决定' : allReady ? '全员已准备，等房主开局' : `还有 ${Math.max(0, eligible - readyCount)} 人没准备（离线/旁观不算数）`}</span>
+    </div>` : ''}
+    ${canReady && you.isHost ? `
+    <div class="row" style="margin-top:12px">
+      <span class="dim">你是房主：不用举手，等大家准备好（或确认后强制）直接开局即可。</span>
+    </div>` : ''}
+    </div>
+
+    <div class="memlist">
+    <div class="spread" style="margin-bottom:12px">
+      <h3 style="margin:0">玩家 <span class="dim">${room.members.length} 人</span></h3>
+      <span class="pill ${allReady && eligible > 0 ? 'live' : ''}">已准备 ${readyCount}/${eligible}${allReady && eligible > 0 ? ' · 可以开局' : ''}</span>
+    </div>
+
+    <div class="hr"></div>
+
     ${room.members.map((m) => {
       const active = turn.memberId === m.id;
       const away = m.conn === 'disconnected' || m.activity === 'idle';
       const kickable = you.isHost && m.id !== you.memberId;
-      const state = m.conn === 'disconnected' ? 'off' : m.activity === 'idle' ? 'away' : 'live';
       return `
-      <div class="playercard${active ? ' speaking' : ''}${away && !active ? ' away' : ''}">
-        <div class="avatar" style="--h:${hueOf(m.name)}">${esc(initialOf(m.name))}<span class="dot ${state}"></span></div>
-        <div class="grow">
-          <div class="nm">
-            ${esc(m.name)}${m.id === you.memberId ? '<span class="dim">（你）</span>' : ''}
-            ${m.isHost ? `<span class="slip brass">${keySvg(true)}房主</span>` : ''}
-            ${m.formerHost ? `<span class="slip dim">${keySvg(false)}原房主</span>` : ''}
-            ${m.pendingSeat === true ? `<span class="slip dim">待入席${m.seatRequested ? ' · 已申请' : ''}</span>` : ''}
-          </div>
-          <div class="meta">
-            <span>${esc(m.stateLabel)}</span>
-            <span class="mono">${m.score} 分</span>
-            ${active ? '<span class="seal brass">发言中</span>' : ''}
-            ${m.keyState === 'suspended' ? '<span class="seal unknown">Key 挂起</span>' : ''}
-            ${m.isHost ? ''
-              : m.pendingSeat === true ? ''
-              : m.role === 'spectator' ? '<span class="seal">旁观</span>'
-              : m.ready ? '<span class="seal yes">已准备</span>' : '<span class="seal">未准备</span>'}
-          </div>
+      <div class="mem${active ? ' turn' : ''}${away && !active ? ' away' : ''}">
+        <div class="avatar" style="--h:${hueOf(m.name)}">${esc(initialOf(m.name))}</div>
+        <div class="nm">
+          <span class="dot ${m.conn === 'disconnected' ? 'off' : m.activity === 'idle' ? 'idle' : 'active'}"></span>
+          ${esc(m.name)}${m.id === you.memberId ? '<span class="dim">（你）</span>' : ''}
+          ${m.isHost ? '<span class="pill accent">房主</span>' : ''}
+          ${m.formerHost ? '<span class="pill">原房主</span>' : ''}
+          ${m.keyState === 'suspended' ? '<span class="pill l2">Key 挂起</span>' : ''}
+          ${active ? '<span class="pill live">发言中</span>' : ''}
+          ${m.isHost ? '' : (m.pendingSeat === true
+            ? `<span class="pill l2">待入席${m.seatRequested ? ' · 已申请' : ''}</span>`
+            : (m.role !== 'spectator' ? (m.ready ? '<span class="pill live">已准备</span>' : '<span class="pill l2">未准备</span>') : '<span class="pill">旁观</span>'))}
         </div>
-        ${kickable ? `
-        <details class="more">
-          <summary class="morebtn" title="更多操作">更多</summary>
-          <button class="danger" data-kick="${esc(m.id)}">移出房间</button>
-        </details>` : ''}
+        <div class="meta">
+          ${esc(m.stateLabel)} · ${m.score} 分
+          ${kickable ? `<button class="ghost kick" data-kick="${esc(m.id)}" title="把 ${esc(m.name)} 移出房间">移出</button>` : ''}
+        </div>
       </div>`;
     }).join('')}
-  </div>
-  <div class="dim" style="margin-top:8px">挂机只跳过其回合、不移交房主；断连才触发移交。被移出的成员会立刻失效，需要重新加入。</div>`;
+
+    <div class="dim" style="margin-top:10px">挂机只跳过其回合、不移交房主；断连才触发移交。被移出的成员会立刻失效，需要重新加入。</div>
+    </div>
+  </div>`;
 }
 
 /** 公共记录：**只放记录**（操作按钮都在题目卡片里） */
@@ -2278,65 +1878,40 @@ function cfgModal(room) {
   const c = room.config;
   // 草稿优先：用户在弹窗里改过的值即使被重渲染也要留住（这些控件没有 id，走 cfg: 前缀）
   const cur = (k) => (S.drafts[`cfg:${k}`] !== undefined ? S.drafts[`cfg:${k}`] : c[k]);
-  const row = (k, label, min, max, hint) => `
-    <div class="fieldrow">
-      <span class="lab">${label}</span>
-      <input type="number" class="mono" data-cfg="${k}" value="${cur(k)}" min="${min}" max="${max}" aria-label="${label}">
-      ${hint ? `<span class="hint">${hint}</span>` : ''}
-    </div>`;
-  const sel = (k, label, options, hint) => `
-    <div class="fieldrow">
-      <span class="lab">${label}</span>
-      <select data-cfg="${k}" aria-label="${label}">
-        ${options.map(([v, t]) => `<option value="${v}" ${String(cur(k)) === v ? 'selected' : ''}>${t}</option>`).join('')}
+  const num = (k, label, min, max) => `<div class="field"><label>${label}</label><input type="number" data-cfg="${k}" value="${cur(k)}" min="${min}" max="${max}"></div>`;
+  const bool = (k, label) => `<div class="field"><label>${label}</label><div><input type="checkbox" data-cfg="${k}" ${cur(k) ? 'checked' : ''}></div></div>`;
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">对局参数（config_version ${room.configVersion}）</h3><button id="btnCfgClose">关闭</button></div>
+    <p class="dim">开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。</p>
+    <div class="field"><label>提示系统（默认关闭 · 关闭时任何人都拿不到提示）</label>
+      <div class="row"><input type="checkbox" data-cfg="hintsEnabled" style="width:auto" ${cur('hintsEnabled') ? 'checked' : ''}>
+        <span class="dim">打开后下面几项提示配额才会生效</span></div></div>
+    ${num('perTurnSec', '每人提问时长（秒）', 15, 600)}
+    ${num('graceSec', '超时宽限（秒）', 0, 30)}
+    <div class="field"><label>多人的提问顺序（下一局生效）</label>
+      <select data-cfg="turnOrderMode">
+        <option value="join" ${cur('turnOrderMode') === 'join' ? 'selected' : ''}>顺序（按加入顺序，默认）</option>
+        <option value="random" ${cur('turnOrderMode') === 'random' ? 'selected' : ''}>乱序（开局洗一次牌）</option>
       </select>
-      ${hint ? `<span class="hint">${hint}</span>` : ''}
-    </div>`;
-  const sw = (k, label, hint) => `
-    <div class="fieldrow">
-      <label class="switch"><input type="checkbox" data-cfg="${k}" ${cur(k) ? 'checked' : ''}><span class="track"></span><span class="lab">${label}</span></label>
-      ${hint ? `<span class="hint">${hint}</span>` : ''}
-    </div>`;
-  return modalShell('SETTINGS / 01', '对局参数', `
-    <p class="dim">开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。当前 config_version ${room.configVersion}。</p>
-    <div class="fieldgroup"><h4>01 · 回合</h4>
-      ${row('perTurnSec', '每人提问时长（秒）', 15, 600)}
-      ${row('graceSec', '超时宽限（秒）', 0, 30)}
-      ${sel('turnOrderMode', '提问顺序（下一局生效）', [['join', '顺序（按加入顺序，默认）'], ['random', '乱序（开局洗一次牌）']], '乱序是开局时打乱一次，整局按这个顺序轮转；改了要等下一局开局才生效。')}
-      ${row('maxRounds', '总回合上限（轮）', 1, 60)}
-      ${sw('timeoutSkip', '超时自动跳过')}
-      ${sw('idleSkip', '跳过挂机成员的回合')}
-    </div>
-    <div class="fieldgroup"><h4>02 · 猜汤底</h4>
-      ${row('guessEveryRounds', '揭秘间隔（每 N 轮）', 1, 10)}
-      ${row('guessMaxPerMember', '每人揭秘次数（0 = 不限）', 0, 10)}
-      ${row('guessCooldownSec', '全桌共用冷却（秒，0 = 不限）', 0, 1800, '任何人猜一次都会重新计时；冷却期间全桌都不能再猜。')}
-    </div>
-    <div class="fieldgroup"><h4>03 · 提示</h4>
-      ${sw('hintsEnabled', '开启提示系统', '默认关闭；关闭时任何人都拿不到提示。')}
-      ${row('hintQuotaPerMember', '每人提示次数（T1+T2）', 0, 10)}
-      ${row('hintTier3Max', 'T3 提示（每局共享）', 0, 3)}
-      ${row('hintCooldownSec', '提示冷却（秒）', 0, 600)}
-    </div>
-    <div class="fieldgroup"><h4>04 · 选题与进房</h4>
-      ${row('candidateCount', '候选题数量', 3, 5)}
-      ${row('voteDurationSec', '投票时长（秒）', 30, 600)}
-      ${sel('midJoinPolicy', '对局中进房的人', [['seated_next_round', '排队待入席（默认）：申请后从下一轮起上桌'], ['spectator_only', '只能旁观（本局不接受上桌）'], ['reject', '拒绝加入（等下一局）']])}
-      ${row('maxPendingSeats', '待入席排队上限（人）', 0, 10)}
-    </div>`,
-    `<button id="btnCfgClose">关闭</button>
-     <span class="row"><button class="primary" id="btnCfgApply">应用参数</button></span>`);
-}
-
-/**
- * 弹窗外壳（§2.26）：遮罩纯黑 68%、深色实底、章节编号、底部操作栏固定（主操作在右、关闭在左）。
- * role/aria-modal 让读屏器知道这是对话框；Esc 关闭与焦点回收在 keydown 里统一处理。
- */
-function modalShell(chapter, title, body, foot, extraClass = '') {
-  return `<div class="overlay"><div class="modal${extraClass ? ' ' + extraClass : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-    <div class="chapter"><span class="no">${esc(chapter)}</span><h3>${esc(title)}</h3></div>
-    ${body}
-    ${foot ? `<div class="foot">${foot}</div>` : ''}
+      <div class="dim">乱序是**开局时打乱一次**，整局按这个顺序轮转（不是每轮重洗）；改了要等下一局开局才生效。</div></div>
+    ${num('guessEveryRounds', '揭秘间隔（每 N 轮）', 1, 10)}
+    ${num('guessMaxPerMember', '每人揭秘次数', 1, 10)}
+    ${num('hintQuotaPerMember', '每人提示次数（T1+T2）', 0, 10)}
+    ${num('hintTier3Max', 'T3 提示（每局共享）', 0, 3)}
+    ${num('hintCooldownSec', '提示冷却（秒）', 0, 600)}
+    ${num('maxRounds', '总回合上限（轮）', 1, 60)}
+    <div class="field"><label>对局中进房的人怎么处理</label>
+      <select data-cfg="midJoinPolicy">
+        <option value="seated_next_round" ${cur('midJoinPolicy') === 'seated_next_round' ? 'selected' : ''}>排队待入席（默认）：申请后从下一轮起上桌</option>
+        <option value="spectator_only" ${cur('midJoinPolicy') === 'spectator_only' ? 'selected' : ''}>只能旁观（本局不接受上桌）</option>
+        <option value="reject" ${cur('midJoinPolicy') === 'reject' ? 'selected' : ''}>拒绝加入（等下一局）</option>
+      </select></div>
+    ${num('maxPendingSeats', '待入席排队上限（人）', 0, 10)}
+    ${num('candidateCount', '候选题数量', 3, 5)}
+    ${num('voteDurationSec', '投票时长（秒）', 30, 600)}
+    ${bool('timeoutSkip', '超时自动跳过')}
+    ${bool('idleSkip', '跳过挂机成员的回合')}
+    <div class="row" style="margin-top:10px"><button class="primary" id="btnCfgApply">应用</button></div>
   </div></div>`;
 }
 
@@ -2345,18 +1920,17 @@ function guessModal() {
   const room = S.view ? S.view.room : null;
   const cdLeft = room && room.guessCooldownUntil ? Math.max(0, room.guessCooldownUntil - serverNow()) : 0;
   const cdSec = room && room.config ? room.config.guessCooldownSec : 0;
-  const cooling = cdLeft > 0;
-  return modalShell('FINAL THEORY / 结案推理', '猜汤底', `
-    <p class="dim">判定尺度：关键事实点全部命中 + 表达出因果链 = <b>命中</b>；命中 ≥ 60% = <b>接近</b>（只回数量，不告诉你命中了哪几条）；否则未命中。</p>
-    <p class="dim">猜汤底是<b>所有人共用一个冷却</b><span class="mono">${cdSec > 0 ? `（当前设置 ${cdSec} 秒）` : '（当前设置：不限）'}</span>：
-      谁先猜谁开始计时，冷却期间房间里谁都不能再猜。${cooling ? `现在还剩 <b class="mono" data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b>。` : ''}</p>
-    <div class="papernote" style="margin-top:12px">
-      <div class="eyebrow" style="color:var(--ink-600);margin-bottom:6px">STATEMENT / 结案陈词</div>
-      <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样">${esc(text)}</textarea>
-    </div>`,
-    `<button id="btnGuessCancel">返回</button>
-     <span class="row">${cooling ? `<span class="mono dim">冷却中 <b data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b></span>` : ''}
-     <button class="reason${cooling ? '' : ' solid'}" id="btnGuessSubmit" ${cooling ? 'disabled' : ''}>提交推理 · 揭晓</button></span>`);
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">猜汤底（随时可以猜）</h3><button id="btnGuessCancel">返回</button></div>
+    <p class="dim">判定尺度：关键事实点全部命中 + 表达出因果链 = 命中；命中 ≥ 60% = 接近（只告诉你数量，不告诉你命中了哪几条）；否则未命中。</p>
+    <p class="dim">猜汤底是<b>所有人共用一个冷却</b>${cdSec > 0 ? `（当前设置 ${cdSec} 秒）` : '（当前设置：不限）'}：
+      谁先猜谁开始计时，冷却期间房间里谁都不能再猜。${cdLeft > 0 ? `现在还剩 <b data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b>。` : ''}</p>
+    <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样">${esc(text)}</textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btnGuessSubmit" ${cdLeft > 0 ? 'disabled' : ''}>${cdLeft > 0 ? '冷却中…' : '提交推理 · 揭晓'}</button>
+      <span class="dim">猜中即当场揭晓汤底，所有人都会看到</span>
+    </div>
+  </div></div>`;
 }
 
 /**
@@ -2365,30 +1939,24 @@ function guessModal() {
  */
 function truthCard(room, you) {
   return `
-  <div class="truthcard card hd">
-    <div class="spread"><span class="eyebrow" style="color:var(--ink-600)">TRUTH / <b style="color:var(--ink-900)">汤底公示</b></span><span class="seal yes">本局已被猜出</span></div>
-    <div class="surface" style="margin-top:10px">${esc(room.truth)}</div>
-    <div class="dim" style="margin-top:10px;color:var(--ink-600)">${esc(room.truthNote || '')}${you.isHost ? ' 想再来一局，点下面的「回到选题」。' : ' 等房主开下一局。'}</div>
+  <div class="card truthcard">
+    <div class="spread"><h3 style="margin:0">🎉 汤底公示</h3><span class="pill live">本局已被猜出</span></div>
+    <div class="puzzle" style="margin-top:10px"><div class="surface">${esc(room.truth)}</div></div>
+    <div class="dim" style="margin-top:8px">${esc(room.truthNote || '')}${you.isHost ? ' 想再来一局，点下面的「回到选题」。' : ' 等房主开下一局。'}</div>
   </div>`;
 }
 
-/**
- * 揭晓弹窗（§2.20）：唯一的仪式时刻 —— 横向封套，封条从中间向两侧退开，露出暖纸汤底。
- * 动画 800ms；`prefers-reduced-motion` 下由 CSS 直接显示最终状态（不留白）。
- */
+/** 揭晓弹窗：被猜出时自动弹一次；「返回」后回到页面（房主可顺手开下一局） */
 function truthModal(room, you) {
-  return modalShell('SEALED / 开封', '汤底', `
-    <p class="dim">有人把真相拼出来了 —— 汤底现在对房间里的所有人公开。${you.isHost ? '点「返回」或下面的按钮都能回到选题。' : '房主会决定下一道题。'}</p>
-    <div class="envelope" style="margin-top:12px">
-      <div class="sealband" aria-hidden="true"><i></i><i></i></div>
-      <div class="truthsheet">
-        <div class="spread"><span class="eyebrow" style="color:var(--ink-600)">SOLVED / 已解开</span><span class="seal yes big">已解开</span></div>
-        <h2>汤底</h2>
-        <div class="surface">${esc(room.truth)}</div>
-      </div>
-    </div>`,
-    `<button id="btnTruthClose">返回桌面</button>
-     ${you.isHost ? '<button class="primary" id="btnTruthNext">回到选题（下一局）</button>' : '<span></span>'}`);
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">汤底揭晓</h3><button id="btnTruthClose">返回</button></div>
+    <p class="dim">有人把真相拼出来了 —— 汤底现在对房间里的所有人公开。${you.isHost ? '点「返回」或下面的按钮都能回到选题，接着选下一道题。' : '房主会决定下一道题。'}</p>
+    <div class="puzzle"><div class="surface">${esc(room.truth)}</div></div>
+    <div class="row" style="margin-top:12px">
+      ${you.isHost ? '<button class="primary" id="btnTruthNext">回到选题（下一局）</button>' : ''}
+      <button id="btnTruthClose2">返回</button>
+    </div>
+  </div></div>`;
 }
 
 /** 默认提供方（服务端 /api/config 下发，取不到就用 DeepSeek 官方端点兜底） */
@@ -2410,7 +1978,7 @@ function providerOf() { return PROVIDERS[S.keyProvider] ? S.keyProvider : 'deeps
 /**
  * 房主自备 API Key。
  *
- * 注意：这个弹窗踩过两个坑，改法就写在控件属性里：
+ * ⚠️ 这个弹窗踩过两个坑，改法就写在控件属性里：
  *   · 轮询每 1.8 秒会整页重渲染 → 输入到一半的内容会被清空。
  *     现在输入值实时存进 S.drafts（只在内存里），重渲染后回填；render() 另外恢复焦点与光标位置。
  *   · 用 type="password" 会被 Edge/Chrome 当成登录表单，弹「是否保存密码」并介入填充，
@@ -2424,49 +1992,44 @@ function keyModal() {
   const model = S.drafts.keyModel ?? defaultModel();
   const key = S.drafts.keyValue ?? '';
   const vaultOff = Boolean(S.config) && S.config.vaultEnabled === false;
-  return modalShell('DEVICE / 02', '房主自备 API Key', `
-    ${vaultOff ? `<div class="err">服务端未配置 <code>MASTER_KEY</code>：保险箱处于关闭状态，<b>不会</b>以任何形式保存你的 Key（也绝不退化成明文存储），
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">房主自备 API Key</h3><button id="btnKeyClose">关闭</button></div>
+    ${vaultOff ? `<div class="err">服务端未配置 <code>MASTER_KEY</code>：保险箱处于关闭状态，**不会**以任何形式保存你的 Key（也绝不退化成明文存储），
       所以「连接测试并提交」暂时不可用。<br>管理员在项目目录执行一次即可启用：
       <code>npx wrangler secret put MASTER_KEY</code>（值用 32 字节随机数的 base64）。<br>
       现在你仍然可以点下面的「测试连接（不入库）」验证 Key 是否有效。</div>` : ''}
-    <p class="dim">提交后服务端会先做一次连接测试：通过才加密入库并锁定生效（此后调用失败<b>不会</b>自动改用平台额度）；
+    <p class="dim">提交后服务端会先做一次连接测试：通过才加密入库并锁定生效（此后调用失败**不会**自动改用平台额度）；
       页面只显示掩码，任何人都无法回读原文。</p>
-    <div class="fieldgroup"><h4>接线表</h4>
-      <div class="fieldrow"><span class="lab">提供方</span>
-        <select id="keyProvider" aria-label="提供方">
-          ${Object.entries(PROVIDERS).map(([k, p]) => `<option value="${k}" ${providerOf() === k ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
-        </select>
-        <span class="hint" id="keyProviderNote">${esc(PROVIDERS[providerOf()].note)}</span>
-      </div>
-      <div class="fieldrow"><span class="lab">Base URL</span>
-        <input id="keyBase" class="mono" name="ht-host-endpoint" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
-          spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
-          value="${esc(base)}" placeholder="https://api.deepseek.com" aria-label="Base URL">
-        <span class="hint">实际请求地址（自动补 <code>/chat/completions</code>，路径会保留）：<code id="keyUrl">${esc(completionsUrl(base))}</code></span>
-      </div>
-      <div class="fieldrow"><span class="lab">模型名</span>
-        <input id="keyModel" class="mono" name="ht-host-model" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
-          spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
-          value="${esc(model)}" placeholder="deepseek-flash" aria-label="模型名">
-      </div>
-      <div class="fieldrow"><span class="lab">API Key</span>
-        <input id="keyValue" class="mono secret" name="ht-host-credential" type="text" autocomplete="new-password"
-          autocapitalize="off" autocorrect="off" spellcheck="false" data-form-type="other"
-          data-lpignore="true" data-1p-ignore="true" value="${esc(key)}" placeholder="sk-..." aria-label="API Key">
-        <span class="hint">只留在本页内存里，不会写入浏览器存储；掩码由服务端下发。</span>
-      </div>
-    </div>
-    <div class="row" style="margin-top:10px">
+    <div class="field"><label>提供方</label>
+      <select id="keyProvider">
+        ${Object.entries(PROVIDERS).map(([k, p]) => `<option value="${k}" ${providerOf() === k ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
+      </select></div>
+    <div class="dim" id="keyProviderNote">${esc(PROVIDERS[providerOf()].note)}</div>
+    <div class="field"><label>Base URL</label>
+      <input id="keyBase" name="ht-host-endpoint" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+        spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
+        value="${esc(base)}" placeholder="https://api.deepseek.com"></div>
+    <div class="dim">实际请求地址（自动补 <code>/chat/completions</code>，路径会保留）：<code id="keyUrl">${esc(completionsUrl(base))}</code></div>
+    <div class="field"><label>模型名</label>
+      <input id="keyModel" name="ht-host-model" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+        spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
+        value="${esc(model)}" placeholder="deepseek-flash"></div>
+    <div class="field"><label>API Key</label>
+      <input id="keyValue" name="ht-host-credential" type="text" class="secret" autocomplete="new-password"
+        autocapitalize="off" autocorrect="off" spellcheck="false" data-form-type="other"
+        data-lpignore="true" data-1p-ignore="true" value="${esc(key)}" placeholder="sk-..."></div>
+    <div class="row">
       <button id="btnKeyToggle">显示 / 隐藏</button>
-      ${S.keyMask ? `<span class="dim">当前掩码：<span class="mask">${esc(S.keyMask)}</span></span>` : ''}
+      <span class="dim">换提供方会自动填好 Base URL 与模型名，之后仍可手动修改。</span>
     </div>
-    <div id="keyTestBox">${keyTestBox()}</div>`,
-    `<button id="btnKeyClose">关闭</button>
-     <span class="row">
-       <button id="btnKeyTest">测试连接（不入库）</button>
-       <button class="danger" id="btnKeyRevoke" ${hasOwnKey() ? '' : 'disabled'}>撤销并销毁</button>
-       <button class="primary" id="btnKeySubmit" ${vaultOff ? 'disabled title="服务端未配置 MASTER_KEY"' : ''}>连接测试并提交</button>
-     </span>`);
+    ${S.keyMask ? `<div class="dim" style="margin-top:8px">当前掩码：<span class="mask">${esc(S.keyMask)}</span></div>` : ''}
+    <div id="keyTestBox">${keyTestBox()}</div>
+    <div class="row" style="margin-top:10px">
+      <button id="btnKeyTest">测试连接（不入库）</button>
+      <button class="primary" id="btnKeySubmit" ${vaultOff ? 'disabled title="服务端未配置 MASTER_KEY"' : ''}>连接测试并提交</button>
+      <button class="danger" id="btnKeyRevoke" ${hasOwnKey() ? '' : 'disabled'}>撤销并销毁</button></div>
+    <div class="dim" style="margin-top:8px">测试与提交失败都不会保存任何东西。Key 只留在本页内存里，不会写入浏览器存储。</div>
+  </div></div>`;
 }
 
 /** 房主是否已有一把生效中的 Key（本会话提交过，或服务端视图里带掩码）——决定「撤销并销毁」是否可点 */
@@ -2490,11 +2053,11 @@ function keyTestBox() {
   if (t.pending) return '<div class="notice" style="margin-top:8px">正在连接上游模型服务…</div>';
   const where = `${t.url ? `<br><span class="dim">实际请求：${esc(t.url)}${t.model ? ' · 模型：' + esc(t.model) : ''}</span>` : ''}`;
   if (t.ok) {
-    return `<div class="notice" style="margin-top:8px"><b class="seal yes">检测通过</b>${t.latencyMs ? `（${t.latencyMs} ms）` : ''}：${esc(t.message || '上游已正常响应')}${where}
+    return `<div class="notice" style="margin-top:8px"><b>✅ 连接成功</b>${t.latencyMs ? `（${t.latencyMs} ms）` : ''}：${esc(t.message || '上游已正常响应')}${where}
       ${t.reasonCode === 'RATE_LIMITED_AT_SUBMIT' ? '<br><span class="dim">当前被限流：凭证有效，但对局中调用可能失败。</span>' : ''}
       ${t.stored === false ? '<br><span class="dim">本次只是测试，还没有入库。</span>' : ''}</div>`;
   }
-  return `<div class="err" style="margin-top:8px"><b class="seal no">检测失败</b>：${esc(t.message || '未知错误')}
+  return `<div class="err" style="margin-top:8px"><b>❌ 连接失败</b>：${esc(t.message || '未知错误')}
     ${t.reasonCode ? `<span class="dim">（${esc(t.reasonCode)}${t.latencyMs ? ' · ' + t.latencyMs + ' ms' : ''}）</span>` : ''}${where}
     <br>排查建议：${esc(hintForReason(t.reasonCode))}</div>`;
 }
@@ -2522,69 +2085,23 @@ function hintForReason(code) {
   }
 }
 
-/**
- * 复盘（§2.21）：像一份结案档案 —— 顶部结论，汤底用暖纸，提问用正式记录格式，成员用名册表格。
- * 顶部一条固定的红色窄条提示"仅房主可见"，不占正文空间。
- */
 function recapModal(recap) {
-  return modalShell('CASE FILE / 结案档案', `复盘 · ${recap.puzzle.title}`, `
-    <div class="redbar">仅房主可见 · 含汤底与事实点，请勿分享给将要玩这道题的人</div>
-    <div class="attrs">
-      <span>结果 <b>${esc(recap.result?.result || '—')}</b></span>
-      <span>${esc(recap.result?.reason || '')}</span>
-      <span>共 <span class="mono">${recap.questions.length}</span> 次提问</span>
-    </div>
-    <div class="recap">
-      <h4><span class="no">01</span>汤底</h4>
-      ${recap.canRevealTruth
-        ? `<div class="sheet"><div class="surface">${esc(recap.truth || '')}</div></div>`
-        : `<div class="notice warn">${esc(recap.truthNote || '本局不予揭晓汤底')}</div>`}
-      <h4><span class="no">02</span>完整提问记录</h4>
-      <table><tr><th>#</th><th>成员</th><th>提问</th><th>判定</th><th>来源</th></tr>
-        ${recap.questions.map((q) => `<tr><td class="mono">${q.turnSeq}</td><td>${esc(q.memberName)}</td><td>${esc(q.text)}</td>
-          <td><span class="seal ${esc(q.answer)}">${answerLabel(q.answer)}</span>${q.reasonCode && q.reasonCode !== 'NONE' ? ` <span class="dim mono">${esc(q.reasonCode)}</span>` : ''}</td>
-          <td class="mono dim">${esc(q.source)}</td></tr>`).join('')}</table>
-      <h4><span class="no">03</span>成员数据</h4>
-      <table><tr><th>成员</th><th>得分</th><th>被跳过</th><th>揭秘次数</th></tr>
-        ${recap.members.map((m) => `<tr><td>${esc(m.name)}</td><td class="mono">${m.score}</td><td class="mono">${m.skipStreak}</td><td class="mono">${m.guessesUsed}</td></tr>`).join('')}</table>
-    </div>`,
-    `<span class="dim">复盘不含任何 Key</span><button id="btnRecapClose">关闭</button>`);
-}
-
-/**
- * 顶栏「房间信息与设置」抽屉（§2.7 / §5.2）：房间元数据、额度铭牌、房主入口都收在这里，
- * 不再占用主内容区（普通玩家看不到房主操作）。
- */
-function roomInfoModal(room, you) {
-  const mask = hostKeyMask(room);
-  const blocked = room.ai.state === 'BLOCKED';
-  return modalShell('ROOM / 03', '房间信息与设置', `
-    <div class="fieldgroup"><h4>房间</h4>
-      <div class="fieldrow"><span class="lab">房号</span><span class="mono" style="letter-spacing:.18em">${esc(room.code)}</span></div>
-      <div class="fieldrow"><span class="lab">状态</span><span>${esc(roomStatusLabel(room))}</span></div>
-      <div class="fieldrow"><span class="lab">进度</span><span class="mono">第 ${room.roundNo} 轮 · 本房间第 ${room.matchNo || 0} 局</span></div>
-      <div class="fieldrow"><span class="lab">邀请</span><span class="row"><button id="btnCopyCode" class="ghost">复制房号</button><button id="btnCopyInvite" class="ghost">复制邀请链接</button></span></div>
-    </div>
-    <div class="fieldgroup"><h4>设备</h4>
-      <div class="fieldrow"><span class="lab">AI 汤主</span>
-        <span class="row"><i class="lamp${blocked ? ' off' : ''}"></i>${blocked ? '异常 · 对局已暂停' : '正常'}${blocked && room.ai.reasonCode ? ` <span class="mono dim">${esc(room.ai.reasonCode)}</span>` : ''}</span></div>
-      <div class="fieldrow"><span class="lab">额度来源</span><span>${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'} <span class="mono dim">${esc(room.credit.reason)}</span></span></div>
-      <div class="fieldrow"><span class="lab">房主 Key</span><span>${mask ? `<span class="mask">${esc(mask)}</span>` : '<span class="dim">未配置</span>'}</span></div>
-    </div>
-    ${you.isHost ? `
-    <div class="fieldgroup"><h4>房主操作</h4>
-      <div class="fieldrow"><span class="lab">对局</span><span class="row">
-        ${room.status === 'waiting' ? '<button class="primary" id="btnStart">开局（随机一道）</button><button id="btnStartVote">投票选汤</button>' : ''}
-        ${room.turn.phase === 'ACTIVE' ? '<button id="btnSkip">跳过本轮</button>' : ''}
-        ${room.status === 'settled' ? '<button class="primary" id="btnNextRound">回到选题（下一局）</button><button id="btnRecap">查看复盘</button>' : ''}
-      </span></div>
-      <div class="fieldrow"><span class="lab">参数与凭据</span><span class="row">
-        <button id="btnCfg">对局参数</button>
-        <button id="btnKey">${mask ? '更换 / 撤销 Key' : '接通 AI 汤主'}</button>
-      </span></div>
-    </div>` : ''}`,
-    `<button id="btnRoomInfoClose">关闭</button>
-     <button class="danger" id="btnLeave">离开房间</button>`);
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">复盘 · ${esc(recap.puzzle.title)}</h3><button id="btnRecapClose">关闭</button></div>
+    <div class="row"><span class="pill">${esc(recap.result?.result || '')}</span><span class="pill">${esc(recap.result?.reason || '')}</span>
+      <span class="pill">共 ${recap.questions.length} 次提问</span></div>
+    ${recap.canRevealTruth ? `<h3 style="margin-top:12px">汤底揭晓</h3><p>${esc(recap.truth || '')}</p>`
+      : `<div class="notice" style="margin-top:12px">${esc(recap.truthNote || '本局不予揭晓汤底')}</div>`}
+    <h3>完整提问记录</h3>
+    <table><tr><th>#</th><th>成员</th><th>提问</th><th>判定</th><th>来源</th></tr>
+      ${recap.questions.map((q) => `<tr><td>${q.turnSeq}</td><td>${esc(q.memberName)}</td><td>${esc(q.text)}</td>
+        <td>${answerLabel(q.answer)}${q.reasonCode && q.reasonCode !== 'NONE' ? ` <span class="dim">(${esc(q.reasonCode)})</span>` : ''}</td>
+        <td>${esc(q.source)}</td></tr>`).join('')}</table>
+    <h3 style="margin-top:12px">计分</h3>
+    <table><tr><th>成员</th><th>得分</th><th>被跳过</th><th>揭秘次数</th></tr>
+      ${recap.members.map((m) => `<tr><td>${esc(m.name)}</td><td>${m.score}</td><td>${m.skipStreak}</td><td>${m.guessesUsed}</td></tr>`).join('')}</table>
+    <div class="dim" style="margin-top:8px">复盘不含任何 Key；请勿分享给将要玩这道题的人。</div>
+  </div></div>`;
 }
 
 /* ============================================================================
@@ -2617,8 +2134,6 @@ document.addEventListener('click', async (e) => {
   const presetPick = el.getAttribute && el.getAttribute('data-preset');
   const kickTarget = el.getAttribute && el.getAttribute('data-kick');
   const room = S.view ? S.view.room : null;
-  // 记住是哪个按钮把弹窗打开的：关闭后要把焦点还回去（§23）
-  if (['btnCfg', 'btnCfgQuick', 'btnKey', 'btnGuess', 'btnGuessQuick', 'btnRecap', 'btnRoomInfo'].includes(id)) S.modalTriggerId = id;
 
   try {
     if (kickTarget && room) {
@@ -2688,12 +2203,6 @@ document.addEventListener('click', async (e) => {
       case 'btnChatClose': S.chatOpen = false; render(true); break;
       // 「有 N 条新消息 ↓」：用户主动要求跳到底部（我们不强行拉走他）
       case 'btnChatJump': S.chatPinned = true; S.chatScrollToBottom = true; markChatRead(); render(true); break;
-      // 右栏页签（§5.5）：切页签只换右侧内容，不动中央记录的滚动位置，也不清空聊天草稿
-      case 'btnTabCrew': S.railTab = 'crew'; render(); break;
-      case 'btnTabNotes': S.railTab = 'notes'; markChatRead(); render(); break;
-      // 顶栏「房间信息与设置」（§2.7 / §5.2）：房间元数据、额度铭牌与房主入口都收进抽屉
-      case 'btnRoomInfo': S.modalTriggerId = 'btnRoomInfo'; S.roomInfo = true; render(true); break;
-      case 'btnRoomInfoClose': S.roomInfo = false; render(true); break;
       case 'btnSeat': {
         // 待入席者的"举手"= 申请下一轮上桌（服务端按成员状态区分语义）
         const me = room ? room.members.find((m) => m.id === (S.view.you ? S.view.you.memberId : '')) : null;
@@ -2716,11 +2225,11 @@ document.addEventListener('click', async (e) => {
         render();
         break;
       }
-      case 'btnCfg': S.configModal = true; render(true); break;
-      case 'btnCfgQuick': S.configModal = true; render(true); break;
+      case 'btnCfg': S.configModal = true; render(); break;
+      case 'btnCfgQuick': S.configModal = true; render(); break;
       case 'btnCfgClose':
         Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
-        S.configModal = false; render(true); break;
+        S.configModal = false; render(); break;
       case 'btnCfgApply': {
         const patch = {};
         document.querySelectorAll('[data-cfg]').forEach((input) => {
@@ -2741,7 +2250,7 @@ document.addEventListener('click', async (e) => {
       case 'btnSkip': request({ t: 'skip_turn' }); break;
       case 'btnKey': S.keyModal = true; S.keyTest = null; render(); break;
       case 'btnKeyFromBanner': S.keyModal = true; S.keyTest = null; render(); break;
-      case 'btnKeyClose': S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; render(true); break;
+      case 'btnKeyClose': S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; render(); break;
       case 'btnKeyToggle': {
         const el = $('#keyValue');
         if (el) el.classList.toggle('secret');
@@ -2796,9 +2305,9 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
-      case 'btnGuess': S.guessModal = true; render(true); break;
+      case 'btnGuess': S.guessModal = true; render(); break;
       // 提问框旁边的快捷入口：同一个弹窗，随时可猜（冷却期间按钮是禁用的）
-      case 'btnGuessQuick': S.guessModal = true; render(true); break;
+      case 'btnGuessQuick': S.guessModal = true; render(); break;
       case 'btnTruthClose':
       case 'btnTruthClose2': {
         const r = S.view ? S.view.room : null;
@@ -2815,7 +2324,7 @@ document.addEventListener('click', async (e) => {
         await sendAction({ type: 'next_round' });
         break;
       }
-      case 'btnGuessCancel': S.guessModal = false; delete S.drafts.guessText; render(true); break;
+      case 'btnGuessCancel': S.guessModal = false; delete S.drafts.guessText; render(); break;
       case 'btnGuessSubmit': {
         const text = $('#guessText').value;
         S.guessModal = false;
@@ -2969,32 +2478,6 @@ document.addEventListener('change', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
-  // Esc 关弹窗（§23）：关掉最上面一层，把焦点还给打开它的按钮
-  if (e.key === 'Escape') {
-    if (closeTopModal()) {
-      e.preventDefault();
-      const back = S.modalTriggerId ? document.getElementById(S.modalTriggerId) : null;
-      render(true);
-      const el = back || document.getElementById(S.modalTriggerId);
-      if (el && el.focus) el.focus();
-      return;
-    }
-  }
-  // Tab 循环锁在弹窗内（§23：弹窗打开后焦点留在弹窗里）
-  if (e.key === 'Tab') {
-    const dlg = document.querySelector('.overlay .modal');
-    if (dlg) {
-      const items = [...dlg.querySelectorAll('input:not([type=hidden]),textarea,select,button')]
-        .filter((el) => !el.disabled && el.offsetParent !== null);
-      if (items.length) {
-        const first = items[0];
-        const last = items[items.length - 1];
-        const active = document.activeElement;
-        if (e.shiftKey && (active === first || !dlg.contains(active))) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
-      }
-    }
-  }
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('#ask')) { e.preventDefault(); doSend(); }
   // 讨论区：Enter 发送 / Shift+Enter 换行；中文输入法组字期间（isComposing / keyCode 229）绝不发送
   if (e.key === 'Enter' && e.target && e.target.id === 'chatInput' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
@@ -3018,9 +2501,6 @@ document.addEventListener('visibilitychange', () => {
  * 启动
  * ==========================================================================*/
 (async () => {
-  // 顶栏海龟图章（§2.7）：单色线性 SVG，静态注入一次
-  const logo = document.getElementById('brandLogo');
-  if (logo) logo.innerHTML = turtleSvg();
   try {
     S.config = await api('/api/config');
   } catch { /* 忽略：入口页会用默认文案 */ }
