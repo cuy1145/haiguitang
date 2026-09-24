@@ -179,6 +179,14 @@ export interface CoreMember {
   name: string;
   isBot: boolean;
   role: MemberRole;
+  /**
+   * 「待入席」：只会在**对局进行中**进房时出现 —— 先排队，不占轮转（不进 turnOrder）、
+   * 不占玩家人数上限、不影响开局判定。点「申请下一轮上桌」后 `seatRequested` 变 true，
+   * 等到轮次 wrap（roundNo +1）时转正进 turnOrder，从那一轮开始才轮到他。
+   */
+  pendingSeat?: boolean;
+  /** 待入席成员的"我要上桌"意图；对非 pending 成员无意义 */
+  seatRequested?: boolean;
   joinSeq: number;
   conn: ConnState;
   activity: ActivityState;
