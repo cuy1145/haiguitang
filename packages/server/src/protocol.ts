@@ -98,6 +98,73 @@ export function generateCode(rand: () => number = Math.random): string {
   return out;
 }
 
+/**
+ * 动作失败码 → 面向玩家的中文文案（**唯一权威表**）。
+ *
+ * 为什么放在这里：Worker（`packages/worker/src/http.ts`）和 Node 参考服务器
+ * （`packages/server/src/server.ts`）都要用它，以前各写一份，结果两边都在漏码 ——
+ * 漏掉的码会掉进 default，玩家只看到一句"操作未通过校验"，真正的失败原因被吞掉
+ * （真实故障：AI 出题返回 SCHEMA_INVALID，房主只看到"操作未通过校验"）。
+ * 新增失败码时**只改这里**。
+ */
+export function messageOf(code: string): string {
+  switch (code) {
+    // ---- 回合 / 提交 ----
+    case 'NOT_YOUR_TURN': return '还没轮到你发言。';
+    case 'TURN_EXPIRED': return '本轮已跳过，内容未提交。';
+    case 'TURN_ALREADY_ANSWERED': return '本轮已经提交过了。';
+    case 'STALE_TURN': return '回合已经切换，请以最新状态为准。';
+    case 'TURN_VOIDED': return '因房主变更，本轮已作废。';
+    case 'TEXT_TOO_LONG': return '提问太长了（上限 200 字）。';
+    case 'TEXT_EMPTY': return '内容太短，请写清楚一点。';
+    case 'RATE_LIMITED': return '操作太频繁了，缓一缓再试。';
+    // ---- 房间 / 权限 ----
+    case 'MATCH_PAUSED': return '对局已暂停。';
+    case 'MATCH_NOT_ACTIVE': return '对局未在进行中。';
+    case 'NOT_HOST': return '只有房主可以做这个操作。';
+    case 'NOT_ALLOWED': return '当前状态下不能做这个操作（多半是对局已经开始/结束了）。';
+    case 'ROOM_NOT_FOUND': return '房间不存在或已被清理。';
+    case 'ROOM_CLOSED': return '房间已经结束，不能再加入了。';
+    case 'ROOM_FULL': return '房间人数已满。';
+    case 'UNAUTHORIZED': return '会话无效或已过期，请重新加入房间。';
+    case 'CONFLICT': return '房间状态刚被别的操作更新，请重试一次。';
+    case 'UNKNOWN_ACTION': return '未知操作（客户端与服务端版本可能不一致）。';
+    // ---- 投票 / 准备 ----
+    case 'VOTE_NOT_ELIGIBLE': return '挂机或离线的成员不能表决。';
+    case 'VOTE_NOT_OPEN': return '当前没有进行中的投票。';
+    case 'NOT_ALL_READY': return '还有玩家没点「我准备好了」；等大家都准备好，或确认后强制开局。';
+    // ---- 提示 / 揭秘 ----
+    case 'HINTS_DISABLED': return '本局未开启提示（房主可在「对局参数」里打开）。';
+    case 'HINT_COOLDOWN': return '提示冷却中。';
+    case 'HINT_QUOTA_EXHAUSTED': return '你的提示次数已用尽。';
+    case 'HINT_TIER3_EXHAUSTED': return 'T3 关键提示本局已用完。';
+    case 'HINT_NO_FACT': return '该梯度已无可用提示。';
+    case 'GUESS_NOT_IN_WINDOW': return '还没到可以揭秘的轮次。';
+    case 'GUESS_ATTEMPTS_EXHAUSTED': return '你的揭秘次数已用尽。';
+    case 'GUESS_TOO_SHORT': return '推理内容太短。';
+    // ---- 模型凭据（自备 Key / 平台额度）----
+    case 'AI_UNAVAILABLE': return '当前没有可用的模型凭据：服务端没配平台额度，你也没填自备 Key。填一把自己的 Key（先点「测试连接」验证）即可；或让运维配置 AI_KEY。';
+    case 'HTTP_401': return '模型鉴权失败：API Key 无效或已被撤销。';
+    case 'HTTP_402': return '模型账号余额/额度不足：充值或换一把 Key。';
+    case 'HTTP_403': return '模型无权限：这把 Key 不能访问该模型。';
+    case 'HTTP_400': return '上游不接受请求参数：多半是模型名不对。';
+    case 'HTTP_404': return 'Base URL 或模型名不对：DeepSeek 用 https://api.deepseek.com + deepseek-flash。';
+    case 'HTTP_408': case 'HTTP_425': return '上游临时异常（超时/要求重试），再试一次通常就好。';
+    case 'HTTP_429': return '被上游限流：等十几秒再试一次。';
+    case 'HTTP_5XX': return '模型服务端出错（5xx）：稍后重试，或换一个模型名。';
+    case 'CONNECT_TIMEOUT': case 'READ_TIMEOUT': return '调用模型超时：检查网络/代理，或换一个 Base URL。';
+    case 'CONN_RESET': return '连接模型时被重置：稍后重试，或换一个 Base URL。';
+    case 'SCHEMA_INVALID': return '模型这次没按要求返回 JSON（已自动重试一次）。再点一次生成通常就能出题；连续失败可以把模型换成 deepseek-chat 试试。';
+    case 'PROVIDER_REFUSAL': return '上游以内容策略为由拒绝了这次请求：换一个模型或改一下题目方向。';
+    case 'LEAK_DETECTED': return '模型输出里含有汤底片段，被安全机制拦下了（不会下发给任何人）。再生成一次即可。';
+    case 'INCONSISTENT': return '模型输出前后矛盾，无法用于判定。再生成一次即可。';
+    case 'UNANSWERABLE_ABUSE': return '模型把太多问题判成「无法回答」，已被规则拦下。再试一次或换个模型。';
+    case 'PUZZLE_INVALID': return 'AI 出的题没通过坏题检测，已作废（逐条原因见下），换一次生成即可。';
+    case 'UNKNOWN': return '模型调用出现未分类错误（详情见下）。';
+    default: return `操作未通过校验（未分类错误码 ${code}）。`;
+  }
+}
+
 /** 服务端模板文案（所有面向玩家的中文都由这里给出，不由模型生成）。 */
 export const TEXT = {
   turnStarted: (name: string, sec: number, unavailable: boolean) =>

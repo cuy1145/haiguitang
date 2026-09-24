@@ -170,6 +170,39 @@ WebSocket 帧 / HTTP 动作 / 定时器 tick
 确定性地制造"离开时请求还在飞"的窗口；另外用 CDP 把 `/api/rooms/state` 人为延迟 2.2 秒，
 对**线上旧代码**能稳定复现（一次被拉回房间、一次卡在 HTTP 404），对**修好的代码**同一窗口 4/4 轮干净。
 
+## 4.6 AI 出题失败必须能自解释
+
+**症状**（用户报的）：房主点「AI 创作 · 生成新题」，弹出一句"操作未通过校验"，看不出到底怎么了。
+
+**三个叠加的原因**：
+
+1. `messageOf()` 的文案表里**没有 AI 调用失败的那些错误码**（`SCHEMA_INVALID` / `HTTP_429` /
+   `HTTP_401` / `PROVIDER_REFUSAL` / `LEAK_DETECTED` …），全掉进 `default: '操作未通过校验。'`；
+   而且这张表在 Worker 与 Node 服务器里**各写了一份**，两边漏的码还不一样。
+2. `createAiPuzzle()` 失败时只回一个 `code`，把模型层返回的 `message`（截断预览、上游状态、内容策略）
+   **直接丢掉**了，连审计都没落 —— 后台记录里查不到这次失败。
+3. 出题这条路径**没有重试**：判定路径早就有 `RETRYABLE` 重试，出题却是一次定生死。
+   而 `SCHEMA_INVALID` / 429 / 5xx 基本都是**一次性**的，重试一次就好。
+
+**修法**：
+
+- 文案表收敛成**唯一一份**（`packages/server/src/protocol.ts` 的 `messageOf`），Worker 的
+  `http.ts` 只做转发；补齐全部 `ActionReject` / `SubmitReject` / `AiErrorClass` 的码；
+  `default` 分支必须把码本身打出来（`操作未通过校验（未分类错误码 XXX）`），永远别再出现无信息文案。
+- `createAiPuzzle()` 失败时把模型层原因放进 `detail.issues` / `detail.errors`（前端两种字段名都认），
+  并落一条 `ai_puzzle_failed` 审计 —— 后台记录里能直接看到是哪一类失败。
+- 出题 / 补事实点改走 `callJsonWithRetry()`：沿用 `AI_MAX_RETRIES`（默认 2）+ 400ms 递进退避。
+  出题 `max_tokens` 1200 → 1800、补事实点 900 → 1200（`max_tokens` 只是上限，不额外计费）。
+- **截断不再伪装成"坏题"**：`extractJsonObject` 会"补括号"救回被截断的 JSON，这对判定是好事，
+  但出题的 JSON 里 `facts` 排在最后 —— 被切掉的正是最关键的字段，救回来只会得到
+  "缺少 tier=1 的成立事实"这种把人引错方向的理由（审计里那条 `ai_puzzle_rejected` 就是）。
+  现在：只有当"补括号"才解析成功、且上游 `finish_reason=length` 时，直接报"输出被 max_tokens 截断"。
+
+**测试**：`tests/integration/action-messages.test.ts`（M1–M6 契约测试：每个码都要有独立文案、
+表只能有一份、default 必须带 code、失败必须带 detail 与审计）；`server.test.ts` 的 I-27（真实
+WS 链路：假上游返回散文 → 房主收到 `SCHEMA_INVALID` + 模型层原因，而不是"操作未通过校验"）；
+`ai-generate.test.ts` 的 G7（失败一次 → 自动重试成功）、G8（截断要报 `finish_reason=length`）。
+
 ## 5. 已知的"故意简化"（不是缺陷，但要知道）
 
 1. **内置模拟主持人靠关键词表**：它只能识别题库里写过的说法，无法处理任意自然语言改写

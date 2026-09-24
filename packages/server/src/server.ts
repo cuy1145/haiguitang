@@ -26,6 +26,7 @@ import type { CredentialRecord } from './vault.ts';
 import { HostService } from './ai.ts';
 import { RoomRegistry, type RoomRuntime, type RuntimeDeps, type SessionLike } from './rooms.ts';
 import type { ClientFrame, ServerFrame } from './protocol.ts';
+import { messageOf as actionMessageOf } from './protocol.ts';
 import { MAX_PLAYERS, MAX_SPECTATORS, MIN_PLAYERS } from '@ht/core';
 
 export interface AppDeps {
@@ -672,27 +673,12 @@ function contentType(path: string): string {
   }
 }
 
-function messageOf(code: string): string {
-  switch (code) {
-    case 'NOT_YOUR_TURN': return '还没轮到你发言。';
-    case 'TURN_EXPIRED': return '本轮已跳过，内容未提交。';
-    case 'TURN_ALREADY_ANSWERED': return '本轮已经提交过了。';
-    case 'STALE_TURN': return '回合已经切换，请以最新状态为准。';
-    case 'MATCH_PAUSED': return '对局已暂停。';
-    case 'MATCH_NOT_ACTIVE': return '对局未在进行中。';
-    case 'NOT_HOST': return '只有房主可以做这个操作。';
-    case 'VOTE_NOT_ELIGIBLE': return '挂机或离线的成员不能表决。';
-    case 'VOTE_NOT_OPEN': return '当前没有进行中的投票。';
-    case 'HINT_COOLDOWN': return '提示冷却中。';
-    case 'HINT_QUOTA_EXHAUSTED': return '你的提示次数已用尽。';
-    case 'HINT_TIER3_EXHAUSTED': return 'T3 关键提示本局已用完。';
-    case 'HINT_NO_FACT': return '该梯度已无可用提示。';
-    case 'GUESS_NOT_IN_WINDOW': return '还没到可以揭秘的轮次。';
-    case 'GUESS_ATTEMPTS_EXHAUSTED': return '你的揭秘次数已用尽。';
-    case 'GUESS_TOO_SHORT': return '推理内容太短。';
-    default: return '操作未通过校验。';
-  }
-}
+/**
+ * 动作失败码 → 文案：直接复用 protocol.ts 的权威表（以前这里另写一份，漏了一堆码，
+ * 玩家只看到"操作未通过校验"，把真正的原因吞掉了）。
+ */
+const messageOf = actionMessageOf;
+
 
 export { HostService };
 

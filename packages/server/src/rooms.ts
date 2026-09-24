@@ -415,25 +415,43 @@ export class RoomRuntime {
   }
 
   // ---------------------------------------------------------------- 准备状态
-  /** 有资格（会阻塞开局）的成员：非旁观且在线的玩家 */
+  /**
+   * 有资格（会阻塞开局）的成员：**非旁观、在线、且不是房主**。
+   *
+   * 房主不算：开局本来就是房主按下去的动作，要求房主先给自己举手毫无意义，
+   * 而且会让他看到"还有 1 人没准备"——那个人就是他自己（真实反馈 M4）。
+   * 挂机但在线的人仍然算：他还在房间里，房主可以确认后强制开局。
+   */
   private readyEligible(): string[] {
-    return this.room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected').map((m) => m.id);
+    return this.room.members
+      .filter((m) => m.role !== 'spectator' && m.conn === 'connected' && m.id !== this.room.hostId)
+      .map((m) => m.id);
   }
 
-  /** 还没举手的成员（离线/旁观不计入） */
+  /** 还没举手的成员（离线/旁观/房主不计入） */
   private notReady(): string[] {
     return this.readyEligible().filter((id) => !this.room.ready.includes(id));
   }
 
-  /** 举手 / 收回。只在开局前有意义，`reduce` 已保证进行中会被忽略。 */
+  /** 举手 / 收回。只在开局前有意义，`reduce` 已保证其它状态会被忽略。 */
   async setReady(memberId: string, ready: boolean): Promise<Result<{ ready: boolean }>> {
-    if (!getMember(this.room, memberId)) return { ok: false, code: 'NOT_ALLOWED' };
+    const member = getMember(this.room, memberId);
+    if (!member) return { ok: false, code: 'NOT_ALLOWED' };
+    // 旁观者不是对局参与者：以前能把自己写进 room.ready（不下发计数，但界面会显示"已准备"，纯垃圾）
+    if (member.role === 'spectator') return { ok: false, code: 'NOT_ALLOWED' };
     this.room = { ...this.room, ready: this.room.ready.filter((id) => this.room.members.some((m) => m.id === id)) };
+    // 只在"等待开局"下有意义；其它状态（已结束/对局中）明确拒绝，
+    // 别再回 ok 让界面说"已举手"而实际什么都没发生（L3）
+    if (this.room.status !== 'waiting') return { ok: false, code: 'NOT_ALLOWED' };
     return this.enqueue(() => {
       const out = reduce(this.room, { type: 'READY_SET', memberId, ready }, this.ctx());
       this.room = out.room;
       this.apply(out.events);
-      return { ok: true as const, data: { ready } };
+      // 准备状态本身不产生事件，但别人（尤其房主的"还有几人没准备"）必须立刻看到 →
+      // 主动广播一次快照。以前不发，Node/WS 路径下别人会一直看到陈旧的 readyCount。
+      this.broadcast((id) => ({ t: 'snapshot', serverTime: this.now, view: this.view(id) }));
+      // 回报**真实**状态（并发开局可能让这次举手被忽略）
+      return { ok: true as const, data: { ready: this.room.ready.includes(memberId) } };
     });
   }
 
@@ -468,7 +486,23 @@ export class RoomRuntime {
     if (!result.ok) {
       this.deps.logger.warn('ai_puzzle_failed', { room_id: this.room.id, code: result.errorClass, credit_source: usedSource });
       this.deps.store.bumpUsage(usedSource === 'site_fallback' ? 'site' : 'host', Date.now(), 0, 0, 1);
-      return { ok: false, code: result.errorClass as ActionReject };
+      // 以前只回一个 errorClass，房主只看到"操作未通过校验"（该码不在文案表里），
+      // 真正的失败原因（截断/限流/鉴权/内容策略…）全被吞掉。这里把模型层的原因一并带上，
+      // 同时落一条审计：后台记录里能直接查到是哪一类失败。
+      const reason = String(result.message || result.errorClass).slice(0, 300);
+      this.deps.store.audit({
+        action: 'ai_puzzle_failed', roomId: this.room.id, actor: memberId,
+        subject: `${result.errorClass}: ${reason}`,
+      });
+      return {
+        ok: false,
+        code: result.errorClass as ActionReject,
+        detail: {
+          ai: { code: result.errorClass, message: reason },
+          issues: [{ path: 'model', reason }],
+          errors: [{ path: 'model', reason }],
+        },
+      };
     }
 
     const checked = checkAndNormalizePuzzle(result.raw, {
@@ -502,7 +536,9 @@ export class RoomRuntime {
   async startMatch(memberId: string, mode: 'vote' | 'pick', puzzleId?: string, force = false): Promise<Result> {
     if (this.room.hostId !== memberId) return { ok: false, code: 'NOT_HOST' };
     if (this.room.status !== 'waiting') return { ok: false, code: 'NOT_ALLOWED' };
+    // 先同步预检（快速失败），入队后**再检一次** —— 期间可能有人收回了准备（L4）
     if (!force && this.notReady().length > 0) return { ok: false, code: 'NOT_ALL_READY' };
+    const readyGate = (): ActionReject | null => (!force && this.notReady().length > 0 ? 'NOT_ALL_READY' : null);
     const list = this.deps.store.listPuzzles({
       ratingMax: this.room.config.ratingMax,
       difficultyMin: this.room.config.difficultyMin,
@@ -518,12 +554,16 @@ export class RoomRuntime {
       if (!chosen) return { ok: false, code: 'NOT_ALLOWED' };
       return this.enqueue(() => {
         if (this.room.status !== 'waiting') return { ok: false as const, code: 'NOT_ALLOWED' as ActionReject };
+        const blocked = readyGate();
+        if (blocked) return { ok: false as const, code: blocked };
         this.lockPuzzle(chosen.id);
         return { ok: true as const };
       });
     }
     return this.enqueue(() => {
       if (this.room.status !== 'waiting') return { ok: false as const, code: 'NOT_ALLOWED' as ActionReject };
+      const blocked = readyGate();
+      if (blocked) return { ok: false as const, code: blocked };
       const shuffled = [...list].sort(() => this.deps.rand() - 0.5);
       this.candidates = shuffled.slice(0, Math.min(this.room.config.candidateCount, shuffled.length)).map((p) => p.id);
       const out = reduce(this.room, { type: 'VOTE_OPEN', voteType: 'puzzle_choice', voteId: this.deps.newId('vote'), puzzleIds: this.candidates }, this.ctx());

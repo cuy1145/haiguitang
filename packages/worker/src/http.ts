@@ -52,33 +52,12 @@ export function sanitizeNickname(value: unknown): string {
   return clean.length >= 1 ? clean : '玩家';
 }
 
-/** 面向玩家的固定错误文案（不来自模型；与 Node 版 messageOf 保持一致）。 */
-export function messageOf(code: string): string {
-  switch (code) {
-    case 'NOT_YOUR_TURN': return '还没轮到你发言。';
-    case 'TURN_EXPIRED': return '本轮已跳过，内容未提交。';
-    case 'TURN_ALREADY_ANSWERED': return '本轮已经提交过了。';
-    case 'STALE_TURN': return '回合已经切换，请以最新状态为准。';
-    case 'TURN_VOIDED': return '因房主变更，本轮已作废。';
-    case 'MATCH_PAUSED': return '对局已暂停。';
-    case 'MATCH_NOT_ACTIVE': return '对局未在进行中。';
-    case 'NOT_HOST': return '只有房主可以做这个操作。';
-    case 'VOTE_NOT_ELIGIBLE': return '挂机或离线的成员不能表决。';
-    case 'VOTE_NOT_OPEN': return '当前没有进行中的投票。';
-    case 'HINTS_DISABLED': return '本局未开启提示（房主可在「对局参数」里打开）。';
-    case 'AI_UNAVAILABLE': return '当前没有可用的模型凭据：服务端没配平台额度，你也没填自备 Key。填一把自己的 Key（先点「测试连接」验证）即可；或让运维配置 AI_KEY。';
-    case 'PUZZLE_INVALID': return 'AI 出的题没通过坏题检测，已作废（逐条原因见下），换一次生成即可。';
-    case 'NOT_ALL_READY': return '还有玩家没点「我准备好了」；等大家都准备好，或确认后强制开局。';
-    case 'HINT_COOLDOWN': return '提示冷却中。';
-    case 'HINT_QUOTA_EXHAUSTED': return '你的提示次数已用尽。';
-    case 'HINT_TIER3_EXHAUSTED': return 'T3 关键提示本局已用完。';
-    case 'HINT_NO_FACT': return '该梯度已无可用提示。';
-    case 'GUESS_NOT_IN_WINDOW': return '还没到可以揭秘的轮次。';
-    case 'GUESS_ATTEMPTS_EXHAUSTED': return '你的揭秘次数已用尽。';
-    case 'GUESS_TOO_SHORT': return '推理内容太短。';
-    default: return '操作未通过校验。';
-  }
-}
+/**
+ * 面向玩家的固定错误文案：**唯一权威表在 server/protocol.ts**（Worker 与 Node 服务器共用）。
+ * 这里只做转发，避免两边各写一份、各自漏码（漏码的后果：玩家只看到"操作未通过校验"，
+ * 真正的失败原因被吞掉 —— AI 出题返回 SCHEMA_INVALID 时就是这样）。
+ */
+export { messageOf } from '../../server/src/protocol.ts';
 
 /** 生成房间码：剔除 I/L/O/0/1 的 6 位字符集。 */
 export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';

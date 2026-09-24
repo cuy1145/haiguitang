@@ -70,8 +70,10 @@ export function reduce(room: CoreRoom, event: CoreEvent, ctx: ReduceCtx): Reduce
     }
 
     case 'READY_SET': {
-      // 对局进行中改动准备态没有意义（也会误导别人），直接忽略
-      if (room.status === 'playing') return { room, events: [] };
+      // 只有"等待开局"才谈得上准备：对局中/已结束收下只会误导别人
+      // （以前只挡 playing，于是 settled 之后点"我准备好了"照样写库、界面还写"可以开局"，
+      //   而房间已经不可能再开局了 —— 见 M1）
+      if (room.status !== 'waiting') return { room, events: [] };
       if (!room.members.some((m) => m.id === event.memberId)) return { room, events: [] };
       if (room.ready.includes(event.memberId) === event.ready) return { room, events: [] };
       const ready = event.ready
@@ -154,6 +156,11 @@ export function reduce(room: CoreRoom, event: CoreEvent, ctx: ReduceCtx): Reduce
       const out = presence.setConn(room, event.memberId, event.conn, ctx.now);
       let next = out.room;
       const events = [...out.events];
+      // 断连即失去"已准备"资格：否则"举手 → 离线 → 回来"会不声不响地恢复成已准备，
+      // 房主据此开局，而这个人其实一直不在（L1）。回来后重新举手即可。
+      if (event.conn === 'disconnected' && next.ready.includes(event.memberId)) {
+        next = withRoom(next, { ready: next.ready.filter((id) => id !== event.memberId) }, ctx.now);
+      }
       const hostMember = getMember(next, next.hostId);
       if (event.memberId === next.hostId && hostMember) {
         if (hostMember.conn === 'disconnected') {

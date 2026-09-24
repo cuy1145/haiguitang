@@ -213,6 +213,30 @@ test('准备状态只在开局前有效，且开局时清零', () => {
   assert.deepEqual(during.room.ready, [], '对局中不再接受准备状态');
 });
 
+test('准备状态：断连即撤销（避免"举手→离线→回来"自动变回已准备）', () => {
+  const now = 1_000_000;
+  let room = makeRoom(now);
+  room = reduce(room, { type: 'READY_SET', memberId: 'm2', ready: true }, ctx(now)).room;
+  assert.deepEqual(room.ready, ['m2']);
+
+  const dropped = reduce(room, { type: 'MEMBER_CONN', memberId: 'm2', conn: 'disconnected' }, ctx(now)).room;
+  assert.deepEqual(dropped.ready, [], '断连要撤掉准备状态');
+  assert.ok(dropped.stateVersion > room.stateVersion, '这是一次真实状态变更（要落库、要广播）');
+
+  const back = reduce(dropped, { type: 'MEMBER_CONN', memberId: 'm2', conn: 'connected' }, ctx(now)).room;
+  assert.deepEqual(back.ready, [], '回来之后必须重新举手，不能自动恢复');
+});
+
+test('准备状态：对局已结束（settled）后举手被忽略', () => {
+  const now = 1_000_000;
+  let room = makeRoom(now);
+  room = reduce(room, { type: 'MATCH_BEGIN', puzzleId: 'p-leak' }, ctx(now)).room;
+  room = { ...room, status: 'settled' };                       // 一局已结束
+  const after = reduce(room, { type: 'READY_SET', memberId: 'm1', ready: true }, ctx(now));
+  assert.deepEqual(after.room.ready, [], '房间已结束就不可能再开局，举手必须无效');
+  assert.equal(after.room.stateVersion, room.stateVersion, '忽略就等于什么都没发生');
+});
+
 // ---------------------------------------------------------------- DTO 泄露防护
 
 test('toPublicPuzzle 不包含汤底与事实点字段（类型层白名单投影）', () => {

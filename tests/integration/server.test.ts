@@ -568,21 +568,20 @@ test('I-23: 未全员准备时开局被拒；全员举手后可开局，开局�
   const p2 = await joinRoom(room.code, '阿伟');
   const guest = await Client.open(booted.url, p2.token, '阿伟');
 
-  // 谁都没举手 → 拒绝
+  // 玩家没举手 → 拒绝（房主自己举不举手不影响这个判断）
   const denied = await host.request({ t: 'start', mode: 'pick' });
   assert.equal(denied.t, 'error');
   assert.equal((denied as unknown as { code: string }).code, 'NOT_ALL_READY');
   assert.equal(roomState(room.roomId).status, 'waiting', '被拒时不得开局');
 
-  // 只有房主举手 → 仍然拒绝（别人还没准备好）
+  // 只有房主举手 → 仍然拒绝（要准备的是玩家，不是房主）
   const readyAck = await host.request({ t: 'ready', ready: true });
   assert.equal(readyAck.t, 'ack');
   const stillDenied = await host.request({ t: 'start', mode: 'pick' });
   assert.equal((stillDenied as unknown as { code: string }).code, 'NOT_ALL_READY');
 
-  // 全员举手 → 通过
+  // 玩家也举手 → 通过
   assert.equal((await guest.request({ t: 'ready', ready: true })).t, 'ack');
-  assert.equal(roomState(room.roomId).ready.length, 2);
   const started = await host.request({ t: 'start', mode: 'pick' });
   assert.equal(started.t, 'ack', `全员准备后应能开局：${JSON.stringify(started)}`);
   await settle();
@@ -591,6 +590,52 @@ test('I-23: 未全员准备时开局被拒；全员举手后可开局，开局�
 
   host.close();
   guest.close();
+});
+
+test('I-23c: 房主不需要举手，也不会被算进"还差几个人"', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const guest = await Client.open(booted.url, p2.token, '阿伟');
+
+  const publicView = async (token: string) => {
+    const res = await fetch(`${booted.url}/api/session`, { headers: { authorization: `Bearer ${token}` } });
+    const body = await res.json() as { view: { room: { readyEligible: number; readyCount: number } } };
+    return body.view.room;
+  };
+
+  // 房主没举手：他自己不该出现在"有资格"名单里
+  let view = await publicView(room.token);
+  assert.equal(view.readyEligible, 1, '只有玩家算有资格，房主不算');
+  assert.equal(view.readyCount, 0);
+
+  // 玩家举手 → 房主不举手也能直接开局（不需要 force）
+  assert.equal((await guest.request({ t: 'ready', ready: true })).t, 'ack');
+  view = await publicView(room.token);
+  assert.equal(view.readyCount, 1);
+  assert.equal(view.readyEligible, 1);
+  const started = await host.request({ t: 'start', mode: 'pick' });
+  assert.equal(started.t, 'ack', '房主不举手也应当能开局，不该要求 force');
+  await settle();
+  assert.equal(roomState(room.roomId).status, 'playing');
+
+  host.close();
+  guest.close();
+});
+
+test('I-23d: 旁观者无法把自己写进准备名单', async () => {
+  const room = await createRoom('房主');
+  const spec = await fetch(`${booted.url}/api/rooms/${room.code}/join`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nickname: '看客', spectator: true }),
+  });
+  assert.equal(spec.ok, true, '旁观者应当能加入');
+  const s = await spec.json() as { token: string };
+  const watcher = await Client.open(booted.url, s.token, '看客');
+  const ack = await watcher.request({ t: 'ready', ready: true });
+  assert.equal(ack.t, 'error', '旁观者不该能举手');
+  assert.equal(roomState(room.roomId).ready.length, 0, '准备名单里不该出现旁观者');
+  watcher.close();
 });
 
 test('I-23b: 房主可 force 开局（有人没准备也能开）', async () => {
@@ -679,6 +724,55 @@ test('I-26b: 既没有平台额度也没填 Key → 明确返回 AI_UNAVAILABLE'
   assert.equal(ack.t, 'error');
   assert.equal((ack as unknown as { code: string }).code, 'AI_UNAVAILABLE');
   host.close();
+});
+
+test('I-27: AI 出题失败时必须说明真实原因（不能只说"操作未通过校验"）', async () => {
+  // 平台额度指向一个"能连上但返回散文"的假上游 → 触发 SCHEMA_INVALID
+  const dir = mkdtempSync(join(tmpdir(), 'ht-aifail-'));
+  const app = await boot({
+    autoTick: false, now, openBrowser: false, webDir: join(dir, 'web'),
+    config: {
+      host: '127.0.0.1', port: 0, devTools: false, logLevel: 'error', dataDir: dir,
+      masterKey: Buffer.alloc(32, 7),
+      ai: { provider: 'test', baseUrl: 'https://ai.invalid/v1', model: 'test-model', key: 'sk-site', timeoutMs: 800, maxRetries: 0, enabled: true },
+      site: { monthlyCallCap: 1000, monthlyCostCap: 0, grantBudgetCalls: 50, grantMaxPerMatch: 2, grantCooldownSec: 600 },
+    },
+  });
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: unknown) => {
+    if (String(url).includes('ai.invalid')) {
+      // 模型不听话：返回一段散文而不是 JSON
+      return new Response(JSON.stringify({ choices: [{ message: { content: '抱歉，我不能创作这类内容。' }, finish_reason: 'stop' }] }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    return original(url as never, init as never);
+  }) as unknown as typeof fetch;
+  try {
+    const res = await fetch(`${app.url}/api/rooms`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ nickname: '房主', preset: 'standard' }),
+    });
+    const room = await res.json() as { token: string };
+    const host = await Client.open(app.url, room.token, '房主');
+    const ack = await host.request({ t: 'create_ai_puzzle' });
+    assert.equal(ack.t, 'error');
+    const code = (ack as unknown as { code: string }).code;
+    const message = String((ack as unknown as { message?: string }).message ?? '');
+    const data = (ack as unknown as { data?: { errors?: Array<{ path: string; reason: string }> } }).data;
+    assert.equal(code, 'SCHEMA_INVALID');
+    assert.ok(!message.includes('操作未通过校验'), `错误文案不能是那句无信息的话：${message}`);
+    assert.match(message, /JSON/, '要告诉房主"模型没按要求返回 JSON"');
+    assert.ok(
+      (data?.errors ?? []).some((e) => e.reason.includes('抱歉')),
+      '要把模型层的原始原因回给房主，否则没法判断是截断、限流还是模型不听话',
+    );
+    host.close();
+  } finally {
+    globalThis.fetch = original;
+    await app.close();
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 });
 
 test('I-12: 进行中的对局不得提前拿到汤底；aborted 也不揭晓', async () => {

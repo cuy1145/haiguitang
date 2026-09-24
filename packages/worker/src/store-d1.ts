@@ -41,6 +41,16 @@ export interface RoomSnapshot {
 
 interface PendingStatement { sql: string; bindings: unknown[] }
 
+/**
+ * 派生写入里"房间当前版本号"的占位符，flush 时替换成真实版本号。
+ *
+ * ⚠️ 这里**不能**像以前那样用"值等于 0"当占位符：绑定里合法的 0 会被一起替换掉。
+ * 真实故障：`questions.late`（0=非临界提交）被写成房间版本号，于是
+ * `publicQuestionLog` 里 `late === true` 永远不成立 ——「上一轮为临界提交」提示直接消失，
+ * 而且"非临界"反而变成了一个像版本号的怪值。
+ */
+const VERSION_PLACEHOLDER = '__ht_state_version__';
+
 /** 题库是代码内常量（对应《阶段1》§1.5"题库可用文件维护"），因此读题库不需要查库。 */
 const PUZZLES: Puzzle[] = seedPuzzles();
 const PUZZLE_BY_ID = new Map(PUZZLES.map((p) => [p.id, p]));
@@ -138,11 +148,20 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
   private readonly savedKeyStates = new Map<string, { state: string; mask: string | null; formerHost: boolean }>();
   private readonly knownQuestions: QuestionRecord[];
   private readonly creds: CredentialRecord[];
+  private readonly db: D1Database;
+  readonly snapshot: RoomSnapshot;
   /** 本房间的 AI 创作题目（存在 rooms.puzzle_json） */
   private customPuzzle: Puzzle | null;
   private readonly matches: RoomSnapshot['match'];
 
-  constructor(private readonly db: D1Database, readonly snapshot: RoomSnapshot) {
+  /**
+   * 注意：刻意**不用** TypeScript 的"参数属性"（`constructor(private readonly db: ...)`）——
+   * Node 的 type-stripping 不支持它，会导致这个文件无法被 `node --test` 直接导入
+   * （Worker 侧因此一直没有测试）。手动赋值保持"零构建即可测试"。
+   */
+  constructor(db: D1Database, snapshot: RoomSnapshot) {
+    this.db = db;
+    this.snapshot = snapshot;
     this.roomId = snapshot.room.id;
     this.expectedVersion = snapshot.room.stateVersion;
     this.knownQuestions = [...snapshot.questions];
@@ -218,7 +237,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.pending.push({
       sql: `INSERT OR IGNORE INTO questions(id, room_id, match_id, turn_seq, member_id, text, answer, reason_code, source, late, matched_json, explain, client_submit_id, created_at)
             SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, null, q.createdAt, this.roomId, 0],
+      bindings: [q.id, q.roomId, q.matchId, q.turnSeq, q.memberId, q.text, q.answer, q.reasonCode, q.source, q.late ? 1 : 0, JSON.stringify(q.matchedFactIds), q.explain ?? null, null, q.createdAt, this.roomId, VERSION_PLACEHOLDER],
     });
   }
 
@@ -227,7 +246,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.pending.push({
       sql: `INSERT OR REPLACE INTO votes(id, room_id, type, status, ballots_json, eligible_json, opened_at, deadline_at, result, tally_json)
             SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [vote.id, roomId, vote.type, vote.status, JSON.stringify(vote.ballots), JSON.stringify(vote.eligibleAtOpen), vote.openedAt, vote.deadlineAt, vote.result ?? null, vote.tally ? JSON.stringify(vote.tally) : null, this.roomId, 0],
+      bindings: [vote.id, roomId, vote.type, vote.status, JSON.stringify(vote.ballots), JSON.stringify(vote.eligibleAtOpen), vote.openedAt, vote.deadlineAt, vote.result ?? null, vote.tally ? JSON.stringify(vote.tally) : null, this.roomId, VERSION_PLACEHOLDER],
     });
   }
 
@@ -249,7 +268,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
   revokeMemberSessions(memberId: string): void {
     this.pending.push({
       sql: 'DELETE FROM sessions WHERE member_id = ? AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)',
-      bindings: [memberId, this.roomId, 0],
+      bindings: [memberId, this.roomId, VERSION_PLACEHOLDER],
     });
   }
 
@@ -258,7 +277,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.pending.push({
       sql: `INSERT OR IGNORE INTO matches(id, room_id, puzzle_id, config_snapshot, turn_order_snapshot, credit_source, started_at)
             SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [id, roomId, puzzleId, JSON.stringify(config), JSON.stringify(turnOrder), creditSource, now, this.roomId, 0],
+      bindings: [id, roomId, puzzleId, JSON.stringify(config), JSON.stringify(turnOrder), creditSource, now, this.roomId, VERSION_PLACEHOLDER],
     });
     this.matchesRuntime = { id, puzzleId, startedAt: now, revealAt: null, result: null };
     return id;
@@ -268,7 +287,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.pending.push({
       sql: `UPDATE matches SET result = ?, reason = ?, ended_at = ?, reveal_at = ? WHERE room_id = ? AND ended_at IS NULL
             AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [result, reason, now, revealAt, roomId, this.roomId, 0],
+      bindings: [result, reason, now, revealAt, roomId, this.roomId, VERSION_PLACEHOLDER],
     });
   }
 
@@ -281,7 +300,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
       bindings: [cred.id, cred.ownerPlayerId, cred.roomId, cred.provider, cred.model, cred.baseUrlHost, cred.state, cred.mask, cred.fingerprint,
         cred.blob ? toBytes(cred.blob.cipher) : null, cred.blob ? toBytes(cred.blob.iv) : null, cred.blob ? toBytes(cred.blob.tag) : null,
         cred.blob ? cred.blob.keyId : null, cred.ttlExpiresAt, cred.suspendReason, cred.destroyedReason, cred.createdAt, cred.lastUsedAt,
-        this.roomId, 0],
+        this.roomId, VERSION_PLACEHOLDER],
     });
   }
 
@@ -314,7 +333,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.pending.push({
       sql: `INSERT OR REPLACE INTO credit_grants(id, room_id, match_id, calls, reason, granted_at, expires_at)
             SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [grantId, roomId, gameId, calls, reason, now, expiresAt, this.roomId, 0],
+      bindings: [grantId, roomId, gameId, calls, reason, now, expiresAt, this.roomId, VERSION_PLACEHOLDER],
     });
     this.bumpUsage('site', now, 0, 0, 0, 1);
   }
@@ -348,7 +367,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     this.pending.push({
       sql: `INSERT OR REPLACE INTO room_events(room_id, seq, kind, payload_json, text, state_version, created_at)
             SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
-      bindings: [this.roomId, seq, kind, JSON.stringify(payload ?? {}), text, stateVersion, at, this.roomId, 0],
+      bindings: [this.roomId, seq, kind, JSON.stringify(payload ?? {}), text, stateVersion, at, this.roomId, VERSION_PLACEHOLDER],
     });
   }
 
@@ -371,11 +390,6 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     const room = this.pendingRoom ?? this.snapshot.room;
     const newVersion = room.stateVersion;
     const keyStates = keyStatesOverride ?? this.savedKeyStates;
-    const guard = (statements: PendingStatement[]): PendingStatement[] => statements.map((s) => ({
-      sql: s.sql,
-      bindings: s.bindings.map((b) => (b === 0 && s.sql.includes('state_version = ?') ? newVersion : b)),
-    }));
-
     const statements: PendingStatement[] = [{
       sql: `UPDATE rooms SET code=?, status=?, pause_reason=?, host_member_id=?, config_json=?, config_version=?, state_version=?,
               event_seq=?, puzzle_id=?, round_no=?, turn_json=?, revealed_facts_json=?, hint_json=?, vote_json=?, ai_json=?,
@@ -410,12 +424,11 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
       });
     }
 
-    // 缓冲的派生写入（占位 0 表示"填入新版本"）
+    // 缓冲的派生写入：只替换**显式哨兵**，不再按"值是 0"猜测（合法 0 曾被误伤）
     for (const s of this.pending) {
-      if (!s.sql.includes('state_version = ?')) { statements.push(s); continue; }
-      statements.push({ sql: s.sql, bindings: s.bindings.map((b) => (b === 0 ? newVersion : b)) });
+      const bindings = s.bindings.map((b) => (b === VERSION_PLACEHOLDER ? newVersion : b));
+      statements.push({ sql: s.sql, bindings });
     }
-    void guard;
     return { statements, newVersion };
   }
 }

@@ -219,9 +219,10 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
     // 计数（非内容）：探索度用"必需事实点"做分母，普通事实点做分子上限
     factTotal: deps.puzzle ? deps.puzzle.facts.length : 0,
     requiredFactTotal: deps.puzzle ? deps.puzzle.facts.filter((f) => f.required).length : 0,
-    // 有资格者 = 非旁观且在线的成员；离线和旁观不该把大家卡在开场前
-    readyEligible: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected').length,
-    readyCount: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected' && room.ready.includes(m.id)).length,
+    // 有资格者 = 非旁观、在线、且**不是房主**的成员（口径必须与 rooms.ts 的 readyEligible 一致）：
+    // 离线和旁观不该把大家卡在开场前；房主本来就不需要给自己举手（M4）
+    readyEligible: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected' && m.id !== room.hostId).length,
+    readyCount: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected' && m.id !== room.hostId && room.ready.includes(m.id)).length,
   };
 }
 

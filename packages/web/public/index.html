@@ -721,7 +721,10 @@ async function sendAction(action, opts = {}) {
       S.error = (data.message || `HTTP ${res.status}`) + detail;
       S.lastFailDetail = data.detail ?? null;      // 供具体功能展示细节（例如坏题检测的逐条原因）
       S.lastFailMessage = data.message || '';
-      render();
+      // 失败响应里同样带着**最新视图**：用上它，别让房主对着陈旧状态再点一次
+      // （典型场景：有人刚加入还没举手 → 开局被拒 → 不刷新视图就得等 1.2 秒轮询后才能再点）
+      if (data.view) applyViewPayload(data);
+      else render();
       return null;
     }
     S.error = '';
@@ -1274,10 +1277,33 @@ function aiBlockHint(code) {
   }
 }
 
-/** 还没准备的"有资格"人数（离线/旁观不阻塞开局）；房主据此决定是否二次确认 */
+/** 还没准备的"有资格"人数（离线/旁观/房主不阻塞开局）；房主据此决定是否二次确认 */
 function startBlockedBy(room) {
   if (!room) return 0;
   return Math.max(0, (room.readyEligible || 0) - (room.readyCount || 0));
+}
+
+/** 还没举手的人（用来在确认框里**点名**，而不是只说"还有 N 人"） */
+function notReadyNames(room) {
+  if (!room) return [];
+  return room.members
+    .filter((m) => m.role !== 'spectator' && m.conn === 'connected' && !m.isHost && !m.ready)
+    .map((m) => m.name);
+}
+
+/**
+ * 开局：有人在没准备时**先点名确认**，确认后带 force 强制开局。
+ *
+ * 以前「选这道」/「投票选汤」这两条路根本没走这里（一个提前 return、一个直接请求），
+ * 于是服务端必然回 NOT_ALL_READY，提示写着"或确认后强制开局"却没有确认框 ——
+ * 房主只能改用另一个按钮，而那个按钮是**随机抽题**，反而丢了选题能力（真实缺陷 S1）。
+ */
+function requestStart(mode, puzzleId) {
+  const missing = notReadyNames(S.view ? S.view.room : null);
+  if (missing.length > 0) {
+    if (!confirm(`${missing.join('、')} 还没点「我准备好了」。仍然开局？`)) return;
+  }
+  request({ t: 'start', mode, ...(puzzleId ? { puzzleId } : {}), ...(missing.length > 0 ? { force: true } : {}) });
 }
 
 /**
@@ -1309,8 +1335,9 @@ function aiPuzzleCard(room, you) {
       ${st && st.error ? `<span class="pill l3">${esc(st.error)}</span>` : ''}
     </div>
     ${st && st.issues && st.issues.length ? `
-      <div class="err" style="margin-top:12px">这题没通过坏题检测（已作废，不会入库）：<br>
-        ${st.issues.slice(0, 6).map((i) => `· ${esc(i.path)}：${esc(i.reason)}`).join('<br>')}</div>` : ''}
+      <div class="err" style="margin-top:12px">${st.issues.some((i) => i.path === 'model') ? '模型这次没能出题' : '这题没通过坏题检测'}（已作废，不会入库）：<br>
+        ${st.issues.slice(0, 6).map((i) => `· ${esc(i.path)}：${esc(i.reason)}`).join('<br>')}
+        ${st.issues.some((i) => i.path === 'model') ? '<br><span class="dim">再点一次「生成新题」通常就好；连续失败可换 deepseek-chat 试试。</span>' : ''}</div>` : ''}
     ${st && st.puzzleId ? `
       <div class="puzzle" style="margin-top:12px">
         <div class="spread"><div class="ptitle">《${esc(st.title)}》</div><span class="pill live">已通过检测</span></div>
@@ -1445,17 +1472,21 @@ function speakerPanel(room, you, turn, counting, left, deadline, total, pct, pha
     </div>
     ${counting ? `<div class="bar${barCls}"><i data-bar data-deadline="${deadline}" data-total="${total}" style="width:${pct}%"></i></div>` : ''}
 
-    ${canReady ? `
+    ${canReady && !you.isHost ? `
     <div class="row" style="margin-top:12px">
       <button class="${iAmReady ? '' : 'primary'}" id="btnReady">${iAmReady ? '✓ 已准备（点一下收回）' : '我准备好了'}</button>
-      <span class="dim">${allReady ? '全员已准备，房主可以开局了' : `还有 ${Math.max(0, eligible - readyCount)} 人没准备（离线/旁观不算数）`}</span>
+      <span class="dim">${eligible === 0 ? '房间只有你一个人，开局由房主决定' : allReady ? '全员已准备，等房主开局' : `还有 ${Math.max(0, eligible - readyCount)} 人没准备（离线/旁观不算数）`}</span>
+    </div>` : ''}
+    ${canReady && you.isHost ? `
+    <div class="row" style="margin-top:12px">
+      <span class="dim">你是房主：不用举手，等大家准备好（或确认后强制）直接开局即可。</span>
     </div>` : ''}
     </div>
 
     <div class="memlist">
     <div class="spread" style="margin-bottom:12px">
       <h3 style="margin:0">玩家 <span class="dim">${room.members.length} 人</span></h3>
-      <span class="pill ${allReady ? 'live' : ''}">已准备 ${readyCount}/${eligible}${allReady ? ' · 可以开局' : ''}</span>
+      <span class="pill ${allReady && eligible > 0 ? 'live' : ''}">已准备 ${readyCount}/${eligible}${allReady && eligible > 0 ? ' · 可以开局' : ''}</span>
     </div>
 
     <div class="hr"></div>
@@ -1474,7 +1505,7 @@ function speakerPanel(room, you, turn, counting, left, deadline, total, pct, pha
           ${m.formerHost ? '<span class="pill">原房主</span>' : ''}
           ${m.keyState === 'suspended' ? '<span class="pill l2">Key 挂起</span>' : ''}
           ${active ? '<span class="pill live">发言中</span>' : ''}
-          ${m.role !== 'spectator' ? (m.ready ? '<span class="pill live">已准备</span>' : '<span class="pill l2">未准备</span>') : '<span class="pill">旁观</span>'}
+          ${m.isHost ? '' : (m.role !== 'spectator' ? (m.ready ? '<span class="pill live">已准备</span>' : '<span class="pill l2">未准备</span>') : '<span class="pill">旁观</span>')}
         </div>
         <div class="meta">
           ${esc(m.stateLabel)} · ${m.score} 分
@@ -1781,7 +1812,10 @@ document.addEventListener('click', async (e) => {
     if (vote) { S.error = ''; request({ t: 'vote', choice: vote }); return; }
     if (votePuzzle) { S.error = ''; request({ t: 'vote', choice: votePuzzle }); return; }
     if (reenable) { S.error = ''; request({ t: 'reenable_key', yes: reenable === 'yes' }); return; }
-    if (pickPuzzle) { S.error = ''; request({ t: 'start', mode: 'pick', puzzleId: pickPuzzle }); return; }
+    // 「选这道」：有人在没准备时要先确认，并带 force —— 否则服务端必然拒绝，
+    // 提示里写着"或确认后强制开局"却根本没有确认框（S1：以前这里直接 return，
+    // 把下面那个带 confirm+force 的分支变成了死代码）
+    if (pickPuzzle) { S.error = ''; requestStart('pick', pickPuzzle); return; }
     switch (id) {
       case 'btnAiPuzzle': {
         S.aiPuzzle = { pending: true };
@@ -1793,8 +1827,11 @@ document.addEventListener('click', async (e) => {
         } else if (res) {
           S.aiPuzzle = null;
         } else {
-          // sendAction 已把错误放进 S.error；这里把"坏题检测逐条原因"也带上
-          const issues = Array.isArray(S.lastFailDetail) ? S.lastFailDetail : (S.lastFailDetail && S.lastFailDetail.issues) || [];
+          // sendAction 已把错误放进 S.error；这里把"坏题检测逐条原因 / 模型层失败原因"也带上
+          const d = S.lastFailDetail;
+          const issues = Array.isArray(d)
+            ? d
+            : (d && (d.issues || d.errors)) || [];
           S.aiPuzzle = { error: S.lastFailMessage || S.error || '生成失败', issues };
         }
         render();
@@ -1803,31 +1840,20 @@ document.addEventListener('click', async (e) => {
       case 'btnAiStart': {
         const st = S.aiPuzzle;
         if (!st || !st.puzzleId) break;
-        const waiting = startBlockedBy(room);
-        if (waiting > 0 && !confirm(`还有 ${waiting} 人没准备，仍然开始？`)) break;
-        request({ t: 'start', mode: 'pick', puzzleId: st.puzzleId, ...(waiting > 0 ? { force: true } : {}) });
+        requestStart('pick', st.puzzleId);
         break;
       }
       case 'btnReady': {
         const me = room ? room.members.find((m) => m.id === (S.view.you ? S.view.you.memberId : '')) : null;
         const next = !(me && me.ready);
         const res = await sendAction({ type: 'ready', ready: next });
-        S.notice = res ? (next ? '已举手：我准备好了' : '已收回准备状态') : S.notice;
+        // 用服务端回报的真实状态（"举手"与"开局"撞在一起时可能被忽略）
+        const real = res && res.data ? res.data.ready === true : next;
+        S.notice = res ? (real ? '已举手：我准备好了' : '已收回准备状态') : S.notice;
         break;
       }
-      case 'btnStart': {
-        const waiting = startBlockedBy(room);
-        if (waiting > 0 && !confirm(`还有 ${waiting} 人没准备，仍然开始？`)) break;
-        request({ t: 'start', mode: 'pick', ...(waiting > 0 ? { force: true } : {}) });
-        break;
-      }
-      case 'pickPuzzle': {
-        const waiting = startBlockedBy(room);
-        if (waiting > 0 && !confirm(`还有 ${waiting} 人没准备，仍然开始？`)) break;
-        request({ t: 'start', mode: 'pick', puzzleId: el.getAttribute('data-pick'), ...(waiting > 0 ? { force: true } : {}) });
-        break;
-      }
-      case 'btnStartVote': request({ t: 'start', mode: 'vote' }); break;
+      case 'btnStart': requestStart('pick'); break;
+      case 'btnStartVote': requestStart('vote'); break;
       case 'btnCopyCode': {
         const okCopy = await copyText(room.code);
         S.notice = okCopy ? `房号 ${room.code} 已复制，发给朋友即可加入` : '复制失败，请手动选中房号复制';

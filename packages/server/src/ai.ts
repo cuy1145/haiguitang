@@ -203,6 +203,36 @@ export class HostService {
 
   // ---------------------------------------------------------------- 出题（AI 创作 / 补事实点）
   /**
+   * 「要求模型返回严格 JSON」+ **自动重试**（判定那条路径早就有重试，出题这条路以前没有）。
+   *
+   * 为什么必须重试：`SCHEMA_INVALID`（模型偶发不按格式输出）/ 429 限流 / 5xx / 网络抖动
+   * 都是**一次性的**，重试一次基本就好了。没有重试的话房主看到的就是"生成失败"，
+   * 只能自己反复点，而且还会多消耗一次平台额度。重试上限沿用 AI_MAX_RETRIES。
+   */
+  private async callJsonWithRetry(
+    cred: { apiKey: string; baseUrl: string; model: string; provider: string },
+    system: string,
+    user: string,
+    maxTokens: number,
+  ): Promise<{ ok: true; raw: unknown; latencyMs: number } | { ok: false; errorClass: AiErrorClass; message: string }> {
+    const maxRetries = Math.max(0, Number(this.deps.config.maxRetries ?? 0));
+    let last: { ok: false; errorClass: AiErrorClass; message: string } = { ok: false, errorClass: 'UNKNOWN', message: '未执行' };
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      const started = Date.now();
+      const res = await this.callJson(cred, system, user, maxTokens);
+      if (res.ok) return res;
+      last = res;
+      const retryable = RETRYABLE.has(res.errorClass);
+      this.deps.logger.warn('json_call_failed', {
+        code: res.errorClass, attempt, retryable, latency_ms: Date.now() - started,
+      });
+      if (!retryable || attempt > maxRetries) break;
+      await new Promise((r) => setTimeout(r, 400 * attempt));   // 小退避：429 时别连着撞
+    }
+    return last;
+  }
+
+  /**
    * 让模型**创作**一道完整的新题（房主的「AI 创作」选项）。
    *
    * 与判定的区别：判定只做"问题 → 事实点映射"，这里要产出题面/汤底/事实点表三件套。
@@ -243,7 +273,8 @@ export class HostService {
       '',
       '现在开始：先在心里选定"一句话真相"，再倒推汤面，最后拆事实点。只输出 JSON。',
     ].filter(Boolean).join('\n');
-    return this.callJson(cred, system, '请创作一道全新的海龟汤。', 1200);
+    // 1800 而不是 1200：一整道题（汤面+汤底+事实点表）用 JSON 输出，被截断就会解析失败
+    return this.callJsonWithRetry(cred, system, '请创作一道全新的海龟汤。', 1800);
   }
 
   /**
@@ -275,7 +306,7 @@ export class HostService {
       '【汤面】', input.surface,
       '【汤底】', input.truth,
     ].join('\n');
-    return this.callJson(cred, system, '请输出事实点表 JSON。', 900);
+    return this.callJsonWithRetry(cred, system, '请输出事实点表 JSON。', 1200);
   }
 
   /**
@@ -318,12 +349,29 @@ export class HostService {
     }
     let data: unknown;
     try { data = await res.json(); } catch { return { ok: false, errorClass: 'SCHEMA_INVALID', message: '响应不是 JSON' }; }
-    const obj = data as { choices?: Array<{ message?: { content?: string; refusal?: string } }> };
+    const obj = data as { choices?: Array<{ message?: { content?: string; refusal?: string }; finish_reason?: string }> };
     if (obj.choices?.[0]?.message?.refusal) return { ok: false, errorClass: 'PROVIDER_REFUSAL', message: '上游拒绝回答（内容策略）' };
     const content = obj.choices?.[0]?.message?.content ?? '';
-    const jsonText = extractJsonObject(content);
+    const finishReason = obj.choices?.[0]?.finish_reason ?? '';
+    const strict = extractJsonObject(content, { repair: false });   // 不做"补括号"的补救
+    const jsonText = strict ?? extractJsonObject(content);
     if (!jsonText) {
-      return { ok: false, errorClass: 'SCHEMA_INVALID', message: `模型没有返回可解析的 JSON（${leakSafePreview(content, '', 120)}）` };
+      // finish_reason 必须带上：length = 被 max_tokens 截断（要提高上限），stop = 模型就是不肯按格式说
+      return {
+        ok: false,
+        errorClass: 'SCHEMA_INVALID',
+        message: `模型没有返回可解析的 JSON（finish_reason=${finishReason || '未知'}）：${leakSafePreview(content, '', 120)}`,
+      };
+    }
+    // 只有靠"补括号"才解析成功、而上游明说被截断 → 这就是截断，别拿一个残缺对象去校验：
+    // 出题 JSON 里 facts 排在最后，被切掉的正是最关键的字段，
+    // 报"缺少 tier=1 的成立事实"会把人引到错误方向（真实故障：审计里那条 ai_puzzle_rejected）。
+    if (!strict && finishReason === 'length') {
+      return {
+        ok: false,
+        errorClass: 'SCHEMA_INVALID',
+        message: `模型输出被 max_tokens 截断（finish_reason=length），JSON 不完整：${leakSafePreview(content, '', 120)}`,
+      };
     }
     try {
       return { ok: true, raw: JSON.parse(jsonText), latencyMs };
@@ -552,7 +600,7 @@ export class HostService {
  * 这里逐级放宽：整体 → 去掉围栏 → 第一个 { 到最后一个 } → 补齐未闭合的引号/括号。
  * 兜底解析出来的对象仍要过 L3 校验（枚举、白名单、越界字段），所以放宽解析不会放宽安全性。
  */
-export function extractJsonObject(raw: string): string | null {
+export function extractJsonObject(raw: string, opts: { repair?: boolean } = {}): string | null {
   const text = String(raw ?? '').trim();
   if (!text) return null;
   const unfenced = text.replace(/```[a-zA-Z]*/g, '').trim();
@@ -564,6 +612,7 @@ export function extractJsonObject(raw: string): string | null {
   const end = unfenced.lastIndexOf('}');
   const slice = end > start ? unfenced.slice(start, end + 1) : unfenced.slice(start);
   if (isJsonObject(slice)) return slice;
+  if (opts.repair === false) return null;              // 只认"结构本来就完整"的输出
   const repaired = repairTruncatedJson(slice);
   if (repaired && isJsonObject(repaired)) return repaired;
   return null;

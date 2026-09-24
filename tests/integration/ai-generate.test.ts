@@ -14,13 +14,13 @@ const { checkAndNormalizePuzzle } = await import('../../packages/core/src/puzzle
 const noopLogger = { info() {}, warn() {}, error() {}, debug() {} } as never;
 const noopStore = { getVerdict: () => null, putVerdict: () => {} } as never;
 
-function makeHost(timeoutMs = 3000) {
+function makeHost(timeoutMs = 3000, maxRetries = 0) {
   return new HostService({
     store: noopStore,
     logger: noopLogger,
     config: {
       enabled: true, provider: 'openai-compatible', baseUrl: 'https://api.deepseek.com',
-      model: 'deepseek-flash', key: 'sk-test', timeoutMs, maxRetries: 0,
+      model: 'deepseek-flash', key: 'sk-test', timeoutMs, maxRetries,
     },
     siteQuotaAllows: () => true,
   });
@@ -57,15 +57,54 @@ const VALID_PUZZLE = JSON.stringify({
 });
 
 test('G1: 出题请求体正确（json_object + DeepSeek 关闭思考模式 + 温度可创作）', () => {
-  const body = buildJsonBody({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' }, 'SYS', 'USER', 1200);
+  const body = buildJsonBody({ baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' }, 'SYS', 'USER', 1800);
   assert.deepEqual(body.response_format, { type: 'json_object' });
   assert.deepEqual(body.thinking, { type: 'disabled' });
-  assert.equal(body.max_tokens, 1200);
+  assert.equal(body.max_tokens, 1800);
   assert.equal(body.temperature, 0.8, '出题需要一点创造性');
   assert.equal((body.messages as Array<{ role: string }>).length, 2);
   // 非 DeepSeek 端点不得带 thinking
   const other = buildJsonBody({ baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }, 'SYS', 'USER', 800);
   assert.equal('thinking' in other, false);
+});
+
+test('G7: 出题失败会自动重试（SCHEMA_INVALID / 限流都是一次性的，别让房主反复手点）', async () => {
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  const replies = ['抱歉，我不能创作这类内容。', VALID_PUZZLE];   // 第一次不按格式，第二次正常
+  globalThis.fetch = (async (url: string, init: { body?: string }) => {
+    calls.push(String(url));
+    const content = replies[Math.min(calls.length - 1, replies.length - 1)]!;
+    return new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: 'stop' }] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+  try {
+    const host = makeHost(3000, 1);        // maxRetries=1
+    const res = await host.generatePuzzle({ apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', provider: 'openai-compatible' });
+    assert.equal(res.ok, true, !res.ok ? `${res.errorClass}: ${res.message}` : '');
+    assert.equal(calls.length, 2, '第一次失败后必须自动重试一次');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('G8: 重试用尽后仍失败 → 错误消息要带 finish_reason（截断 vs 模型不听话，能一眼区分）', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    choices: [{ message: { content: '{"title":"半截' }, finish_reason: 'length' }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+  try {
+    const host = makeHost(3000, 0);
+    const res = await host.generatePuzzle({ apiKey: 'sk-test', baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash', provider: 'openai-compatible' });
+    assert.equal(res.ok, false);
+    if (!res.ok) {
+      assert.equal(res.errorClass, 'SCHEMA_INVALID');
+      assert.match(res.message, /finish_reason=length/, `要能看出是被 max_tokens 截断：${res.message}`);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 test('G2: 模型返回合法 JSON → generatePuzzle 解析成功，且能被校验器接受', async () => {
