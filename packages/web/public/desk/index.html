@@ -617,6 +617,50 @@
   /* 汤面下方的案卷工具条 */
   .toolbar{margin-top:-8px}
   .toolbar .eyebrow{margin-right:4px}
+
+  /* ==========================================================================
+   * 设备手册式弹窗（§2.19）：分组左侧窄索引 + 章节编号
+   * ========================================================================*/
+  .fieldgroup{border-left:2px solid var(--rule-dark);padding:2px 0 2px 12px;margin:14px 0 0}
+  .fieldgroup>h4{margin:0 0 8px;font-size:11px;letter-spacing:.16em;color:var(--brass);text-transform:uppercase}
+  .fieldgroup .fieldrow{border-bottom:1px dotted var(--rule-soft)}
+  .fieldgroup .fieldrow:last-child{border-bottom:0}
+  .modal .chapter{display:flex;align-items:baseline;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--rule-dark);margin-bottom:12px}
+  .modal .chapter .no{font:700 12px/1 var(--font-mono);color:var(--brass);letter-spacing:.1em}
+  .modal .chapter h3{margin:0}
+  /* 开关：短拨杆（不用手机系统风格的大滑块） */
+  .switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+  .switch input{position:absolute;opacity:0;width:0;height:0}
+  .switch .track{width:34px;height:18px;border:1px solid var(--rule-dark);border-radius:2px;background:var(--desk-800);position:relative;transition:background .14s ease}
+  .switch .track::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;background:var(--text-muted);transition:transform .14s ease,background .14s ease}
+  .switch input:checked+.track{background:#2b2a1c;border-color:var(--brass)}
+  .switch input:checked+.track::after{transform:translateX(16px);background:var(--brass-light)}
+  .switch input:focus-visible+.track{outline:2px solid var(--focus);outline-offset:2px}
+  .switch .lab{font-size:12.5px;color:var(--text-secondary)}
+  /* 结案推理的稿纸输入（§2.17）：暖纸 + 淡横线 */
+  .modal .papernote textarea{
+    background-image:repeating-linear-gradient(180deg,transparent 0 27px,rgba(32,37,38,.16) 27px 28px);
+    line-height:28px;min-height:140px;
+  }
+  .reason.solid{background:var(--stamp-no);border-color:var(--stamp-no);color:#fff;font-weight:700}
+  .reason.solid:hover{background:#c05a50;border-color:#c05a50}
+  /* 汤底开封（§2.20）：横向封套，封条从中间向两侧退开；总时长 800ms */
+  .envelope{position:relative;background:var(--desk-800);border:1px solid var(--rule-dark);border-radius:var(--r-xs);padding:16px;overflow:hidden}
+  .envelope .sealband{position:absolute;top:0;bottom:0;left:50%;width:52%;display:flex;transform:translateX(-50%);pointer-events:none}
+  .envelope .sealband i{flex:1 1 50%;background:linear-gradient(180deg,#3a3020,#2a2318);border:1px solid #514328;animation:seal-open .8s ease-out forwards}
+  .envelope .sealband i:first-child{transform-origin:left center}
+  .envelope .sealband i:last-child{transform-origin:right center}
+  @keyframes seal-open{0%{transform:scaleX(1)}55%{transform:scaleX(1)}100%{transform:scaleX(0)}}
+  .envelope .truthsheet{background:var(--paper-100);color:var(--ink-900);border:1px solid var(--paper-300);border-radius:var(--r-xs);padding:18px 20px;position:relative}
+  .envelope .truthsheet h2{font-family:var(--font-story);font-size:24px;margin:6px 0 10px}
+  .envelope .truthsheet .surface{font-family:var(--font-story);font-size:16.5px;line-height:1.95;white-space:pre-wrap}
+  .seal.big{font-size:12px;padding:3px 10px;border-width:2px;letter-spacing:.12em}
+  /* 复盘的"仅房主可见"窄红条（§2.21） */
+  .redbar{background:var(--danger);color:#fff;font-size:11.5px;font-weight:700;letter-spacing:.08em;padding:5px 10px;border-radius:var(--r-xs);margin-bottom:12px}
+  .recap h4{margin:16px 0 6px;font-size:11px;letter-spacing:.16em;color:var(--text-muted);text-transform:uppercase}
+  .recap h4 .no{font-family:var(--font-mono);color:var(--brass);margin-right:6px}
+  .recap .sheet{background:var(--paper-100);color:var(--ink-900);border:1px solid var(--paper-300);border-radius:var(--r-xs);padding:14px 16px}
+  .recap .sheet .surface{font-family:var(--font-story);font-size:16px;line-height:1.9;white-space:pre-wrap}
 </style>
 </head>
 <body>
@@ -681,6 +725,9 @@ const S = {
   keyMask: null,
   keyTest: null,
   configModal: false,
+  roomInfo: false,                       // 顶栏「房间信息与设置」抽屉
+  modalTriggerId: '',                    // 打开弹窗的那个按钮（关闭后把焦点还回去）
+  noticeShown: '',                       // 已经弹过的短提示（同一条不重复弹）
   guessModal: false,
   truthModal: false,                     // "汤底公示"弹窗（被猜出时自动弹一次）
   truthDismissedKey: '',                 // 已经点过"返回"的那一局（避免每轮重渲染又弹出来）
@@ -700,6 +747,41 @@ const serverNow = () => Date.now() + S.serverOffset;
  * ------------------------------------------------------------------------- */
 /** 单条讨论消息长度上限，与服务端 `PLATFORM.chatMaxLen` 对齐（这里只用于输入框提示与字数显示） */
 const CHAT_MAXLEN = 500;
+/**
+ * 短提示：窄收据从右上角滑入，4.6 秒后收起（§2.23）。
+ * 容器 #toasts 在 #app 之外，所以整页重渲染不会把它冲掉；左侧细线的颜色表示性质。
+ */
+function pushToast(text, kind = 'ok') {
+  const box = document.getElementById('toasts');
+  if (!box || !text) return;
+  const el = document.createElement('div');
+  el.className = `toast${kind === 'err' ? ' err' : kind === 'warn' ? ' warn' : ''}`;
+  el.textContent = text;
+  box.appendChild(el);
+  while (box.children.length > 4) box.removeChild(box.firstChild);
+  setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 4600);
+}
+
+/**
+ * 关闭"最上面那一层"（§23：Esc 关弹窗）。返回真值表示确实关掉了什么。
+ * 顺序与视觉层级一致：复盘 → Key → 参数 → 猜底 → 汤底 → 房间信息 → 窄屏讨论面板。
+ */
+function closeTopModal() {
+  if (S.recap) { S.recap = null; return true; }
+  if (S.keyModal) { S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; return true; }
+  if (S.configModal) { S.configModal = false; return true; }
+  if (S.guessModal) { S.guessModal = false; delete S.drafts.guessText; return true; }
+  if (S.truthModal) {
+    const r = S.view ? S.view.room : null;
+    S.truthModal = false;
+    if (r && r.truth) S.truthDismissedKey = `${r.id}:${r.roundNo}`;   // 关掉就别再自动弹
+    return true;
+  }
+  if (S.roomInfo) { S.roomInfo = false; return true; }
+  if (S.chatOpen) { S.chatOpen = false; return true; }
+  return false;
+}
+
 function countChatUnread() {
   const meId = S.view && S.view.you ? S.view.you.memberId : '';
   S.chatUnread = S.chat.filter((m) => (m.chatSeq || 0) > S.chatReadSeq && m.memberId !== meId).length;
@@ -1265,7 +1347,7 @@ function stateFingerprint() {
     : null;
   return JSON.stringify([
     S.screen, S.connected, S.notice, S.error, S.hint,
-    S.configModal, S.guessModal, S.keyModal, S.truthModal,
+    S.configModal, S.guessModal, S.keyModal, S.truthModal, S.roomInfo,
     // 讨论区：消息条数与未读数进指纹（否则新消息不会触发重渲染）；草稿刻意不进（打字不重渲染）；
     // chatOpen 进指纹（打开/关闭面板要立刻重画）；chatPinned 不进（只看不重画，改了由滚动处理器显式 render）
     S.chat.length, S.chatUnread, S.chatOpen, S.railTab,
@@ -1280,6 +1362,13 @@ function stateFingerprint() {
 
 function render(force = false) {
   const app = $('#app');
+  // 短提示（§2.23）：notice 表示"刚发生了什么"，像一张窄收据从右上角滑入后自动收起。
+  // 持续状态（连接中断 / AI 异常 / 投票 / 移交）走各自区域的常驻提示，不走这里；
+  // 入口页（会话失效、房间已清理）也仍然内联显示，不放 toast。
+  if (S.notice && S.notice !== S.noticeShown && S.screen === 'room') {
+    S.noticeShown = S.notice;
+    pushToast(S.notice, 'ok');
+  }
   if (!app.firstChild) force = true;                 // 首次渲染必须画
   if (!force && isBusy()) {
     S.renderPending = true;
@@ -1384,6 +1473,20 @@ function render(force = false) {
       roomChip.hidden = true;
       roomChip.onclick = null;
     }
+  }
+
+  // 弹窗焦点（§23）：打开时把焦点送进弹窗；关闭后把焦点还给触发它的按钮
+  const dlg = document.querySelector('.overlay .modal');
+  if (dlg) {
+    if (!dlg.contains(document.activeElement)) {
+      const first = dlg.querySelector('input:not([type=hidden]),textarea,select,button');
+      if (first && first.focus) first.focus();
+    }
+    S.modalWasOpen = true;
+  } else if (S.modalWasOpen) {
+    S.modalWasOpen = false;
+    const back = S.modalTriggerId ? document.getElementById(S.modalTriggerId) : null;
+    if (back && back.focus) back.focus();
   }
 
   // 轮到你/没轮到你：标题栏提醒（只在自己需要动手时闪）
@@ -1648,6 +1751,7 @@ function viewRoom() {
     ${composerCard(room, you, turn, myTurn, draft)}
   </div>
 
+  ${S.roomInfo ? roomInfoModal(room, you) : ''}
   ${S.configModal ? cfgModal(room) : ''}
   ${S.guessModal ? guessModal(v) : ''}
   ${(S.truthModal && room.truth) ? truthModal(room, you) : ''}
@@ -2174,40 +2278,65 @@ function cfgModal(room) {
   const c = room.config;
   // 草稿优先：用户在弹窗里改过的值即使被重渲染也要留住（这些控件没有 id，走 cfg: 前缀）
   const cur = (k) => (S.drafts[`cfg:${k}`] !== undefined ? S.drafts[`cfg:${k}`] : c[k]);
-  const num = (k, label, min, max) => `<div class="field"><label>${label}</label><input type="number" data-cfg="${k}" value="${cur(k)}" min="${min}" max="${max}"></div>`;
-  const bool = (k, label) => `<div class="field"><label>${label}</label><div><input type="checkbox" data-cfg="${k}" ${cur(k) ? 'checked' : ''}></div></div>`;
-  return `<div class="overlay"><div class="modal">
-    <div class="spread"><h3 style="margin:0">对局参数（config_version ${room.configVersion}）</h3><button id="btnCfgClose">关闭</button></div>
-    <p class="dim">开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。</p>
-    <div class="field"><label>提示系统（默认关闭 · 关闭时任何人都拿不到提示）</label>
-      <div class="row"><input type="checkbox" data-cfg="hintsEnabled" style="width:auto" ${cur('hintsEnabled') ? 'checked' : ''}>
-        <span class="dim">打开后下面几项提示配额才会生效</span></div></div>
-    ${num('perTurnSec', '每人提问时长（秒）', 15, 600)}
-    ${num('graceSec', '超时宽限（秒）', 0, 30)}
-    <div class="field"><label>多人的提问顺序（下一局生效）</label>
-      <select data-cfg="turnOrderMode">
-        <option value="join" ${cur('turnOrderMode') === 'join' ? 'selected' : ''}>顺序（按加入顺序，默认）</option>
-        <option value="random" ${cur('turnOrderMode') === 'random' ? 'selected' : ''}>乱序（开局洗一次牌）</option>
+  const row = (k, label, min, max, hint) => `
+    <div class="fieldrow">
+      <span class="lab">${label}</span>
+      <input type="number" class="mono" data-cfg="${k}" value="${cur(k)}" min="${min}" max="${max}" aria-label="${label}">
+      ${hint ? `<span class="hint">${hint}</span>` : ''}
+    </div>`;
+  const sel = (k, label, options, hint) => `
+    <div class="fieldrow">
+      <span class="lab">${label}</span>
+      <select data-cfg="${k}" aria-label="${label}">
+        ${options.map(([v, t]) => `<option value="${v}" ${String(cur(k)) === v ? 'selected' : ''}>${t}</option>`).join('')}
       </select>
-      <div class="dim">乱序是**开局时打乱一次**，整局按这个顺序轮转（不是每轮重洗）；改了要等下一局开局才生效。</div></div>
-    ${num('guessEveryRounds', '揭秘间隔（每 N 轮）', 1, 10)}
-    ${num('guessMaxPerMember', '每人揭秘次数', 1, 10)}
-    ${num('hintQuotaPerMember', '每人提示次数（T1+T2）', 0, 10)}
-    ${num('hintTier3Max', 'T3 提示（每局共享）', 0, 3)}
-    ${num('hintCooldownSec', '提示冷却（秒）', 0, 600)}
-    ${num('maxRounds', '总回合上限（轮）', 1, 60)}
-    <div class="field"><label>对局中进房的人怎么处理</label>
-      <select data-cfg="midJoinPolicy">
-        <option value="seated_next_round" ${cur('midJoinPolicy') === 'seated_next_round' ? 'selected' : ''}>排队待入席（默认）：申请后从下一轮起上桌</option>
-        <option value="spectator_only" ${cur('midJoinPolicy') === 'spectator_only' ? 'selected' : ''}>只能旁观（本局不接受上桌）</option>
-        <option value="reject" ${cur('midJoinPolicy') === 'reject' ? 'selected' : ''}>拒绝加入（等下一局）</option>
-      </select></div>
-    ${num('maxPendingSeats', '待入席排队上限（人）', 0, 10)}
-    ${num('candidateCount', '候选题数量', 3, 5)}
-    ${num('voteDurationSec', '投票时长（秒）', 30, 600)}
-    ${bool('timeoutSkip', '超时自动跳过')}
-    ${bool('idleSkip', '跳过挂机成员的回合')}
-    <div class="row" style="margin-top:10px"><button class="primary" id="btnCfgApply">应用</button></div>
+      ${hint ? `<span class="hint">${hint}</span>` : ''}
+    </div>`;
+  const sw = (k, label, hint) => `
+    <div class="fieldrow">
+      <label class="switch"><input type="checkbox" data-cfg="${k}" ${cur(k) ? 'checked' : ''}><span class="track"></span><span class="lab">${label}</span></label>
+      ${hint ? `<span class="hint">${hint}</span>` : ''}
+    </div>`;
+  return modalShell('SETTINGS / 01', '对局参数', `
+    <p class="dim">开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。当前 config_version ${room.configVersion}。</p>
+    <div class="fieldgroup"><h4>01 · 回合</h4>
+      ${row('perTurnSec', '每人提问时长（秒）', 15, 600)}
+      ${row('graceSec', '超时宽限（秒）', 0, 30)}
+      ${sel('turnOrderMode', '提问顺序（下一局生效）', [['join', '顺序（按加入顺序，默认）'], ['random', '乱序（开局洗一次牌）']], '乱序是开局时打乱一次，整局按这个顺序轮转；改了要等下一局开局才生效。')}
+      ${row('maxRounds', '总回合上限（轮）', 1, 60)}
+      ${sw('timeoutSkip', '超时自动跳过')}
+      ${sw('idleSkip', '跳过挂机成员的回合')}
+    </div>
+    <div class="fieldgroup"><h4>02 · 猜汤底</h4>
+      ${row('guessEveryRounds', '揭秘间隔（每 N 轮）', 1, 10)}
+      ${row('guessMaxPerMember', '每人揭秘次数（0 = 不限）', 0, 10)}
+      ${row('guessCooldownSec', '全桌共用冷却（秒，0 = 不限）', 0, 1800, '任何人猜一次都会重新计时；冷却期间全桌都不能再猜。')}
+    </div>
+    <div class="fieldgroup"><h4>03 · 提示</h4>
+      ${sw('hintsEnabled', '开启提示系统', '默认关闭；关闭时任何人都拿不到提示。')}
+      ${row('hintQuotaPerMember', '每人提示次数（T1+T2）', 0, 10)}
+      ${row('hintTier3Max', 'T3 提示（每局共享）', 0, 3)}
+      ${row('hintCooldownSec', '提示冷却（秒）', 0, 600)}
+    </div>
+    <div class="fieldgroup"><h4>04 · 选题与进房</h4>
+      ${row('candidateCount', '候选题数量', 3, 5)}
+      ${row('voteDurationSec', '投票时长（秒）', 30, 600)}
+      ${sel('midJoinPolicy', '对局中进房的人', [['seated_next_round', '排队待入席（默认）：申请后从下一轮起上桌'], ['spectator_only', '只能旁观（本局不接受上桌）'], ['reject', '拒绝加入（等下一局）']])}
+      ${row('maxPendingSeats', '待入席排队上限（人）', 0, 10)}
+    </div>`,
+    `<button id="btnCfgClose">关闭</button>
+     <span class="row"><button class="primary" id="btnCfgApply">应用参数</button></span>`);
+}
+
+/**
+ * 弹窗外壳（§2.26）：遮罩纯黑 68%、深色实底、章节编号、底部操作栏固定（主操作在右、关闭在左）。
+ * role/aria-modal 让读屏器知道这是对话框；Esc 关闭与焦点回收在 keydown 里统一处理。
+ */
+function modalShell(chapter, title, body, foot, extraClass = '') {
+  return `<div class="overlay"><div class="modal${extraClass ? ' ' + extraClass : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="chapter"><span class="no">${esc(chapter)}</span><h3>${esc(title)}</h3></div>
+    ${body}
+    ${foot ? `<div class="foot">${foot}</div>` : ''}
   </div></div>`;
 }
 
@@ -2216,17 +2345,18 @@ function guessModal() {
   const room = S.view ? S.view.room : null;
   const cdLeft = room && room.guessCooldownUntil ? Math.max(0, room.guessCooldownUntil - serverNow()) : 0;
   const cdSec = room && room.config ? room.config.guessCooldownSec : 0;
-  return `<div class="overlay"><div class="modal">
-    <div class="spread"><h3 style="margin:0">猜汤底（随时可以猜）</h3><button id="btnGuessCancel">返回</button></div>
-    <p class="dim">判定尺度：关键事实点全部命中 + 表达出因果链 = 命中；命中 ≥ 60% = 接近（只告诉你数量，不告诉你命中了哪几条）；否则未命中。</p>
-    <p class="dim">猜汤底是<b>所有人共用一个冷却</b>${cdSec > 0 ? `（当前设置 ${cdSec} 秒）` : '（当前设置：不限）'}：
-      谁先猜谁开始计时，冷却期间房间里谁都不能再猜。${cdLeft > 0 ? `现在还剩 <b data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b>。` : ''}</p>
-    <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样">${esc(text)}</textarea>
-    <div class="row" style="margin-top:10px">
-      <button class="primary" id="btnGuessSubmit" ${cdLeft > 0 ? 'disabled' : ''}>${cdLeft > 0 ? '冷却中…' : '提交推理 · 揭晓'}</button>
-      <span class="dim">猜中即当场揭晓汤底，所有人都会看到</span>
-    </div>
-  </div></div>`;
+  const cooling = cdLeft > 0;
+  return modalShell('FINAL THEORY / 结案推理', '猜汤底', `
+    <p class="dim">判定尺度：关键事实点全部命中 + 表达出因果链 = <b>命中</b>；命中 ≥ 60% = <b>接近</b>（只回数量，不告诉你命中了哪几条）；否则未命中。</p>
+    <p class="dim">猜汤底是<b>所有人共用一个冷却</b><span class="mono">${cdSec > 0 ? `（当前设置 ${cdSec} 秒）` : '（当前设置：不限）'}</span>：
+      谁先猜谁开始计时，冷却期间房间里谁都不能再猜。${cooling ? `现在还剩 <b class="mono" data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b>。` : ''}</p>
+    <div class="papernote" style="margin-top:12px">
+      <div class="eyebrow" style="color:var(--ink-600);margin-bottom:6px">STATEMENT / 结案陈词</div>
+      <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样">${esc(text)}</textarea>
+    </div>`,
+    `<button id="btnGuessCancel">返回</button>
+     <span class="row">${cooling ? `<span class="mono dim">冷却中 <b data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b></span>` : ''}
+     <button class="reason${cooling ? '' : ' solid'}" id="btnGuessSubmit" ${cooling ? 'disabled' : ''}>提交推理 · 揭晓</button></span>`);
 }
 
 /**
@@ -2235,24 +2365,30 @@ function guessModal() {
  */
 function truthCard(room, you) {
   return `
-  <div class="card truthcard">
-    <div class="spread"><h3 style="margin:0">TRUTH / 汤底公示</h3><span class="seal yes">本局已被猜出</span></div>
-    <div class="puzzle" style="margin-top:10px"><div class="surface">${esc(room.truth)}</div></div>
-    <div class="dim" style="margin-top:8px">${esc(room.truthNote || '')}${you.isHost ? ' 想再来一局，点下面的「回到选题」。' : ' 等房主开下一局。'}</div>
+  <div class="truthcard card hd">
+    <div class="spread"><span class="eyebrow" style="color:var(--ink-600)">TRUTH / <b style="color:var(--ink-900)">汤底公示</b></span><span class="seal yes">本局已被猜出</span></div>
+    <div class="surface" style="margin-top:10px">${esc(room.truth)}</div>
+    <div class="dim" style="margin-top:10px;color:var(--ink-600)">${esc(room.truthNote || '')}${you.isHost ? ' 想再来一局，点下面的「回到选题」。' : ' 等房主开下一局。'}</div>
   </div>`;
 }
 
-/** 揭晓弹窗：被猜出时自动弹一次；「返回」后回到页面（房主可顺手开下一局） */
+/**
+ * 揭晓弹窗（§2.20）：唯一的仪式时刻 —— 横向封套，封条从中间向两侧退开，露出暖纸汤底。
+ * 动画 800ms；`prefers-reduced-motion` 下由 CSS 直接显示最终状态（不留白）。
+ */
 function truthModal(room, you) {
-  return `<div class="overlay"><div class="modal">
-    <div class="spread"><h3 style="margin:0">汤底揭晓</h3><button id="btnTruthClose">返回</button></div>
-    <p class="dim">有人把真相拼出来了 —— 汤底现在对房间里的所有人公开。${you.isHost ? '点「返回」或下面的按钮都能回到选题，接着选下一道题。' : '房主会决定下一道题。'}</p>
-    <div class="puzzle"><div class="surface">${esc(room.truth)}</div></div>
-    <div class="row" style="margin-top:12px">
-      ${you.isHost ? '<button class="primary" id="btnTruthNext">回到选题（下一局）</button>' : ''}
-      <button id="btnTruthClose2">返回</button>
-    </div>
-  </div></div>`;
+  return modalShell('SEALED / 开封', '汤底', `
+    <p class="dim">有人把真相拼出来了 —— 汤底现在对房间里的所有人公开。${you.isHost ? '点「返回」或下面的按钮都能回到选题。' : '房主会决定下一道题。'}</p>
+    <div class="envelope" style="margin-top:12px">
+      <div class="sealband" aria-hidden="true"><i></i><i></i></div>
+      <div class="truthsheet">
+        <div class="spread"><span class="eyebrow" style="color:var(--ink-600)">SOLVED / 已解开</span><span class="seal yes big">已解开</span></div>
+        <h2>汤底</h2>
+        <div class="surface">${esc(room.truth)}</div>
+      </div>
+    </div>`,
+    `<button id="btnTruthClose">返回桌面</button>
+     ${you.isHost ? '<button class="primary" id="btnTruthNext">回到选题（下一局）</button>' : '<span></span>'}`);
 }
 
 /** 默认提供方（服务端 /api/config 下发，取不到就用 DeepSeek 官方端点兜底） */
@@ -2288,44 +2424,49 @@ function keyModal() {
   const model = S.drafts.keyModel ?? defaultModel();
   const key = S.drafts.keyValue ?? '';
   const vaultOff = Boolean(S.config) && S.config.vaultEnabled === false;
-  return `<div class="overlay"><div class="modal">
-    <div class="spread"><h3 style="margin:0">房主自备 API Key</h3><button id="btnKeyClose">关闭</button></div>
-    ${vaultOff ? `<div class="err">服务端未配置 <code>MASTER_KEY</code>：保险箱处于关闭状态，**不会**以任何形式保存你的 Key（也绝不退化成明文存储），
+  return modalShell('DEVICE / 02', '房主自备 API Key', `
+    ${vaultOff ? `<div class="err">服务端未配置 <code>MASTER_KEY</code>：保险箱处于关闭状态，<b>不会</b>以任何形式保存你的 Key（也绝不退化成明文存储），
       所以「连接测试并提交」暂时不可用。<br>管理员在项目目录执行一次即可启用：
       <code>npx wrangler secret put MASTER_KEY</code>（值用 32 字节随机数的 base64）。<br>
       现在你仍然可以点下面的「测试连接（不入库）」验证 Key 是否有效。</div>` : ''}
-    <p class="dim">提交后服务端会先做一次连接测试：通过才加密入库并锁定生效（此后调用失败**不会**自动改用平台额度）；
+    <p class="dim">提交后服务端会先做一次连接测试：通过才加密入库并锁定生效（此后调用失败<b>不会</b>自动改用平台额度）；
       页面只显示掩码，任何人都无法回读原文。</p>
-    <div class="field"><label>提供方</label>
-      <select id="keyProvider">
-        ${Object.entries(PROVIDERS).map(([k, p]) => `<option value="${k}" ${providerOf() === k ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
-      </select></div>
-    <div class="dim" id="keyProviderNote">${esc(PROVIDERS[providerOf()].note)}</div>
-    <div class="field"><label>Base URL</label>
-      <input id="keyBase" name="ht-host-endpoint" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
-        spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
-        value="${esc(base)}" placeholder="https://api.deepseek.com"></div>
-    <div class="dim">实际请求地址（自动补 <code>/chat/completions</code>，路径会保留）：<code id="keyUrl">${esc(completionsUrl(base))}</code></div>
-    <div class="field"><label>模型名</label>
-      <input id="keyModel" name="ht-host-model" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
-        spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
-        value="${esc(model)}" placeholder="deepseek-flash"></div>
-    <div class="field"><label>API Key</label>
-      <input id="keyValue" name="ht-host-credential" type="text" class="secret" autocomplete="new-password"
-        autocapitalize="off" autocorrect="off" spellcheck="false" data-form-type="other"
-        data-lpignore="true" data-1p-ignore="true" value="${esc(key)}" placeholder="sk-..."></div>
-    <div class="row">
-      <button id="btnKeyToggle">显示 / 隐藏</button>
-      <span class="dim">换提供方会自动填好 Base URL 与模型名，之后仍可手动修改。</span>
+    <div class="fieldgroup"><h4>接线表</h4>
+      <div class="fieldrow"><span class="lab">提供方</span>
+        <select id="keyProvider" aria-label="提供方">
+          ${Object.entries(PROVIDERS).map(([k, p]) => `<option value="${k}" ${providerOf() === k ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}
+        </select>
+        <span class="hint" id="keyProviderNote">${esc(PROVIDERS[providerOf()].note)}</span>
+      </div>
+      <div class="fieldrow"><span class="lab">Base URL</span>
+        <input id="keyBase" class="mono" name="ht-host-endpoint" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+          spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
+          value="${esc(base)}" placeholder="https://api.deepseek.com" aria-label="Base URL">
+        <span class="hint">实际请求地址（自动补 <code>/chat/completions</code>，路径会保留）：<code id="keyUrl">${esc(completionsUrl(base))}</code></span>
+      </div>
+      <div class="fieldrow"><span class="lab">模型名</span>
+        <input id="keyModel" class="mono" name="ht-host-model" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+          spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true"
+          value="${esc(model)}" placeholder="deepseek-flash" aria-label="模型名">
+      </div>
+      <div class="fieldrow"><span class="lab">API Key</span>
+        <input id="keyValue" class="mono secret" name="ht-host-credential" type="text" autocomplete="new-password"
+          autocapitalize="off" autocorrect="off" spellcheck="false" data-form-type="other"
+          data-lpignore="true" data-1p-ignore="true" value="${esc(key)}" placeholder="sk-..." aria-label="API Key">
+        <span class="hint">只留在本页内存里，不会写入浏览器存储；掩码由服务端下发。</span>
+      </div>
     </div>
-    ${S.keyMask ? `<div class="dim" style="margin-top:8px">当前掩码：<span class="mask">${esc(S.keyMask)}</span></div>` : ''}
-    <div id="keyTestBox">${keyTestBox()}</div>
     <div class="row" style="margin-top:10px">
-      <button id="btnKeyTest">测试连接（不入库）</button>
-      <button class="primary" id="btnKeySubmit" ${vaultOff ? 'disabled title="服务端未配置 MASTER_KEY"' : ''}>连接测试并提交</button>
-      <button class="danger" id="btnKeyRevoke" ${hasOwnKey() ? '' : 'disabled'}>撤销并销毁</button></div>
-    <div class="dim" style="margin-top:8px">测试与提交失败都不会保存任何东西。Key 只留在本页内存里，不会写入浏览器存储。</div>
-  </div></div>`;
+      <button id="btnKeyToggle">显示 / 隐藏</button>
+      ${S.keyMask ? `<span class="dim">当前掩码：<span class="mask">${esc(S.keyMask)}</span></span>` : ''}
+    </div>
+    <div id="keyTestBox">${keyTestBox()}</div>`,
+    `<button id="btnKeyClose">关闭</button>
+     <span class="row">
+       <button id="btnKeyTest">测试连接（不入库）</button>
+       <button class="danger" id="btnKeyRevoke" ${hasOwnKey() ? '' : 'disabled'}>撤销并销毁</button>
+       <button class="primary" id="btnKeySubmit" ${vaultOff ? 'disabled title="服务端未配置 MASTER_KEY"' : ''}>连接测试并提交</button>
+     </span>`);
 }
 
 /** 房主是否已有一把生效中的 Key（本会话提交过，或服务端视图里带掩码）——决定「撤销并销毁」是否可点 */
@@ -2381,23 +2522,69 @@ function hintForReason(code) {
   }
 }
 
+/**
+ * 复盘（§2.21）：像一份结案档案 —— 顶部结论，汤底用暖纸，提问用正式记录格式，成员用名册表格。
+ * 顶部一条固定的红色窄条提示"仅房主可见"，不占正文空间。
+ */
 function recapModal(recap) {
-  return `<div class="overlay"><div class="modal">
-    <div class="spread"><h3 style="margin:0">复盘 · ${esc(recap.puzzle.title)}</h3><button id="btnRecapClose">关闭</button></div>
-    <div class="row"><span class="pill">${esc(recap.result?.result || '')}</span><span class="pill">${esc(recap.result?.reason || '')}</span>
-      <span class="pill">共 ${recap.questions.length} 次提问</span></div>
-    ${recap.canRevealTruth ? `<h3 style="margin-top:12px">汤底揭晓</h3><p>${esc(recap.truth || '')}</p>`
-      : `<div class="notice" style="margin-top:12px">${esc(recap.truthNote || '本局不予揭晓汤底')}</div>`}
-    <h3>完整提问记录</h3>
-    <table><tr><th>#</th><th>成员</th><th>提问</th><th>判定</th><th>来源</th></tr>
-      ${recap.questions.map((q) => `<tr><td>${q.turnSeq}</td><td>${esc(q.memberName)}</td><td>${esc(q.text)}</td>
-        <td>${answerLabel(q.answer)}${q.reasonCode && q.reasonCode !== 'NONE' ? ` <span class="dim">(${esc(q.reasonCode)})</span>` : ''}</td>
-        <td>${esc(q.source)}</td></tr>`).join('')}</table>
-    <h3 style="margin-top:12px">计分</h3>
-    <table><tr><th>成员</th><th>得分</th><th>被跳过</th><th>揭秘次数</th></tr>
-      ${recap.members.map((m) => `<tr><td>${esc(m.name)}</td><td>${m.score}</td><td>${m.skipStreak}</td><td>${m.guessesUsed}</td></tr>`).join('')}</table>
-    <div class="dim" style="margin-top:8px">复盘不含任何 Key；请勿分享给将要玩这道题的人。</div>
-  </div></div>`;
+  return modalShell('CASE FILE / 结案档案', `复盘 · ${recap.puzzle.title}`, `
+    <div class="redbar">仅房主可见 · 含汤底与事实点，请勿分享给将要玩这道题的人</div>
+    <div class="attrs">
+      <span>结果 <b>${esc(recap.result?.result || '—')}</b></span>
+      <span>${esc(recap.result?.reason || '')}</span>
+      <span>共 <span class="mono">${recap.questions.length}</span> 次提问</span>
+    </div>
+    <div class="recap">
+      <h4><span class="no">01</span>汤底</h4>
+      ${recap.canRevealTruth
+        ? `<div class="sheet"><div class="surface">${esc(recap.truth || '')}</div></div>`
+        : `<div class="notice warn">${esc(recap.truthNote || '本局不予揭晓汤底')}</div>`}
+      <h4><span class="no">02</span>完整提问记录</h4>
+      <table><tr><th>#</th><th>成员</th><th>提问</th><th>判定</th><th>来源</th></tr>
+        ${recap.questions.map((q) => `<tr><td class="mono">${q.turnSeq}</td><td>${esc(q.memberName)}</td><td>${esc(q.text)}</td>
+          <td><span class="seal ${esc(q.answer)}">${answerLabel(q.answer)}</span>${q.reasonCode && q.reasonCode !== 'NONE' ? ` <span class="dim mono">${esc(q.reasonCode)}</span>` : ''}</td>
+          <td class="mono dim">${esc(q.source)}</td></tr>`).join('')}</table>
+      <h4><span class="no">03</span>成员数据</h4>
+      <table><tr><th>成员</th><th>得分</th><th>被跳过</th><th>揭秘次数</th></tr>
+        ${recap.members.map((m) => `<tr><td>${esc(m.name)}</td><td class="mono">${m.score}</td><td class="mono">${m.skipStreak}</td><td class="mono">${m.guessesUsed}</td></tr>`).join('')}</table>
+    </div>`,
+    `<span class="dim">复盘不含任何 Key</span><button id="btnRecapClose">关闭</button>`);
+}
+
+/**
+ * 顶栏「房间信息与设置」抽屉（§2.7 / §5.2）：房间元数据、额度铭牌、房主入口都收在这里，
+ * 不再占用主内容区（普通玩家看不到房主操作）。
+ */
+function roomInfoModal(room, you) {
+  const mask = hostKeyMask(room);
+  const blocked = room.ai.state === 'BLOCKED';
+  return modalShell('ROOM / 03', '房间信息与设置', `
+    <div class="fieldgroup"><h4>房间</h4>
+      <div class="fieldrow"><span class="lab">房号</span><span class="mono" style="letter-spacing:.18em">${esc(room.code)}</span></div>
+      <div class="fieldrow"><span class="lab">状态</span><span>${esc(roomStatusLabel(room))}</span></div>
+      <div class="fieldrow"><span class="lab">进度</span><span class="mono">第 ${room.roundNo} 轮 · 本房间第 ${room.matchNo || 0} 局</span></div>
+      <div class="fieldrow"><span class="lab">邀请</span><span class="row"><button id="btnCopyCode" class="ghost">复制房号</button><button id="btnCopyInvite" class="ghost">复制邀请链接</button></span></div>
+    </div>
+    <div class="fieldgroup"><h4>设备</h4>
+      <div class="fieldrow"><span class="lab">AI 汤主</span>
+        <span class="row"><i class="lamp${blocked ? ' off' : ''}"></i>${blocked ? '异常 · 对局已暂停' : '正常'}${blocked && room.ai.reasonCode ? ` <span class="mono dim">${esc(room.ai.reasonCode)}</span>` : ''}</span></div>
+      <div class="fieldrow"><span class="lab">额度来源</span><span>${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'} <span class="mono dim">${esc(room.credit.reason)}</span></span></div>
+      <div class="fieldrow"><span class="lab">房主 Key</span><span>${mask ? `<span class="mask">${esc(mask)}</span>` : '<span class="dim">未配置</span>'}</span></div>
+    </div>
+    ${you.isHost ? `
+    <div class="fieldgroup"><h4>房主操作</h4>
+      <div class="fieldrow"><span class="lab">对局</span><span class="row">
+        ${room.status === 'waiting' ? '<button class="primary" id="btnStart">开局（随机一道）</button><button id="btnStartVote">投票选汤</button>' : ''}
+        ${room.turn.phase === 'ACTIVE' ? '<button id="btnSkip">跳过本轮</button>' : ''}
+        ${room.status === 'settled' ? '<button class="primary" id="btnNextRound">回到选题（下一局）</button><button id="btnRecap">查看复盘</button>' : ''}
+      </span></div>
+      <div class="fieldrow"><span class="lab">参数与凭据</span><span class="row">
+        <button id="btnCfg">对局参数</button>
+        <button id="btnKey">${mask ? '更换 / 撤销 Key' : '接通 AI 汤主'}</button>
+      </span></div>
+    </div>` : ''}`,
+    `<button id="btnRoomInfoClose">关闭</button>
+     <button class="danger" id="btnLeave">离开房间</button>`);
 }
 
 /* ============================================================================
@@ -2430,6 +2617,8 @@ document.addEventListener('click', async (e) => {
   const presetPick = el.getAttribute && el.getAttribute('data-preset');
   const kickTarget = el.getAttribute && el.getAttribute('data-kick');
   const room = S.view ? S.view.room : null;
+  // 记住是哪个按钮把弹窗打开的：关闭后要把焦点还回去（§23）
+  if (['btnCfg', 'btnCfgQuick', 'btnKey', 'btnGuess', 'btnGuessQuick', 'btnRecap', 'btnRoomInfo'].includes(id)) S.modalTriggerId = id;
 
   try {
     if (kickTarget && room) {
@@ -2502,15 +2691,9 @@ document.addEventListener('click', async (e) => {
       // 右栏页签（§5.5）：切页签只换右侧内容，不动中央记录的滚动位置，也不清空聊天草稿
       case 'btnTabCrew': S.railTab = 'crew'; render(); break;
       case 'btnTabNotes': S.railTab = 'notes'; markChatRead(); render(); break;
-      // 顶栏「房间信息与设置」（§2.7）：先收进"离开房间"与房主参数所在的房间卡片，
-      // 详情抽屉留给 M4；这里至少把它滚到可见，不做静默无反应。
-      case 'btnRoomInfo': {
-        const el = document.querySelector('.roomcard');
-        if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' });
-        S.notice = '房间信息与房主设置都在左侧「ROOM / 房间」卡片里';
-        render();
-        break;
-      }
+      // 顶栏「房间信息与设置」（§2.7 / §5.2）：房间元数据、额度铭牌与房主入口都收进抽屉
+      case 'btnRoomInfo': S.modalTriggerId = 'btnRoomInfo'; S.roomInfo = true; render(true); break;
+      case 'btnRoomInfoClose': S.roomInfo = false; render(true); break;
       case 'btnSeat': {
         // 待入席者的"举手"= 申请下一轮上桌（服务端按成员状态区分语义）
         const me = room ? room.members.find((m) => m.id === (S.view.you ? S.view.you.memberId : '')) : null;
@@ -2533,11 +2716,11 @@ document.addEventListener('click', async (e) => {
         render();
         break;
       }
-      case 'btnCfg': S.configModal = true; render(); break;
-      case 'btnCfgQuick': S.configModal = true; render(); break;
+      case 'btnCfg': S.configModal = true; render(true); break;
+      case 'btnCfgQuick': S.configModal = true; render(true); break;
       case 'btnCfgClose':
         Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
-        S.configModal = false; render(); break;
+        S.configModal = false; render(true); break;
       case 'btnCfgApply': {
         const patch = {};
         document.querySelectorAll('[data-cfg]').forEach((input) => {
@@ -2558,7 +2741,7 @@ document.addEventListener('click', async (e) => {
       case 'btnSkip': request({ t: 'skip_turn' }); break;
       case 'btnKey': S.keyModal = true; S.keyTest = null; render(); break;
       case 'btnKeyFromBanner': S.keyModal = true; S.keyTest = null; render(); break;
-      case 'btnKeyClose': S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; render(); break;
+      case 'btnKeyClose': S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; render(true); break;
       case 'btnKeyToggle': {
         const el = $('#keyValue');
         if (el) el.classList.toggle('secret');
@@ -2613,9 +2796,9 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
-      case 'btnGuess': S.guessModal = true; render(); break;
+      case 'btnGuess': S.guessModal = true; render(true); break;
       // 提问框旁边的快捷入口：同一个弹窗，随时可猜（冷却期间按钮是禁用的）
-      case 'btnGuessQuick': S.guessModal = true; render(); break;
+      case 'btnGuessQuick': S.guessModal = true; render(true); break;
       case 'btnTruthClose':
       case 'btnTruthClose2': {
         const r = S.view ? S.view.room : null;
@@ -2632,7 +2815,7 @@ document.addEventListener('click', async (e) => {
         await sendAction({ type: 'next_round' });
         break;
       }
-      case 'btnGuessCancel': S.guessModal = false; delete S.drafts.guessText; render(); break;
+      case 'btnGuessCancel': S.guessModal = false; delete S.drafts.guessText; render(true); break;
       case 'btnGuessSubmit': {
         const text = $('#guessText').value;
         S.guessModal = false;
@@ -2786,6 +2969,32 @@ document.addEventListener('change', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  // Esc 关弹窗（§23）：关掉最上面一层，把焦点还给打开它的按钮
+  if (e.key === 'Escape') {
+    if (closeTopModal()) {
+      e.preventDefault();
+      const back = S.modalTriggerId ? document.getElementById(S.modalTriggerId) : null;
+      render(true);
+      const el = back || document.getElementById(S.modalTriggerId);
+      if (el && el.focus) el.focus();
+      return;
+    }
+  }
+  // Tab 循环锁在弹窗内（§23：弹窗打开后焦点留在弹窗里）
+  if (e.key === 'Tab') {
+    const dlg = document.querySelector('.overlay .modal');
+    if (dlg) {
+      const items = [...dlg.querySelectorAll('input:not([type=hidden]),textarea,select,button')]
+        .filter((el) => !el.disabled && el.offsetParent !== null);
+      if (items.length) {
+        const first = items[0];
+        const last = items[items.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || !dlg.contains(active))) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+      }
+    }
+  }
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('#ask')) { e.preventDefault(); doSend(); }
   // 讨论区：Enter 发送 / Shift+Enter 换行；中文输入法组字期间（isComposing / keyCode 229）绝不发送
   if (e.key === 'Enter' && e.target && e.target.id === 'chatInput' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
