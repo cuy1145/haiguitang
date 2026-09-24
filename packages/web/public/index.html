@@ -831,6 +831,10 @@ function chatListHtml() {
     if (mn !== prevMatch && mn >= 1) parts.push(`<div class="chatsep"><span>第 ${mn} 局开始</span></div>`);
     prevMatch = mn;
     parts.push(chatEntry(m, meId));
+    // 生成 HTML 的这一刻就记成"渲染过了"：同一个 tick 里还会再渲染一次
+    // （乐观条目 → 服务端响应又触发一次整页渲染）。如果等到渲染收尾才标记，
+    // 第二次渲染会再给它一个 .fx → 自己发的字闪两下（PC 与手机都复现过）。
+    chatFxSeen.add(chatFxKey(m));
   }
   return parts.join('');
 }
@@ -839,7 +843,25 @@ function chatPillHtml() {
   const unread = S.chatUnread || 0;
   const n = unread > 99 ? '99+' : unread;
   // 用户正在往上翻旧消息：**不强行拉到底**，只给一个入口
+  if (unread && !S.chatPinned) return `<button class="pill live jump" id="btnChatJump">有 ${n} 条新消息 ↓</button>`;
   return `<span class="pill ${unread ? 'live' : ''}">${unread ? `${n} 条新消息` : '房间内自由发言'}</span>`;
+}
+
+/**
+ * 已经播过"便笺贴入"动画的条目。
+ *
+ * 为什么需要它：同一条消息会被渲染两次 —— 先是本地的乐观条目（clientMessageId 已定），
+ * 紧接着服务端真值回来把同一条替换掉。如果只按"有没有 chatSeq / 是不是 pending"判断，
+ * 这两次渲染都会带上 .fx，而列表是整块 innerHTML 重建 → **自己发的字会闪两下**
+ * （PC 和手机都一样，用户报的）。改成按"这一条是否已经渲染过"来判断，就只会闪一次。
+ */
+const chatFxSeen = new Set();
+const chatFxKey = (m) => m.clientMessageId || `seq:${m.chatSeq}`;
+/** 上一次渲染出来的便笺列表 HTML（内容没变就不重建 DOM） */
+let lastChatHtml = null;
+function markChatFxSeen() {
+  for (const m of S.chat) chatFxSeen.add(chatFxKey(m));
+  if (chatFxSeen.size > 500) chatFxSeen.clear();   // 兜底：房间聊天不会这么大
 }
 /**
  * 局部补渲染讨论区。
@@ -853,7 +875,13 @@ function patchChatList() {
   if (!S.view || S.screen !== 'room') return;
   const log = $('#chatLog');
   if (!log) return;
-  log.innerHTML = chatListHtml();
+  // 内容没变就一个字节都别动：自己发消息会走两次 patch（乐观条目 + 服务端真值），
+  // 第二次内容完全相同，重建 innerHTML 只会白闪一下。
+  const html = chatListHtml();
+  if (lastChatHtml !== html) {
+    log.innerHTML = html;
+    lastChatHtml = html;
+  }
   const pill = $('#chatPill');
   if (pill) pill.innerHTML = chatPillHtml();
   const cnt = $('#chatCount');
@@ -867,6 +895,7 @@ function patchChatList() {
   const counter = btn && btn.parentElement ? btn.parentElement.querySelector('.counter') : null;
   if (counter) counter.textContent = `${String(S.chatDraft || '').length}/${CHAT_MAXLEN}`;
   if (S.chatPinned) log.scrollTop = log.scrollHeight;
+  markChatFxSeen();                                  // 这一次渲染过的条目，下次不再播动画（否则自己发的会闪两下）
 }
 
 /* ---------------------------------------------------------------- 计时（按秒走）
@@ -951,7 +980,8 @@ function clearSession() {
   S.chatUnread = 0;
   S.chatDraft = '';
   S.chatPinned = true;
-  S.fxChatSeq = 0;
+  chatFxSeen.clear();                            // 换房间：动画记录也一起清掉
+  lastChatHtml = null;                          // 换房间：便笺列表缓存也要清（否则可能拿旧房间的内容比对）
   S.fxLogAt = 0;
   S.railTab = 'crew';
   S.pickPool = null;             // 候选题"换一批"的结果也属于当前房间
@@ -1472,9 +1502,8 @@ function render(force = false) {
     }
   }
   // 记录本次渲染到哪儿了：下次渲染时用它判断"哪几条是新的"，只给新条目加入场动画。
-  // 乐观便笺（chatSeq 是哨兵值）在服务端真值回来后就换成真序号，这里跳过它避免序号被顶高。
   S.fxLogAt = S.log.reduce((mx, t) => Math.max(mx, Number(t.at || 0)), 0);
-  S.fxChatSeq = S.chat.reduce((mx, m) => (m.pending === true ? mx : Math.max(mx, Number(m.chatSeq || 0))), 0);
+  markChatFxSeen();                                  // 便笺：记下"这些已经渲染过了"，重渲染不再重播
 
   // 窄屏讨论面板打开时锁住页面滚动（面板本身是 fixed 覆盖层）。
   // 容错：测试用的 DOM 桩没有 body.classList / matchMedia。
@@ -1946,8 +1975,16 @@ function chatCard(room, you, bare = false) {
 
 function chatEntry(m, meId) {
   const mine = m.memberId === meId;
-  // 只有"新贴上来的便笺"才播入场动画（同上：整页重渲染不该重播）
-  const fx = Number(m.chatSeq || 0) > Number(S.fxChatSeq || 0) || m.pending === true ? ' fx' : '';
+  /**
+   * 入场动画只给**别人**的便笺，而且只播一次。
+   *
+   * 为什么自己发的不做动画：自己那条会在同一个 tick 里被渲染两次
+   * （先本地乐观条目，紧接着服务端响应又触发一次整页渲染），
+   * 只要它带 .fx 就会重建一次节点、重播一次动画 —— 用户看到的就是"自己发的字在闪"。
+   * 直接不给自己的便笺加动画，等于从规则上杜绝这一整类闪烁：
+   * 话是立刻出现的（本来也不需要"贴进来"的动效）。
+   */
+  const fx = !mine && !chatFxSeen.has(chatFxKey(m)) ? ' fx' : '';
   return `<div class="msg${mine ? ' mine' : ''}${fx}">
     <div class="who">${mine ? '你' : esc(m.memberName || '—')}<span class="dim"> ${esc(fmtClock(m.createdAt))}</span></div>
     <div class="txt">${esc(m.text)}</div>

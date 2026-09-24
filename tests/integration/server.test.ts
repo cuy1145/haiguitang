@@ -259,6 +259,11 @@ test('I-01/I-09: 建房 → 加入 → 开局 → 提交并推进，事件 seq �
   assert.equal(st.turn.seq, 2, '提交后推进到下一位');
   assert.notEqual(st.turn.memberId, host.memberId);
   assert.equal(booted.store.listQuestions(room.roomId).length, 1);
+  // 每条判定都要带一句结合提问语境的说明（模型没给就由服务端兜一句；这里跑的是内置模拟主持人）
+  const firstQ = booted.store.listQuestions(room.roomId)[0]!;
+  assert.ok(typeof firstQ.explain === 'string' && firstQ.explain.length > 0, `判定必须附带说明：${JSON.stringify(firstQ.explain)}`);
+  assert.ok(firstQ.explain.includes('出海') || firstQ.explain.includes('海'), `说明要结合玩家问的内容：${firstQ.explain}`);
+  assert.ok(firstQ.explain.length <= 40, `说明要短：${firstQ.explain}`);
 
   const seqs = host.events().map((f) => Number(f.seq));
   for (let i = 1; i < seqs.length; i++) assert.ok(seqs[i]! > seqs[i - 1]!, `事件 seq 必须严格递增：${seqs.join(',')}`);

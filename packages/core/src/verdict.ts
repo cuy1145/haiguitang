@@ -211,24 +211,60 @@ export function validateJudgeOutput(raw: unknown, ctx: JudgeValidationCtx): Judg
 }
 
 /**
- * 「是 / 否」的补充说明（可选）：帮玩家理解这个结论的**范围**，不给新信息。
+ * 判定的补充说明（explain）：帮玩家理解这个结论的**范围**，不给新信息。
  *
- * 这里做的是**只丢不杀**的清洗 —— 说明写得不合适时返回 null（只留裸的"是/否"），
- * 绝不因为这一句把整次判定判为失败（否则一句多嘴就会中断整局）。
+ * 设计变更（用户要求）：**四类结论都可以带说明**，而且服务端保证每条判定都有一句
+ * （模型没给就由 contextExplain 用玩家自己的问法兜一句）。
+ * 这里仍然是**只丢不杀**的清洗 —— 写得不合适时返回 null，绝不因为这一句把整次判定判失败。
  * 规则：
- *   · 只有 yes / no 允许带说明（irrelevant / unanswerable 说的是"无关/无法回答"，不需要）
  *   · ≤ EXPLAIN_MAX_CHARS 字，且不得是问句（避免反问式提示）
  *   · 不得与汤底共享 8-gram、不得近似抄写事实点原文（isLeaky）
+ *   · 不得出现引导式措辞（"接近了/再想想/注意…"）—— 那是提示，不是说明
  */
 export function sanitizeExplain(raw: unknown, answer: AnswerEnum, ctx: JudgeValidationCtx): string | null {
   if (typeof raw !== 'string') return null;
   const text = raw.replace(/\s+/g, ' ').trim();
   if (!text) return null;
-  if (answer !== 'yes' && answer !== 'no') return null;
   if (text.length > EXPLAIN_MAX_CHARS) return null;
   if (/[?？]$/.test(text)) return null;
+  if (GUIDING_PHRASE.test(text)) return null;
   if (isLeaky(text, ctx.truth, ctx.facts)) return null;
   return text;
+}
+
+/** 引导式措辞：这些是"提示"，不是"说明"，一律丢弃（丢了还有兜底句，不会让玩家看到空说明）。 */
+const GUIDING_PHRASE = /(接近|快到了|再想想|仔细想|注意|暗示|提示你|方向|思路|加油|差一点|快了|有戏)/;
+
+/**
+ * 兜底说明：模型/规则/缓存都没给说明时，用**玩家自己的问法**回指一句。
+ *
+ * 为什么这样是安全的：引用的就是玩家刚说过的词，不含任何汤底信息，也不指出方向；
+ * 玩家看到的仍然是"这个结论针对的是你问的哪一部分"。
+ */
+export function contextExplain(answer: AnswerEnum, question: string): string {
+  const topic = topicFromQuestion(question);
+  switch (answer) {
+    case 'yes':
+      return topic ? `是——只针对你问的「${topic}」。` : '是——只针对你问的这一句。';
+    case 'no':
+      return topic ? `否——你问的「${topic}」在本局设定里不成立。` : '否——你问的这一句在本局设定里不成立。';
+    case 'irrelevant':
+      return topic ? `你问的「${topic}」在本题设定里没有出现。` : '这个问题问的要素在本题设定里没有出现。';
+    default:
+      return topic ? `你问的「${topic}」没法用是/否回答。` : '这个问题没法用是/否回答。';
+  }
+}
+
+/** 从玩家的问题里抠一个短话题（只用于回指问题本身；剥掉"是不是/吗"这类疑问外壳） */
+export function topicFromQuestion(question: string): string {
+  let s = normalize(question)
+    .replace(/^(请问|那么|所以|那|嗯|我想问|想问)+/g, '')
+    .replace(/(是不是|是否|有没有|会不会|能不能|可不可以|是不是说|吗|呢|吧)/g, ' ')
+    .replace(/[?？。！!，,、；;：:（）()「」『』"'“”]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (s.length > 12) s = s.slice(0, 12);
+  return s;
 }
 
 /** 原因码必须与可机判的输入特征一致（否则视为滥用）。 */

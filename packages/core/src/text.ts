@@ -113,8 +113,12 @@ export function checkGuessText(raw: string): 'GUESS_TOO_SHORT' | 'TEXT_TOO_LONG'
   return null;
 }
 
-/** 语速无关的判定缓存版本号（提示词改动时递增）。 */
-export const PROMPT_VERSION = 'judge-v1';
+/**
+ * 判定缓存版本号（提示词改动时递增）。
+ * v2：explain 从"可选"改成"必填"（每次判定都要给一句结合提问语境、不给额外提示的说明）。
+ *     不递增的话，旧缓存里的判定会把没有说明的历史答案原样喂回来，玩家看到的还是干巴巴的"是/否"。
+ */
+export const PROMPT_VERSION = 'judge-v2';
 
 // ---------------------------------------------------------------- 配置校验
 export interface ConfigValidation {

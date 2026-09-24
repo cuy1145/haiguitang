@@ -9,7 +9,7 @@
  */
 import {
   PLATFORM, PROMPT_VERSION, assertNoLeak, canSubmit, checkAndNormalizePuzzle, emptyRoom, getMember, hintsExhausted,
-  isLeaky, judgeGuess, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
+  isLeaky, judgeGuess, contextExplain, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
   transferGate, validateConfigChange,
 } from '@ht/core';
 import type {
@@ -685,11 +685,14 @@ export class RoomRuntime {
       this.judging.delete(turnSeq);
       if (outcome.kind === 'ok') {
         const result = outcome.result;
+        // 每条判定都带一句结合提问语境的说明：模型给了就用模型的（已过泄露/引导式清洗），
+        // 没给（规则拦截、判定缓存命中、内置模拟主持人）就用玩家自己的问法兜一句。
+        const explain = result.explain ?? contextExplain(result.answer, text);
         const q: QuestionRecord = {
           id: this.deps.newId('q'), roomId: this.room.id, matchId: this.matchId, turnSeq,
           memberId, text, answer: result.answer, reasonCode: result.reasonCode, source: result.source,
           late: this.room.turn.lateSubmit, matchedFactIds: result.matchedFactIds,
-          explain: result.explain ?? null, createdAt: Date.now(),
+          explain, createdAt: Date.now(),
         };
         this.deps.store.insertQuestion(q);
         const before = this.room.revealedFacts.length;
@@ -699,7 +702,7 @@ export class RoomRuntime {
         this.timeline.push({
           seq: ++this.room.eventSeq, kind: 'question', at: this.now, memberId, text,
           answer: result.answer, reasonCode: result.reasonCode, source: result.source,
-          explain: result.explain ?? null,
+          explain,
           meta: `来源：${result.source === 'cache' ? '判定缓存' : result.source === 'rule' ? '规则拦截' : '模型映射'}${unlocked > 0 ? ` · 解锁 ${unlocked} 个事实点` : ''}`,
         });
         const out = reduce(this.room, { type: 'JUDGE_DONE' }, this.ctx());

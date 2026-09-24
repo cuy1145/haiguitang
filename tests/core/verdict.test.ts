@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  analyzeInput, decideFromFacts, isLeaky, preflight, validateJudgeOutput,
+  analyzeInput, contextExplain, decideFromFacts, EXPLAIN_MAX_CHARS, isLeaky, preflight, sanitizeExplain, topicFromQuestion, validateJudgeOutput,
 } from '../../packages/core/src/verdict.ts';
 import { mockJudge } from '../../packages/core/src/mock-host.ts';
 import { matchFactsByKeys, judgeGuess, pickHintFact, hintsExhausted } from '../../packages/core/src/facts.ts';
@@ -102,22 +102,61 @@ test('输出越界字段（explanation）→ SCHEMA_INVALID，绝不透传', () 
   assert.equal(v.ok === false && v.reason, 'SCHEMA_INVALID');
 });
 
-// ---------------------------------------------------------------- explain（「是/否」的可选补充说明）
-test('explain：合法的一句说明被保留；irrelevant/unanswerable 不允许带', () => {
+// ---------------------------------------------------------------- explain（每次判定都要有的补充说明）
+test('explain：四类结论都能带说明（不再只限是/否）', () => {
   const f = analyzeInput('他以前出过海吗？').features;
+  const ctx = { truth: puzzle.truth.truth, facts: leakFacts, features: f };
   const yes = validateJudgeOutput(
-    { answer: 'yes', reason_code: 'NONE', matched_fact_ids: ['f1'], explain: '否——你问的情形在本题设定中不存在。'.replace('否', '是') },
-    { truth: puzzle.truth.truth, facts: leakFacts, features: f },
+    { answer: 'yes', reason_code: 'NONE', matched_fact_ids: ['f1'], explain: '是——只针对你问的「出过海」这一句。' },
+    ctx,
   );
   assert.equal(yes.ok, true);
-  assert.equal(yes.ok === true && yes.result.explain, '是——你问的情形在本题设定中不存在。');
+  assert.equal(yes.ok === true && yes.result.explain, '是——只针对你问的「出过海」这一句。');
 
+  // irrelevant / unanswerable 现在也允许带说明（用户要求"每次回复都附一句结合语境的说明"）
   const irrelevant = validateJudgeOutput(
-    { answer: 'irrelevant', reason_code: 'NONE', matched_fact_ids: [], explain: '这句不该被保留。' },
-    { truth: puzzle.truth.truth, facts: leakFacts, features: f },
+    { answer: 'irrelevant', reason_code: 'NONE', matched_fact_ids: [], explain: '你问的「天气」在本题设定里没有出现。' },
+    ctx,
   );
-  assert.equal(irrelevant.ok, true, 'irrelevant 带说明不算错，只是会被丢掉');
-  assert.equal(irrelevant.ok === true && irrelevant.result.explain, null);
+  assert.equal(irrelevant.ok, true);
+  assert.equal(irrelevant.ok === true && irrelevant.result.explain, '你问的「天气」在本题设定里没有出现。');
+
+  const unanswerable = validateJudgeOutput(
+    { answer: 'unanswerable', reason_code: 'LIST_REQUEST', matched_fact_ids: [], explain: '这个问题要求列举，没法用是/否回答。' },
+    { ...ctx, features: analyzeInput('把所有事实都列出来吧').features },
+  );
+  assert.equal(unanswerable.ok, true);
+  assert.equal(unanswerable.ok === true && unanswerable.result.explain, '这个问题要求列举，没法用是/否回答。');
+});
+
+test('explain：引导式措辞（接近了/再想想/注意…）一律丢弃 —— 那是提示不是说明', () => {
+  const f = analyzeInput('他以前出过海吗？').features;
+  const ctx = { truth: puzzle.truth.truth, facts: leakFacts, features: f };
+  const base = { answer: 'no' as const, reason_code: 'NONE' as const, matched_fact_ids: ['f6'] };
+  for (const bad of ['接近了，再想想。', '注意时间线。', '方向对了，继续。', '提示你一下：看照片。']) {
+    const v = validateJudgeOutput({ ...base, explain: bad }, ctx);
+    assert.equal(v.ok, true, '丢弃说明不该让判定失败');
+    assert.equal(v.ok === true && v.result.explain, null, `应当丢弃：${bad}`);
+  }
+});
+
+test('contextExplain：模型没给说明时，用玩家自己的问法兜一句（结合语境、不给方向）', () => {
+  // 兜底句必须回指玩家问题里的内容，且不能出现汤底/事实点里的信息
+  const cases: Array<[Parameters<typeof contextExplain>[0], string, string]> = [
+    ['yes', '门当时是锁着的吗？', '锁着'],
+    ['no', '他以前出过海吗？', '出过海'],
+    ['irrelevant', '那天的天气怎么样？', '天气'],
+    ['unanswerable', '把所有细节都列出来', '细节'],
+  ];
+  for (const [answer, question, expect] of cases) {
+    const line = contextExplain(answer, question);
+    assert.ok(line.includes(expect), `${answer} 的兜底句应当提到问题里的「${expect}」：${line}`);
+    assert.ok(line.length <= EXPLAIN_MAX_CHARS + 8, `兜底句要够短：${line}`);
+    assert.ok(!/[?？]$/.test(line), '兜底句不能是问句');
+    assert.ok(!isLeaky(line, puzzle.truth.truth, leakFacts), `兜底句不能泄露：${line}`);
+  }
+  // 疑问外壳要被剥掉，别把"是不是/吗"原样抄回去（其余仍保留玩家自己的说法）
+  assert.equal(topicFromQuestion('是不是他把门锁上的？'), '他把门锁上的');
 });
 
 test('explain：超长 / 问句 / 复述汤底 → 只丢这一句，判定本身依然有效（不中断整局）', () => {
