@@ -523,6 +523,14 @@ export class RoomRuntime {
     if (this.deps.store.getPuzzle(puzzle.id)) puzzle = { ...puzzle, id: `${puzzle.id}-${Date.now().toString(36).slice(-4)}` };
 
     this.deps.store.saveRoomPuzzle(puzzle);
+    /**
+     * ⚠️ 必须**自己把房间版本 +1**：这次写入改的是 rooms.puzzle_json，但房间本身没变，
+     * 于是 state_version 不动 —— 而客户端每 1.2 秒就有一次轮询，它读到的快照里还没有这道题，
+     * 提交时 CAS（state_version 相同）**照样成功**，把 puzzle_json 又写回 NULL。
+     * 真实故障：AI 创作成功、点「就用这道开局」却报"找不到这道题"，线上 D1 里所有房间
+     * puzzle_json 都是 NULL。版本 +1 之后并发的轮询会 CAS 失败并重放，就不会冲掉刚写的题。
+     */
+    this.room = { ...this.room, stateVersion: this.room.stateVersion + 1, updatedAt: this.now };
     this.deps.store.bumpUsage(usedSource === 'site_fallback' ? 'site' : 'host', Date.now(), 0, 1);
     this.deps.store.audit({ action: 'ai_puzzle_created', roomId: this.room.id, actor: memberId, subject: `${puzzle.id} via ${usedSource}` });
     this.deps.logger.info('ai_puzzle_created', { room_id: this.room.id, puzzle_id: puzzle.id, facts: puzzle.facts.length, credit_source: usedSource });

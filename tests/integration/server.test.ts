@@ -726,6 +726,71 @@ test('I-26b: 既没有平台额度也没填 Key → 明确返回 AI_UNAVAILABLE'
   host.close();
 });
 
+test('I-28: AI 创作成功 → 房间版本必须 +1（否则并发轮询会把刚写的自定义题冲成 NULL）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ht-aipuzzle-'));
+  const app = await boot({
+    autoTick: false, now, openBrowser: false, webDir: join(dir, 'web'),
+    config: {
+      host: '127.0.0.1', port: 0, devTools: false, logLevel: 'error', dataDir: dir,
+      masterKey: Buffer.alloc(32, 7),
+      ai: { provider: 'test', baseUrl: 'https://ai.invalid/v1', model: 'test-model', key: 'sk-site', timeoutMs: 800, maxRetries: 0, enabled: true },
+      site: { monthlyCallCap: 1000, monthlyCostCap: 0, grantBudgetCalls: 50, grantMaxPerMatch: 2, grantCooldownSec: 600 },
+    },
+  });
+  const original = globalThis.fetch;
+  const puzzle = JSON.stringify({
+    title: '空碗', surface: '他在面馆点了一碗面，一口没吃就付钱离开了，回家后却笑了。为什么？',
+    truth: '他刚从监狱出来，二十年前他就是在这家面馆被抓走的。今天他终于吃上了同一碗面，确认自己真的自由了。',
+    difficulty: 3, rating: 'L2', tags: ['反转'], sensitiveTags: [], estMinutes: 15,
+    facts: [
+      { id: 'f1', text: '他刚从监狱出来', isTrue: true, tier: 1, required: true, keys: ['监狱', '出狱'] },
+      { id: 'f2', text: '二十年前他在面馆被抓', isTrue: true, tier: 2, required: true, keys: ['被抓', '二十年前'] },
+      { id: 'f3', text: '他确认自己自由了', isTrue: true, tier: 3, required: true, keys: ['自由'] },
+      { id: 'f4', text: '面里被下了毒', isTrue: false, tier: 1, required: false, keys: ['下毒'] },
+    ],
+  });
+  globalThis.fetch = (async (url: string, init?: unknown) => {
+    if (String(url).includes('ai.invalid')) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: puzzle }, finish_reason: 'stop' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return original(url as never, init as never);
+  }) as unknown as typeof fetch;
+  try {
+    const res = await fetch(`${app.url}/api/rooms`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ nickname: '房主', preset: 'standard' }),
+    });
+    const room = await res.json() as { token: string; roomId: string };
+    const host = await Client.open(app.url, room.token, '房主');
+    const roomView = async () => {
+      const r = await fetch(`${app.url}/api/session`, { headers: { authorization: `Bearer ${room.token}` } });
+      const body = await r.json() as { view: { room: { stateVersion: number; status: string } } };
+      return body.view.room;
+    };
+    const versionBefore = (await roomView()).stateVersion;
+
+    const ack = await host.request({ t: 'create_ai_puzzle' });
+    assert.equal(ack.t, 'ack', `AI 出题应当成功：${JSON.stringify(ack)}`);
+    const data = (ack as unknown as { data?: { puzzleId?: string } }).data;
+    assert.ok(data?.puzzleId, '响应里要有题目 id');
+    assert.ok(
+      (await roomView()).stateVersion > versionBefore,
+      '自定义题是写进 rooms.puzzle_json 的，必须让房间版本 +1：否则 1.2 秒一次的轮询会用相同版本 CAS 成功，把它冲回 NULL',
+    );
+
+    // 用这个 id 开局必须成功（这正是用户遇到的"AI 生成的开局失败"）
+    const started = await host.request({ t: 'start', mode: 'pick', puzzleId: data!.puzzleId! });
+    assert.equal(started.t, 'ack', `AI 出的题必须能直接开局：${JSON.stringify(started)}`);
+    await settle();
+    assert.equal((await roomView()).status, 'playing');
+    host.close();
+  } finally {
+    globalThis.fetch = original;
+    await app.close();
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
 test('I-27: AI 出题失败时必须说明真实原因（不能只说"操作未通过校验"）', async () => {
   // 平台额度指向一个"能连上但返回散文"的假上游 → 触发 SCHEMA_INVALID
   const dir = mkdtempSync(join(tmpdir(), 'ht-aifail-'));
