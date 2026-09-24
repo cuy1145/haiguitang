@@ -345,6 +345,86 @@ FROM questions ORDER BY created_at DESC LIMIT 30;
 
 ---
 
+## 5.2 怎么修改目前的「后台」（改代码 / 改配置 / 改题库）
+
+线上只有三块东西，**改法各不相同**：
+
+| 你想改什么 | 改哪里 | 怎么生效 |
+|---|---|---|
+| 游戏规则、界面、接口 | 仓库源码（`packages/`） | `git push` → GitHub Actions 自动部署（约 2 分钟） |
+| 表结构 | `packages/worker/migrations/000N_*.sql` | 同上；部署流程会自动 `d1 migrations apply` |
+| 题库 | `packages/server/src/data/*.ts`（含导入生成的 `collected-puzzles.ts`） | 同上（题库是**编译进 Worker 的常量**，不在数据库里） |
+| 平台额度 / 开关（`AI_KEY`、额度上限…） | Cloudflare 的 Secret / `wrangler.toml` 的 `[vars]` | Secret 改完立即生效；`[vars]` 需要重新部署 |
+| 域名 / 静态资源 | `wrangler.toml` 的 `[assets]` | 重新部署 |
+
+**日常改代码的完整流程**（本地能跑通再推）：
+
+```powershell
+# 1) 本地改代码
+pnpm cf:dev                # 本地起服务（workerd + 本地 D1），浏览器打开提示的地址试玩
+
+# 2) 本地验证（和 CI 跑的是同一套）
+pnpm typecheck             # 类型检查
+pnpm test                  # 107 个测试
+node scripts/selfcheck.ts  # 工程自检（含"Worker 可打包性"等硬门槛）
+pnpm analyze:puzzles ...   # 可选：改题库前先体检
+
+# 3) 推送 → 自动部署
+git add -A
+git commit -m "说明这次改了什么"
+git push                   # CI 跑验证 → 应用 D1 迁移 → wrangler deploy → 健康检查
+
+# 4) 确认
+#    GitHub → Actions 里看两个 workflow 是否都绿
+#    https://haiguitang.luowanx70636.workers.dev/api/health
+```
+
+**改数据库结构**（加字段/加表）：
+
+```powershell
+# 1) 新建迁移文件（编号递增，只追加、不改历史文件）
+#    packages/worker/migrations/0005_xxx.sql
+# 2) 本地先应用并自测
+npx wrangler d1 migrations apply haiguitang            # 本地
+# 3) 推送后由 CI 自动应用到线上（部署流程里有这一步）
+#    也可以手动：npx wrangler d1 migrations apply haiguitang --remote
+```
+
+**改题库**：
+
+```powershell
+# 方式 A：让房主在房间里用「AI 创作」现出一题（不进题库、零许可风险）
+# 方式 B：导入第三方题库（见 docs/PUZZLE-SOURCES.md）
+@'
+import type { Puzzle } from '@ht/core';
+export function collectedPuzzles(): Puzzle[] { return []; }
+'@ | Set-Content packages/server/src/data/collected-puzzles.ts     # 先清空才重新生成
+pnpm import:puzzles --source=modelscope:Narcissuses/Turtle-Bench/train_8k.json --facts=rule --accept-license=apache-2.0
+pnpm seed && pnpm test     # 自检 + 测试
+git add -A; git commit -m "题库：导入 N 道"; git push
+```
+
+**改运行期密钥 / 开关**：
+
+```powershell
+npx wrangler secret put AI_KEY          # 平台额度（可选；不配则由房主自备 Key 或内置模拟主持人）
+npx wrangler secret put MASTER_KEY      # 保险箱主密钥（已配；换了会让已有房主 Key 失效）
+npx wrangler secret list                # 只看得到名字，看不到值
+# 额度上限之类的非敏感开关：改 wrangler.toml 的 [vars] 后 git push
+```
+
+**出问题怎么回滚**：
+
+```powershell
+git revert <坏的提交> && git push      # 或
+git reset --hard <上一个好提交> && git push --force   # 谨慎使用
+# Cloudflare 侧也可以在 Workers → Deployments 里直接回滚到上一个版本
+```
+
+**排查入口**：`pnpm cf:tail`（实时日志）· `pnpm audit`（历史记录速查）· 详见本文 §5.1。
+
+---
+
 ## 6. 我需要你提供的信息（都不含密钥）
 
 1. GitHub 仓库地址（形如 `https://github.com/你/haiguitang`）——用于我帮你核对 remote 与 Actions 配置

@@ -195,10 +195,11 @@ async function configure(host: Client, roomId: string, patch: Record<string, num
 }
 
 /** 开局：先让所有在线玩家举手（房间规则要求全员准备，除非 force），再由房主指定题目 */
-async function startMatch(host: Client, roomId: string, speedUp = true): Promise<void> {
+async function startMatch(host: Client, roomId: string, speedUp = true, puzzleId = 'p1'): Promise<void> {
   if (speedUp) await configure(host, roomId, { perTurnSec: 15, graceSec: 2, maxRounds: 30 });
   await readyAll(roomId);
-  const ack = await host.request({ t: 'start', mode: 'pick' });
+  // 固定用 p1：题库会不断扩充（现在含导入的几百道），随机抽题会让测试结果随题库漂移
+  const ack = await host.request({ t: 'start', mode: 'pick', puzzleId });
   assert.equal(ack.t, 'ack', `开局失败：${JSON.stringify(ack)}`);
   await settle();
 }

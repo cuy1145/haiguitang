@@ -79,7 +79,11 @@ function len(text: unknown): number {
  */
 export function checkAndNormalizePuzzle(
   raw: unknown,
-  opts: { idPrefix?: string; ratingMax?: 'L1' | 'L2' | 'L3'; difficultyMin?: number; difficultyMax?: number } = {},
+  opts: {
+    idPrefix?: string; ratingMax?: 'L1' | 'L2' | 'L3'; difficultyMin?: number; difficultyMax?: number; minFacts?: number;
+    /** 题目出处（导入第三方题库时必填，Apache-2.0 之类的许可要求署名） */
+    source?: { type?: Puzzle['sourceType']; author?: string; url?: string; attributionRequired?: boolean };
+  } = {},
 ): PuzzleCheckOk | PuzzleCheckFail {
   const issues: PuzzleCheckIssue[] = [];
   const fail = (path: string, reason: string): void => { issues.push({ path, reason }); };
@@ -105,8 +109,9 @@ export function checkAndNormalizePuzzle(
 
   // ---- 事实点表
   const factsRaw = Array.isArray(o.facts) ? o.facts : [];
-  if (factsRaw.length < LIMITS.facts[0] || factsRaw.length > LIMITS.facts[1]) {
-    fail('facts', `事实点数量需在 ${LIMITS.facts[0]}–${LIMITS.facts[1]} 条之间`);
+  const minFacts = Math.max(2, Math.min(LIMITS.facts[0], opts.minFacts ?? LIMITS.facts[0]));
+  if (factsRaw.length < minFacts || factsRaw.length > LIMITS.facts[1]) {
+    fail('facts', `事实点数量需在 ${minFacts}–${LIMITS.facts[1]} 条之间`);
   }
   const facts: PuzzleFact[] = [];
   const seenText = new Set<string>();
@@ -141,6 +146,11 @@ export function checkAndNormalizePuzzle(
   if (falses.length > 2) fail('facts', '否定型事实点最多 2 条');
   if (required.length < LIMITS.requiredFacts[0]) fail('facts', `必需事实点至少 ${LIMITS.requiredFacts[0]} 条`);
   if (required.some((f) => !f.isTrue)) fail('facts', '必需事实点必须都是成立的');
+  // 提示 T1/T2 各自都要有东西可给：缺少某个梯度的成立事实会让"提示"按钮点了没反应（线上踩过）
+  if (trues.length > 0) {
+    if (!trues.some((f) => f.tier === 1)) fail('facts', '缺少 tier=1 的成立事实（提示 T1 会无内容可给）');
+    if (!trues.some((f) => f.tier === 2)) fail('facts', '缺少 tier=2 的成立事实（提示 T2 会无内容可给）');
+  }
 
   // ---- 汤面不得泄露关键事实点（不然题目本身就是答案）
   if (surface) {
@@ -201,8 +211,10 @@ export function checkAndNormalizePuzzle(
       tags: tags.slice(0, LIMITS.tags[1]),
       sensitiveTags: sensitiveTags.slice(0, LIMITS.sensitiveTags[1]),
       estMinutes: Number.isFinite(estMinutes) && estMinutes >= 5 && estMinutes <= 60 ? Math.round(estMinutes) : 20,
-      sourceType: 'ai',
-      attributionRequired: false,
+      sourceType: opts.source?.type ?? 'ai',
+      attributionRequired: opts.source?.attributionRequired ?? false,
+      ...(opts.source?.author ? { sourceAuthor: opts.source.author } : {}),
+      ...(opts.source?.url ? { sourceUrl: opts.source.url } : {}),
       reviewStatus: 'approved',
       truth: {
         truth: truthText,

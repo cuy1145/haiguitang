@@ -1,31 +1,27 @@
 /**
- * 题库来源的统一取数层（`pnpm import:puzzles` 与 `pnpm analyze:puzzles` 共用）。
+ * 题库来源的统一取数层（导入与体检脚本共用）。
  *
- * 支持的源：
- *   file:<路径>                        本地 JSON / JSONL（最稳，适合先把文件下下来）
- *   hf-file:<id>/<path>[#ref]          HuggingFace 直连文件（可用 --hf-endpoint 换镜像）
- *   hf:<id>[#config=&split=&rows=]     HuggingFace datasets-server 分页
- *   github:<owner>/<repo>/<path>[#ref] GitHub Contents API
- *   https://...                        直接 GET JSON
+ * 支持的源（**不含 HuggingFace** —— 国内直连基本不通，已按要求移除）：
+ *   file:<路径>                        本地 JSON / JSONL（最稳：先把文件下下来）
+ *   modelscope:<ns>/<name>/<path>[#rev]  ModelScope（阿里，国内 200ms 级；Turtle-Bench 就在这）
+ *   github:<owner>/<repo>/<path>[#ref]  GitHub Contents API
+ *   https://...                         直接 GET JSON
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-export interface RawItem { surface: string; truth: string }
+export interface RawItem {
+  title?: string;
+  surface: string;
+  truth: string;
+  /** 评测集常见的"玩家猜测 + 对错标签"（用于规则版事实点抽取） */
+  guesses?: Array<{ text: string; label: string }>;
+}
 export type Adapter = (raw: unknown) => RawItem[];
 
 /** 已知源题库的许可（未列出的必须在调用处显式确认） */
 export const SOURCE_LICENSES: Record<string, string> = {
-  // HuggingFace：这一个许可是 Apache-2.0（干净、可再分发，只需注明出处）
-  'hf:lpj990/haiguitang': 'apache-2.0',
-  'hf-file:lpj990/haiguitang': 'apache-2.0',
-  'lpj990/haiguitang': 'apache-2.0',
-  // 下面几个数据集没有声明许可，要用必须自己判断风险
-  'hf:neurostellar/haiguitang': 'UNKNOWN',
-  'hf-file:neurostellar/haiguitang': 'UNKNOWN',
-  'hf:lin52/TurtleSoup': 'UNKNOWN',
-  'hf-file:lin52/TurtleSoup': 'UNKNOWN',
-  // ModelScope（阿里，国内访问快；Turtle-Bench 是 Apache-2.0 的经典题库/评测集）
+  // ModelScope：Turtle-Bench 是 Apache-2.0 的经典题库/判定评测集
   'modelscope:Narcissuses/Turtle-Bench': 'apache-2.0',
   'Narcissuses/Turtle-Bench': 'apache-2.0',
   // GitHub
@@ -36,7 +32,7 @@ export const SOURCE_LICENSES: Record<string, string> = {
 /** 从源字符串推断许可：先精确匹配，再退化到"仓库/数据集 id"匹配 */
 export function licenseOf(source: string): string {
   if (SOURCE_LICENSES[source]) return SOURCE_LICENSES[source]!;
-  const bare = source.replace(/^(github|hf|hf-file):/, '').replace(/\/[^/]+\.(json|jsonl|csv|txt)$/i, '');
+  const bare = source.replace(/^(github|modelscope):/, '').replace(/\/[^/]+\.(json|jsonl|csv|txt)$/i, '');
   return SOURCE_LICENSES[bare] ?? 'UNKNOWN';
 }
 
@@ -52,12 +48,29 @@ export const genericAdapter: Adapter = (raw: unknown): RawItem[] => {
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const o = item as Record<string, unknown>;
-    const surface = [o.surface, o.puzzle, o.question, o.Riddle, o.riddle, o['汤面']]
+    const surface = [o.surface, o.puzzle, o.question, o.Riddle, o.riddle, o['汤面'], o['湯面']]
       .find((v) => typeof v === 'string' && (v as string).trim()) as string | undefined;
-    const truth = [o.truth, o.answer, o.bottom, o.Solution, o.solution, o['汤底']]
+    const truth = [o.truth, o.answer, o.bottom, o.Solution, o.solution, o['汤底'], o['湯底']]
       .find((v) => typeof v === 'string' && (v as string).trim()) as string | undefined;
     if (!surface || !truth) continue;
-    out.push({ surface: surface.trim(), truth: truth.trim() });
+    const guesses: Array<{ text: string; label: string }> = [];
+    if (typeof o.user_guess === 'string' && o.user_guess.trim()) {
+      guesses.push({ text: o.user_guess.trim(), label: String(o.label ?? '').trim() });
+    }
+    if (Array.isArray(o.guesses)) {
+      for (const g of o.guesses) {
+        if (g && typeof g === 'object') {
+          const go = g as Record<string, unknown>;
+          if (typeof go.text === 'string') guesses.push({ text: go.text, label: String(go.label ?? '') });
+        }
+      }
+    }
+    out.push({
+      ...(typeof o.title === 'string' && o.title.trim() ? { title: o.title.trim() } : {}),
+      surface: surface.trim(),
+      truth: truth.trim(),
+      ...(guesses.length ? { guesses } : {}),
+    });
   }
   return out;
 };
@@ -83,52 +96,37 @@ function readLocal(src: string): unknown[] {
 }
 
 /**
- * HuggingFace **直连文件**：`hf-file:<id>/<path>[#ref]`
- * 国内网络常连不上 huggingface.co，而镜像通常只镜像仓库文件（resolve 路径），
- * 所以这条路径配 `--hf-endpoint=https://hf-mirror.com` 最实用。
+ * ModelScope（阿里）数据集源：`modelscope:<namespace>/<name>/<path>[#revision]`
+ *
+ * 例：`modelscope:Narcissuses/Turtle-Bench/train_8k.json`（Apache-2.0）
+ * 注意它是**判定评测集**：9457 行 = 563 道独立题 × 每题约 18 条「猜测 + 对错标签」。
  */
-export async function fetchHfFile(src: string, endpoint: string): Promise<unknown[]> {
-  const spec = src.slice(8);
-  const [pathPart, ref = 'main'] = spec.split('#');
-  const secondSlash = (pathPart ?? '').indexOf('/', (pathPart ?? '').indexOf('/') + 1);
-  if (secondSlash < 0) throw new Error('hf-file 源格式应为 hf-file:owner/repo/path[#ref]');
-  const id = (pathPart ?? '').slice(0, secondSlash);
-  const file = (pathPart ?? '').slice(secondSlash + 1);
-  const url = `${endpoint.replace(/\/+$/, '')}/datasets/${id}/resolve/${ref}/${file}`;
-  console.log(`下载：${url}`);
+export async function fetchModelScope(src: string): Promise<unknown[]> {
+  const spec = src.slice('modelscope:'.length);
+  const [pathPart, revision = 'master'] = spec.split('#');
+  const parts = (pathPart ?? '').split('/');
+  if (parts.length < 3) throw new Error('modelscope 源格式应为 modelscope:namespace/name/path[#revision]');
+  const ns = parts[0]!;
+  const name = parts[1]!;
+  const file = parts.slice(2).join('/');
+  const url = `https://modelscope.cn/api/v1/datasets/${ns}/${name}/repo?Revision=${revision}&FilePath=${encodeURIComponent(file)}`;
+  console.log(`下载：modelscope:${ns}/${name}/${file}`);
   const res = await fetch(url, { headers: { 'User-Agent': 'haiguitang-tools' }, redirect: 'follow' });
-  if (!res.ok) {
-    throw new Error(`下载失败 HTTP ${res.status}：${url}\n（国内网络可加 --hf-endpoint=https://hf-mirror.com）`);
-  }
+  if (!res.ok) throw new Error(`ModelScope 下载失败 HTTP ${res.status}：${ns}/${name}/${file}`);
   return parseTextAsItems(await res.text());
 }
 
-/** HuggingFace datasets-server 分页：`hf:<id>[#config=&split=&rows=]` */
-export async function fetchHf(src: string, want: number): Promise<unknown[]> {
-  const [idPart, queryPart] = src.slice(3).split('#');
-  const params = new URLSearchParams(queryPart ?? '');
-  const config = params.get('config') ?? 'default';
-  const split = params.get('split') ?? 'train';
-  const out: unknown[] = [];
-  const cap = Math.min(want, 20000);
-  for (let offset = 0; offset < cap; offset += 100) {
-    const url = `https://datasets-server.huggingface.co/rows?dataset=${encodeURIComponent(idPart ?? '')}`
-      + `&config=${encodeURIComponent(config)}&split=${encodeURIComponent(split)}&offset=${offset}&length=100`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'haiguitang-tools' } });
-    if (!res.ok) {
-      if (offset === 0) throw new Error(`HF datasets-server ${res.status}：${url}`);
-      break;
-    }
-    const body = await res.json() as { rows?: Array<{ row: unknown }> };
-    const rows = body.rows ?? [];
-    for (const r of rows) out.push(r.row);
-    if (offset % 2000 === 0 && offset > 0) console.log(`  …已取 ${out.length} 行`);
-    if (rows.length < 100) break;
-  }
-  return out;
+/** 列出 ModelScope 数据集里的文件（确认有哪些数据文件） */
+export async function listModelScopeFiles(ns: string, name: string, revision = 'master'): Promise<Array<{ path: string; size: number }>> {
+  const res = await fetch(`https://modelscope.cn/api/v1/datasets/${ns}/${name}/repo/tree?Revision=${revision}&Recursive=true`, {
+    headers: { 'User-Agent': 'haiguitang-tools' },
+  });
+  if (!res.ok) throw new Error(`ModelScope 文件列表失败 HTTP ${res.status}`);
+  const body = await res.json() as { Data?: { Files?: Array<{ Path: string; Size: number }> } };
+  return (body.Data?.Files ?? []).map((f) => ({ path: f.Path, size: f.Size }));
 }
 
-/** 从 GitHub 取文件（Contents API，沙箱/国内相对可达） */
+/** 从 GitHub 取文件（Contents API） */
 export async function fetchGithub(src: string): Promise<unknown> {
   const spec = src.slice(7);
   const [repoAndPath, ref] = spec.split('#');
@@ -146,45 +144,14 @@ export async function fetchGithub(src: string): Promise<unknown> {
   return parseTextAsItems(Buffer.from(body.content.replace(/\n/g, ''), 'base64').toString('utf8'));
 }
 
-/**
- * ModelScope（阿里）数据集源：`modelscope:<namespace>/<name>/<path>[#revision]`
- *
- * 为什么加它：国内访问快（实测 200ms 级），而且上面有现成的海龟汤数据集
- * （例：`modelscope:Narcissuses/Turtle-Bench/train_8k.json`，Apache-2.0）。
- * 注意 Turtle-Bench 是**判定评测集**：9457 行 = 507 道独立题 × 每题多条「猜测+对错标签」。
- */
-export async function fetchModelScope(src: string): Promise<unknown[]> {
-  const spec = src.slice('modelscope:'.length);
-  const [pathPart, revision = 'master'] = spec.split('#');
-  const parts = (pathPart ?? '').split('/');
-  if (parts.length < 3) throw new Error('modelscope 源格式应为 modelscope:namespace/name/path[#revision]');
-  const ns = parts[0]!;
-  const name = parts[1]!;
-  const file = parts.slice(2).join('/');
-  const url = `https://modelscope.cn/api/v1/datasets/${ns}/${name}/repo?Revision=${revision}&FilePath=${encodeURIComponent(file)}`;
-  console.log(`下载：modelscope:${ns}/${name}/${file}`);
-  const res = await fetch(url, { headers: { 'User-Agent': 'haiguitang-tools' }, redirect: 'follow' });
-  if (!res.ok) throw new Error(`ModelScope 下载失败 HTTP ${res.status}：${ns}/${name}/${file}`);
-  return parseTextAsItems(await res.text());
-}
-
-/** 列出 ModelScope 数据集里的文件（用来确认有哪些数据文件） */
-export async function listModelScopeFiles(ns: string, name: string, revision = 'master'): Promise<Array<{ path: string; size: number }>> {
-  const res = await fetch(`https://modelscope.cn/api/v1/datasets/${ns}/${name}/repo/tree?Revision=${revision}&Recursive=true`, {
-    headers: { 'User-Agent': 'haiguitang-tools' },
-  });
-  if (!res.ok) throw new Error(`ModelScope 文件列表失败 HTTP ${res.status}`);
-  const body = await res.json() as { Data?: { Files?: Array<{ Path: string; Size: number }> } };
-  return (body.Data?.Files ?? []).map((f) => ({ path: f.Path, size: f.Size }));
-}
-
-export async function fetchSource(src: string, opts: { want: number; hfEndpoint: string }): Promise<unknown> {
+export async function fetchSource(src: string): Promise<unknown> {
   if (src.startsWith('file:')) return readLocal(src);
   if (src.startsWith('modelscope:')) return fetchModelScope(src);
-  if (src.startsWith('hf-file:')) return fetchHfFile(src, opts.hfEndpoint);
-  if (src.startsWith('hf:')) return fetchHf(src, opts.want);
   if (src.startsWith('github:')) return fetchGithub(src);
-  const res = await fetch(src, { headers: { 'User-Agent': 'haiguitang-tools' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}：${src}`);
-  return parseTextAsItems(await res.text());
+  if (/^https?:\/\//.test(src)) {
+    const res = await fetch(src, { headers: { 'User-Agent': 'haiguitang-tools' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}：${src}`);
+    return parseTextAsItems(await res.text());
+  }
+  throw new Error(`不支持的源：${src}\n可用：file: / modelscope: / github: / https://`);
 }

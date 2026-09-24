@@ -1,195 +1,184 @@
 /**
- * 题库导入（爬虫）—— `pnpm import:puzzles`
+ * 题库导入 —— `pnpm import:puzzles`
  *
- * 为什么需要它：我们的判定引擎依赖**事实点表**，而网上流传的题库基本只有「汤面 + 汤底」两栏。
- * 所以导入分两步：① 抓取并解析源题库 → ② 用模型为每道题补出事实点表 → ③ 过一遍坏题检测 → ④ 写文件。
+ * 为什么要它：我们的判定引擎依赖**事实点表**，而网上流传的题库基本只有「汤面 + 汤底」两栏。
+ * 于是导入分四步：① 取源 → ② 清洗 + 文本级质检 → ③ **补事实点表** → ④ 结构校验 → 写文件。
+ *
+ * 补事实点有两种模式：
+ *   `--facts=rule`（默认，**不需要 API Key、零成本**）
+ *       用汤底拆句当成立事实；如果数据源自带「玩家猜测 + 对错标签」（如 Turtle-Bench），
+ *       还会把 T 标签的猜测当成立事实、F 标签的当**否定型事实**（"玩家猜过但不成立"）。
+ *   `--facts=ai`（需要 AI_KEY，质量更好）
+ *       调模型拆原子事实，并顺带把繁体转成简体。
  *
  * 用法：
- *   pnpm import:puzzles --source=github:KONpiGG/astrbot_plugin_soupai/network_soupai.json \
- *                       --accept-license=AGPL-3.0 --limit 40 [--dry-run]
+ *   pnpm import:puzzles --source=modelscope:Narcissuses/Turtle-Bench/train_8k.json --accept-license=apache-2.0
+ *   pnpm import:puzzles --source=file:data/soup.jsonl --facts=ai --limit 50 --accept-license=apache-2.0
+ *   pnpm import:puzzles --source=... --dry-run          # 只取源 + 质检，不写文件
  *
- * 参数：
- *   --source=<...>        支持三种：
- *                          github:owner/repo/path[#ref]  （走 GitHub Contents API，沙箱里也可用）
- *                          https://...                   （直接 GET，要求返回 JSON）
- *                          file:./local.json             （本地文件，便于离线调试）
- *   --limit=N             最多导入多少道（默认 30；模型调用要花钱，建议先小批量试）
- *   --accept-license=<id> 显式接受源题库的许可（AGPL-3.0 等）。**不传就不写文件**。
- *   --dry-run             只抓取 + 解析 + 报告，不调用模型、不写文件（用于先看质量）
- *   --out=<file>          输出文件（默认 packages/server/src/data/collected-puzzles.ts）
- *
- * 模型配置（补事实点用，复用服务端同一套 AI 配置）：
- *   AI_BASE_URL / AI_MODEL / AI_KEY     —— 也可以用 .env 或命令行环境变量
- *
- * 产出：目标文件里是一组**已通过校验**的 Puzzle，seedPuzzles() 会自动带上它们。
+ * 产出：`packages/server/src/data/collected-puzzles.ts`（生成物，带来源/许可/时间头注释）
+ *       提交后由 CI 自动部署 —— 题库是**编译进 Worker 的常量**，不走数据库。
  */
-import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { deriveFacts } from './lib/facts.ts';
 import { checkAndNormalizePuzzle, cleanPuzzleText, screenPuzzleText, summarizePuzzleIssues } from '../packages/core/src/puzzle-check.ts';
 import { seedPuzzles } from '../packages/server/src/data/seed-puzzles.ts';
 import { HostService } from '../packages/server/src/ai.ts';
 import type { Puzzle } from '../packages/core/src/types.ts';
+import { fetchSource, genericAdapter, licenseOf, type RawItem } from './lib/sources.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
-const arg = (name: string): string | undefined => {
-  const hit = args.find((a) => a.startsWith(`--${name}=`));
-  return hit ? hit.slice(name.length + 3) : undefined;
+const arg = (n: string): string | undefined => {
+  const hit = args.find((a) => a.startsWith(`--${n}=`));
+  return hit ? hit.slice(n.length + 3) : undefined;
 };
-const has = (name: string): boolean => args.includes(`--${name}`);
+const has = (n: string): boolean => args.includes(`--${n}`);
 
-const source = arg('source') ?? 'github:KONpiGG/astrbot_plugin_soupai/network_soupai.json';
-const limit = Math.max(1, Number(arg('limit') ?? 30));
+const source = arg('source') ?? 'modelscope:Narcissuses/Turtle-Bench/train_8k.json';
+const limit = Math.max(1, Number(arg('limit') ?? 5000));
 const dryRun = has('dry-run');
 const accepted = arg('accept-license');
+const factsMode = (arg('facts') ?? (process.env.AI_KEY ? 'ai' : 'rule')) as 'rule' | 'ai';
 const outFile = resolve(root, arg('out') ?? 'packages/server/src/data/collected-puzzles.ts');
-/** HuggingFace 端点（国内可换成 https://hf-mirror.com） */
-const hfEndpoint = arg('hf-endpoint') ?? 'https://huggingface.co';
 
-/** 已知源题库的许可（未列出的一律要求显式确认） */
-const SOURCE_LICENSES: Record<string, string> = {
-  // GitHub
-  'github:KONpiGG/astrbot_plugin_soupai': 'AGPL-3.0',
-  'KONpiGG/astrbot_plugin_soupai': 'AGPL-3.0',
-  // HuggingFace：这一个许可是 Apache-2.0（干净、可再分发，只需注明出处）
-  'hf:lpj990/haiguitang': 'apache-2.0',
-  'lpj990/haiguitang': 'apache-2.0',
-  // 下面两个数据集**没有声明许可**，要用必须自己判断风险（脚本会要求你显式确认）
-  'hf:neurostellar/haiguitang': 'UNKNOWN',
-  'hf:lin52/TurtleSoup': 'UNKNOWN',
+/** 数据来源的署名信息（写进题库，前端会显示"题库来源"） */
+const SOURCE_META: Record<string, { author: string; url: string; type: Puzzle['sourceType'] }> = {
+  'Narcissuses/Turtle-Bench': { author: 'Turtle-Bench（ModelScope）', url: 'https://modelscope.cn/datasets/Narcissuses/Turtle-Bench', type: 'crawl' },
+  'KONpiGG/astrbot_plugin_soupai': { author: 'astrbot_plugin_soupai（GitHub）', url: 'https://github.com/KONpiGG/astrbot_plugin_soupai', type: 'crawl' },
 };
+const sourceKey = source.replace(/^(modelscope|github):/, '').replace(/\/[^/]+\.(json|jsonl)$/i, '');
+const meta = SOURCE_META[sourceKey] ?? { author: source, url: '', type: 'crawl' as const };
 
-interface RawItem { surface: string; truth: string }
-type Adapter = (raw: unknown) => RawItem[];
+console.log('题库导入\n');
+console.log(`源：${source}`);
+console.log(`许可：${licenseOf(source)}   补事实点：${factsMode}${factsMode === 'rule' ? '（不需要 Key）' : '（需要 AI_KEY）'}\n`);
 
-/** 通用适配器：兼容 {surface,truth} / {puzzle,answer} / {Riddle,Solution} 等常见形态 */
-const genericAdapter: Adapter = (raw: unknown): RawItem[] => {
-  const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' && Array.isArray((raw as { data?: unknown[] }).data) ? (raw as { data: unknown[] }).data : []);
-  const out: RawItem[] = [];
-  for (const item of list) {
-    if (!item || typeof item !== 'object') continue;
-    const o = item as Record<string, unknown>;
-    const surface = [o.surface, o.puzzle, o.question, o.Riddle, o.riddle, o.title_surface, o['汤面']]
-      .find((v) => typeof v === 'string' && (v as string).trim()) as string | undefined;
-    const truth = [o.truth, o.answer, o.bottom, o.Solution, o.solution, o['汤底']]
-      .find((v) => typeof v === 'string' && (v as string).trim()) as string | undefined;
-    if (!surface || !truth) continue;
-    out.push({ surface: surface.trim(), truth: truth.trim() });
+// ---------------------------------------------------------------- ① 许可确认
+// 本地文件源（file:）无法自动识别许可，用 --license= 显式声明（例：--license=apache-2.0）
+const license = arg('license') ?? licenseOf(source);
+if (!dryRun) {
+  if (!accepted) {
+    console.error(`✗ 未确认源题库许可。确认接受后请加： --accept-license=${license}`);
+    console.error('  说明：第三方题库并入仓库会带来相应许可义务（AGPL 有传染性），请自行判断。');
+    process.exit(2);
   }
-  return out;
-};
+  if (accepted.toUpperCase() !== license.toUpperCase()) {
+    console.error(`✗ 许可不匹配：源是 ${license}，你声明的是 ${accepted}`);
+    process.exit(2);
+  }
+}
 
-/**
- * HuggingFace 数据集源：`hf:<dataset-id>[#config=&split=&rows=]`
+// ---------------------------------------------------------------- ② 取源 + 清洗 + 质检
+const raw = await fetchSource(source);
+const items = genericAdapter(raw);
+console.log(`解析出 ${items.length} 条原始记录`);
+
+const existingSurfaces = new Set(seedPuzzles().map((p) => cleanPuzzleText(p.surface).replace(/\s+/g, '')));
+const seen = new Set<string>();
+const picked: RawItem[] = [];
+for (const it of items) {
+  const cleaned: RawItem = {
+    ...(it.title ? { title: cleanPuzzleText(it.title).slice(0, 24) } : {}),
+    surface: cleanPuzzleText(it.surface),
+    truth: cleanPuzzleText(it.truth),
+    ...(it.guesses ? { guesses: it.guesses.map((g) => ({ text: cleanPuzzleText(g.text), label: g.label })) } : {}),
+  };
+  const key = cleaned.surface.replace(/\s+/g, '');
+  if (!key || existingSurfaces.has(key) || seen.has(key)) continue;   // 与现有题库、与源内去重
+  seen.add(key);
+  picked.push(cleaned);
+  if (picked.length >= limit) break;
+}
+console.log(`去重后 ${picked.length} 条（源内重复 + 与现有题库撞题的已去掉）\n`);
+
+const screened = picked.map((it) => ({ it, screen: screenPuzzleText(it) }));
+// 另外挡两道：汤底太短（与 scripts/seed-puzzles.ts 的自检门槛保持一致：≥20 字）——
+// 这类题通常是"一句话答案"的填充题，事实点也拆不出来。
+const tooShort = screened.filter((s) => s.screen.ok && s.screen.truth.length < 20);
+const passText = screened.filter((s) => s.screen.ok && s.screen.truth.length >= 20);
+console.log(`文本级质检：通过 ${passText.length} / 拒绝 ${screened.length - passText.length}（其中汤底过短 ${tooShort.length}）`);
+for (const f of screened.filter((s) => !s.screen.ok).slice(0, 6)) {
+  console.log(`  ✗ ${f.screen.surface.slice(0, 24)}… → ${summarizePuzzleIssues(f.screen.issues)}`);
+}
+
+if (dryRun) {
+  console.log(`\n（dry-run）正式导入会为这 ${passText.length} 道补事实点表：${factsMode === 'rule' ? '规则版，零成本' : '调用模型，每道一次'}。`);
+  process.exit(0);
+}
+
+// ---------------------------------------------------------------- ③ 补事实点 + ④ 结构校验
+const host = factsMode === 'ai' ? makeHost() : null;
+if (factsMode === 'ai' && !host) {
+  console.error('✗ --facts=ai 需要 AI_BASE_URL / AI_MODEL / AI_KEY（或改用 --facts=rule）');
+  process.exit(3);
+}
+
+const acceptedPuzzles: Puzzle[] = [];
+const rejected: Array<{ surface: string; why: string }> = [];
+for (const [i, it] of passText.map((s) => s.it).entries()) {
+  process.stdout.write(`\r补事实点 ${i + 1}/${passText.length}…`);
+  let candidate: Record<string, unknown> = { ...(it.title ? { title: it.title } : {}), surface: it.surface, truth: it.truth, facts: deriveFacts(it) };
+
+  if (host) {
+    const res = await host.generateFacts(
+      { apiKey: process.env.AI_KEY!, baseUrl: process.env.AI_BASE_URL!, model: process.env.AI_MODEL!, provider: 'openai-compatible' },
+      { surface: it.surface, truth: it.truth },
+    );
+    if (!res.ok) { rejected.push({ surface: it.surface, why: `模型补事实点失败：${res.errorClass}` }); continue; }
+    const rawFacts = res.raw as { surface_simplified?: string; truth_simplified?: string } & Record<string, unknown>;
+    candidate = {
+      ...(it.title ? { title: it.title } : {}),
+      surface: typeof rawFacts.surface_simplified === 'string' && rawFacts.surface_simplified.trim() ? cleanPuzzleText(rawFacts.surface_simplified) : it.surface,
+      truth: typeof rawFacts.truth_simplified === 'string' && rawFacts.truth_simplified.trim() ? cleanPuzzleText(rawFacts.truth_simplified) : it.truth,
+      facts: rawFacts.facts ?? deriveFacts(it),
+    };
+  }
+
+  const checked = checkAndNormalizePuzzle(candidate, {
+    idPrefix: 'imp',
+    minFacts: 2,                      // 短汤底只能拆出 2 条；2 条也够判定
+    source: { type: meta.type, author: meta.author, url: meta.url, attributionRequired: true },
+  });
+  if (!checked.ok) { rejected.push({ surface: it.surface, why: summarizePuzzleIssues(checked.issues) }); continue; }
+  acceptedPuzzles.push(checked.puzzle);
+}
+process.stdout.write('\r' + ' '.repeat(30) + '\r');
+
+console.log(`\n通过校验：${acceptedPuzzles.length} 道；被拒：${rejected.length} 道`);
+for (const r of rejected.slice(0, 8)) console.log(`  ✗ ${r.surface.slice(0, 26)}… → ${r.why}`);
+if (acceptedPuzzles.length === 0) { console.error('没有任何题目通过校验，未写文件。'); process.exit(4); }
+
+// ---------------------------------------------------------------- 写文件
+const body = acceptedPuzzles.map((p) => JSON.stringify(p)).join(',\n  ');
+const header = `/**
+ * 导入题库（**由 pnpm import:puzzles 自动生成，请勿手改**）
  *
- * 走 datasets-server 的 rows 接口（每页最多 100 行），分页取够 limit 就停，
- * 不会为了拿 30 道题把 2 万行全下来。
- * 例：hf:lpj990/haiguitang（20046 行，Apache-2.0，字段 Riddle/Solution）
+ * 源：${source}
+ * 许可：${license}（运行导入时已显式确认接受）
+ * 事实点来源：${factsMode === 'rule' ? '规则抽取（汤底拆句 + 数据集的猜测标签，未调用模型）' : '模型生成（含繁转简）'}
+ * 生成时间：${new Date().toISOString()}
+ * 题量：${acceptedPuzzles.length}（另有 ${rejected.length} 道未通过质检，已丢弃）
+ *
+ * 说明：题库是**编译进 Worker 的常量**（见 store-d1.ts 的 PUZZLES），不在数据库里；
+ * 改完提交推送即可，CI 会自动部署。想更新题库：重跑导入脚本 → git push。
  */
-async function fetchHf(src: string, want: number): Promise<unknown[]> {
-  const [idPart, queryPart] = src.slice(3).split('#');
-  const params = new URLSearchParams(queryPart ?? '');
-  const config = params.get('config') ?? 'default';
-  const split = params.get('split') ?? 'train';
-  const out: unknown[] = [];
-  const cap = Math.min(want, 2000);
-  for (let offset = 0; offset < cap; offset += 100) {
-    const url = `https://datasets-server.huggingface.co/rows?dataset=${encodeURIComponent(idPart ?? '')}`
-      + `&config=${encodeURIComponent(config)}&split=${encodeURIComponent(split)}&offset=${offset}&length=100`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'haiguitang-import' } });
-    if (!res.ok) {
-      if (offset === 0) throw new Error(`HF datasets-server ${res.status}：${url}`);
-      break;
-    }
-    const body = await res.json() as { rows?: Array<{ row: unknown }> };
-    const rows = body.rows ?? [];
-    for (const r of rows) out.push(r.row);
-    if (rows.length < 100) break;
-  }
-  return out;
-}
+import type { Puzzle } from '@ht/core';
 
-/**
- * HuggingFace **直连文件**源：`hf-file:<dataset-id>/<path>[#ref=<branch>]`
- *
- * 为什么不只用 datasets-server：国内网络常常连不上 huggingface.co，
- * 而 hf-mirror.com 这类镜像通常只镜像**仓库文件**（resolve 路径），不镜像 datasets-server。
- * 所以这里直接下原始文件（.jsonl / .json），并且可以用 --hf-endpoint 换镜像：
- *
- *   pnpm import:puzzles --source=hf-file:lpj990/haiguitang/neww_clue_data.jsonl \
- *                       --hf-endpoint=https://hf-mirror.com --limit 50 --accept-license=apache-2.0
- */
-async function fetchHfFile(src: string, endpoint: string): Promise<unknown> {
-  const spec = src.slice(8);
-  const [pathPart, ref = 'main'] = spec.split('#');
-  const slash = (pathPart ?? '').indexOf('/');
-  const firstSlash = (pathPart ?? '').indexOf('/');
-  const secondSlash = (pathPart ?? '').indexOf('/', firstSlash + 1);
-  if (secondSlash < 0) throw new Error('hf-file 源格式应为 hf-file:owner/repo/path[#ref]');
-  const id = (pathPart ?? '').slice(0, secondSlash);
-  const file = (pathPart ?? '').slice(secondSlash + 1);
-  void slash;
-  const url = `${endpoint.replace(/\/+$/, '')}/datasets/${id}/resolve/${ref}/${file}`;
-  console.log(`下载：${url}`);
-  const res = await fetch(url, { headers: { 'User-Agent': 'haiguitang-import' }, redirect: 'follow' });
-  if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}：${url}\n（国内网络可以试试 --hf-endpoint=https://hf-mirror.com）`);
-  const text = await res.text();
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith('[') || trimmed.startsWith('{')) return JSON.parse(text);
-  // JSONL：一行一个对象
-  const out: unknown[] = [];
-  for (const line of text.split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    try { out.push(JSON.parse(t)); } catch { /* 跳过坏行 */ }
-  }
-  return out;
-}
+const RAW: Puzzle[] = [
+  ${body},
+];
 
-async function fetchSource(src: string, want: number, hfEndpoint: string): Promise<unknown> {
-  if (src.startsWith('hf-file:')) return fetchHfFile(src, hfEndpoint);
-  if (src.startsWith('hf:')) return fetchHf(src, want);
-  if (src.startsWith('file:')) {
-    const p = resolve(root, src.slice(5));
-    if (!existsSync(p)) throw new Error(`文件不存在：${p}`);
-    const text = readFileSync(p, 'utf8');
-    const trimmed = text.trimStart();
-    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-      try { return JSON.parse(text); } catch { /* 落到 JSONL 分支 */ }
-    }
-    const out: unknown[] = [];
-    for (const line of text.split('\n')) {
-      const t = line.trim();
-      if (!t) continue;
-      try { out.push(JSON.parse(t)); } catch { /* 跳过坏行 */ }
-    }
-    return out;
-  }
-  if (src.startsWith('github:')) {
-    const spec = src.slice(7);
-    const [repoAndPath, ref] = spec.split('#');
-    const parts = (repoAndPath ?? '').split('/');
-    const repo = `${parts[0]}/${parts[1]}`;
-    const path = parts.slice(2).join('/');
-    if (!repo.includes('/') || !path) throw new Error('github 源格式应为 github:owner/repo/path[#ref]');
-    const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'User-Agent': 'haiguitang-import' };
-    const token = process.env.GITHUB_TOKEN;
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const url = `https://api.github.com/repos/${repo}/contents/${path}${ref ? `?ref=${ref}` : ''}`;
-    const res = await fetch(url, { headers });
-    if (!res.ok) throw new Error(`GitHub API ${res.status}：${url}`);
-    const body = await res.json() as { content?: string; encoding?: string; size?: number };
-    if (!body.content) throw new Error('GitHub API 没有返回文件内容');
-    const text = Buffer.from(body.content.replace(/\n/g, ''), 'base64').toString('utf8');
-    return JSON.parse(text);
-  }
-  const res = await fetch(src);
-  if (!res.ok) throw new Error(`HTTP ${res.status}：${src}`);
-  return JSON.parse(await res.text());
+export function collectedPuzzles(): Puzzle[] {
+  return RAW;
 }
+`;
+writeFileSync(outFile, header, 'utf8');
+console.log(`\n✓ 已写入 ${outFile.replace(root, '').replace(/^[\\/]/, '')}`);
+console.log('  下一步：pnpm typecheck && pnpm test && git add -A && git commit && git push（CI 自动部署）');
 
 function makeHost(): HostService | null {
   const baseUrl = process.env.AI_BASE_URL ?? '';
@@ -204,127 +193,4 @@ function makeHost(): HostService | null {
   });
 }
 
-// ---------------------------------------------------------------- 主流程
-console.log('题库导入\n');
-console.log(`源：${source}`);
-console.log(`上限：${limit} 道${dryRun ? '（dry-run：不调用模型、不写文件）' : ''}\n`);
-
-const license = SOURCE_LICENSES[source] ?? SOURCE_LICENSES[source.replace(/\/[^/]+$/, '')] ?? 'UNKNOWN';
-if (!dryRun) {
-  if (!accepted) {
-    console.error('✗ 未确认源题库许可。若确认接受，请显式加上： --accept-license=' + license);
-    console.error('  说明：本项目是 AGPL-3.0 的第三方题库，导入后你的仓库需要遵守该许可（有传染性）。');
-    console.error('  不想承担这个义务的话，请改用房主端「AI 创作」——那不会把第三方数据写进仓库。');
-    process.exit(2);
-  }
-  if (accepted.toUpperCase() !== license.toUpperCase()) {
-    console.error(`✗ 许可不匹配：源是 ${license}，你声明的是 ${accepted}`);
-    process.exit(2);
-  }
-}
-
-const raw = await fetchSource(source, Math.max(limit * 2, 120), hfEndpoint);
-const items = genericAdapter(raw);
-console.log(`解析出 ${items.length} 道原始题目（源许可：${license}）`);
-// 去重：与现有题库按汤面去重，源内也去重（先清洗，避免"同一题只因 markdown 不同"被当成两道）
-const existingSurfaces = new Set(seedPuzzles().map((p) => cleanPuzzleText(p.surface).replace(/\s+/g, '')));
-const seen = new Set<string>();
-const picked: RawItem[] = [];
-for (const it of items) {
-  const cleaned: RawItem = { surface: cleanPuzzleText(it.surface), truth: cleanPuzzleText(it.truth) };
-  const key = cleaned.surface.replace(/\s+/g, '');
-  if (!key || existingSurfaces.has(key) || seen.has(key)) continue;
-  seen.add(key);
-  picked.push(cleaned);
-  if (picked.length >= limit) break;
-}
-console.log(`去重后取前 ${picked.length} 道\n`);
-
-// 文本级质检（清洗 + 长度 + 违禁/超自然/猎奇）—— dry-run 也能看到真实通过率，不花一分钱
-const screened = picked.map((it) => ({ it, screen: screenPuzzleText(it) }));
-const passText = screened.filter((s) => s.screen.ok);
-const failText = screened.filter((s) => !s.screen.ok);
-console.log(`文本级质检：通过 ${passText.length} 道 / 拒绝 ${failText.length} 道`);
-for (const f of failText.slice(0, 10)) {
-  console.log(`  ✗ ${f.screen.surface.slice(0, 26)}… → ${summarizePuzzleIssues(f.screen.issues)}`);
-}
-
-if (dryRun) {
-  console.log('\n通过质检的前 3 道（已清洗，正式导入时再补事实点表）：');
-  for (const s of passText.slice(0, 3)) {
-    console.log(`· 汤面（${s.screen.surface.length} 字）：${s.screen.surface}`);
-    console.log(`  汤底（${s.screen.truth.length} 字）：${s.screen.truth}`);
-  }
-  console.log(`\n正式导入时：这 ${passText.length} 道会各调一次模型补事实点表（需 AI_KEY），再走结构校验。`);
-  console.log('dry-run 结束，未写任何文件。');
-  process.exit(0);
-}
-
-const candidates = passText.map((s) => s.it);
-
-const host = makeHost();
-if (!host) {
-  console.error('✗ 缺少模型配置：请设置 AI_BASE_URL / AI_MODEL / AI_KEY（用来给每道题补事实点表）');
-  console.error('  例：$env:AI_BASE_URL="https://api.deepseek.com"; $env:AI_MODEL="deepseek-flash"; $env:AI_KEY="sk-..."');
-  process.exit(3);
-}
-
-const acceptedPuzzles: Array<{ puzzle: Puzzle; from: RawItem }> = [];
-const rejected: Array<{ surface: string; why: string }> = [];
-for (const [i, it] of candidates.entries()) {
-  process.stdout.write(`\r处理 ${i + 1}/${picked.length}…`);
-  const factsRes = await host.generateFacts(
-    { apiKey: process.env.AI_KEY!, baseUrl: process.env.AI_BASE_URL!, model: process.env.AI_MODEL!, provider: 'openai-compatible' },
-    { surface: it.surface, truth: it.truth },
-  );
-  if (!factsRes.ok) { rejected.push({ surface: it.surface, why: `补事实点失败：${factsRes.errorClass}` }); continue; }
-  // 繁体题库（如 ModelScope 的 Turtle-Bench）：模型会顺手给出简体版，优先用它
-  const rawFacts = factsRes.raw as { surface_simplified?: string; truth_simplified?: string } & Record<string, unknown>;
-  const finalSurface = typeof rawFacts.surface_simplified === 'string' && rawFacts.surface_simplified.trim()
-    ? cleanPuzzleText(rawFacts.surface_simplified) : it.surface;
-  const finalTruth = typeof rawFacts.truth_simplified === 'string' && rawFacts.truth_simplified.trim()
-    ? cleanPuzzleText(rawFacts.truth_simplified) : it.truth;
-  const checked = checkAndNormalizePuzzle({ surface: finalSurface, truth: finalTruth, ...rawFacts }, { idPrefix: 'imp' });
-  if (!checked.ok) { rejected.push({ surface: it.surface, why: summarizePuzzleIssues(checked.issues) }); continue; }
-  acceptedPuzzles.push({ puzzle: checked.puzzle, from: it });
-}
-process.stdout.write('\r' + ' '.repeat(30) + '\r');
-
-console.log(`\n通过校验：${acceptedPuzzles.length} 道；被拒：${rejected.length} 道`);
-for (const r of rejected.slice(0, 8)) console.log(`  ✗ ${r.surface.slice(0, 32)}… → ${r.why}`);
-
-if (acceptedPuzzles.length === 0) {
-  console.error('没有任何题目通过校验，未写文件。');
-  process.exit(4);
-}
-
-const header = `/**
- * 导入题库（**由 pnpm import:puzzles 自动生成，请勿手改**）
- *
- * 源：${source}
- * 许可：${license}（运行导入时已显式确认接受）
- * 生成时间：${new Date().toISOString()}
- * 题量：${acceptedPuzzles.length}（另有 ${rejected.length} 道未通过坏题检测，已丢弃）
- *
- * 说明：源题库只提供"汤面 + 汤底"，**事实点表由模型补齐**并经过
- * packages/core/src/puzzle-check.ts 的统一校验（结构 / 汤面泄露 / 违禁词…）。
- * 因此理论上仍可能有个别事实点不准确 —— 玩到问题题可以用房主端「AI 创作」换一题。
- */
-import type { Puzzle } from '@ht/core';
-
-export function collectedPuzzles(): Puzzle[] {
-  return ${JSON.stringify(acceptedPuzzles.map((a) => a.puzzle), null, 2)
-    .split('\n')
-    .map((line, idx) => (idx === 0 ? line : `  ${line}`))
-    .join('\n')};
-}
-`;
-
-writeFileSync(outFile, header, 'utf8');
-console.log(`\n✓ 已写入 ${outFile.replace(root + '\\', '').replace(root + '/', '')}`);
-console.log('  下一步：pnpm typecheck && pnpm test && git add -A && git commit && git push（CI 会自动部署）');
-
-// 顺手跑一次种子自检，确保新题能进库（失败也不回滚文件，方便人工查看）
-console.log('\n运行种子自检…');
-const res = spawnSync('node', ['scripts/seed-puzzles.ts'], { cwd: root, stdio: 'inherit' });
-if (res.status !== 0) console.log('（种子自检未通过，请检查上面的输出）');
+void readFileSync;

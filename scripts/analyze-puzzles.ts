@@ -37,7 +37,6 @@ const arg = (n: string): string | undefined => {
   return hit ? hit.slice(n.length + 3) : undefined;
 };
 const source = arg('source') ?? 'file:data/haiguitang-raw.jsonl';
-const hfEndpoint = arg('hf-endpoint') ?? 'https://huggingface.co';
 const outDir = resolve(root, arg('out-dir') ?? 'data');
 const limit = Number(arg('limit') ?? 0);           // 0 = 全量
 const dump = args.includes('--dump');
@@ -122,7 +121,7 @@ interface Row {
 // ---------------------------------------------------------------- 主流程
 console.log('题库体检\n');
 console.log(`源：${source}   许可：${licenseOf(source)}`);
-const raw = await fetchSource(source, { want: limit > 0 ? limit : 20000, hfEndpoint });
+const raw = await fetchSource(source);
 let items: RawItem[] = genericAdapter(raw);
 if (limit > 0) items = items.slice(0, limit);
 console.log(`解析出 ${items.length} 条（源记录 ${Array.isArray(raw) ? raw.length : '非数组'}）\n`);
