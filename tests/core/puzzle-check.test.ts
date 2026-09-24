@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { checkAndNormalizePuzzle, summarizePuzzleIssues } from '../../packages/core/src/puzzle-check.ts';
+import { checkAndNormalizePuzzle, cleanPuzzleText, screenPuzzleText, summarizePuzzleIssues } from '../../packages/core/src/puzzle-check.ts';
 
 /** 一道各项都合格的样板题 */
 function goodPuzzle(): Record<string, unknown> {
@@ -114,4 +114,46 @@ test('P7: 非对象 / 空输入 → 明确失败（不抛异常）', () => {
     const r = checkAndNormalizePuzzle(bad);
     assert.equal(r.ok, false);
   }
+});
+
+/**
+ * 清洗与文本级质检 —— 真实数据集（HuggingFace lpj990/haiguitang）里就长这样：
+ * Markdown 残留、标签前缀、模型客套话。不清掉的话汤面读起来很怪，还会污染事实点抽取。
+ */
+test('P8: 清洗 markdown 残留 / 标签前缀 / 模型客套话', () => {
+  assert.equal(
+    cleanPuzzleText('当然可以！下面是一个有趣的海龟汤游戏示例：\n\n**汤面**：小明在生日聚会上把朋友都送走了。\n\n**'),
+    '小明在生日聚会上把朋友都送走了。',
+  );
+  assert.equal(cleanPuzzleText('汤底：他其实早就知道了。'), '他其实早就知道了。');
+  assert.equal(cleanPuzzleText(': 我乘坐飞机去度假，项链不见了。'), '我乘坐飞机去度假，项链不见了。');
+  assert.equal(cleanPuzzleText('## 汤面\n\n她在夜里听见敲门声。'), '她在夜里听见敲门声。');
+  assert.equal(cleanPuzzleText('真相：他撒了谎。希望你喜欢这个题目'), '他撒了谎。');
+});
+
+test('P9: 文本级质检拦掉超自然与猎奇（导入前不花钱就能看出来）', () => {
+  const ghost = screenPuzzleText({ surface: '他每晚都梦见恶魔来夺走他的灵魂。', truth: '他其实被诅咒附体了。' });
+  assert.equal(ghost.ok, false);
+  assert.ok(ghost.issues.some((i) => i.reason.includes('超自然')), summarizePuzzleIssues(ghost.issues));
+
+  const gore = screenPuzzleText({
+    surface: '她走进浴室，发现浴缸里覆盖着一层黑色的小球。',
+    truth: '那些球都是眼球。她发现自己的眼睛已经被挖出。',
+  });
+  assert.equal(gore.ok, false);
+  assert.ok(gore.issues.some((i) => i.reason.includes('猎奇')), summarizePuzzleIssues(gore.issues));
+
+  const good = screenPuzzleText({
+    surface: '一名女性在家里听见几次敲门声，开门却没人。第二天床头多了一张她睡觉的照片。',
+    truth: '有人趁她熟睡潜入屋内拍照，敲门声是同伙在试探她是否独自在家。',
+  });
+  assert.equal(good.ok, true, summarizePuzzleIssues(good.issues));
+});
+
+test('P10: 结构校验同样拦超自然/猎奇（AI 创作也走这道门）', () => {
+  const p = goodPuzzle();
+  p.truth = '他是灯塔管理员，其实灯塔早就被恶魔诅咒了，是恶灵让船沉没的。';
+  const r = checkAndNormalizePuzzle(p);
+  assert.equal(r.ok, false);
+  assert.ok(!r.ok && r.issues.some((i) => i.reason.includes('超自然')), !r.ok ? summarizePuzzleIssues(r.issues) : '');
 });

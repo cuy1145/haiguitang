@@ -18,6 +18,15 @@ export interface PuzzleCheckIssue { path: string; reason: string }
 /** 违禁/高风险内容关键词（题库入库前的粗筛，不能替代人工审阅） */
 const BANNED = ['习近平', '共产党', '六四', '台独', '法轮功', '儿童色情', '强奸', '幼女', '自杀教程', '制毒', '炸弹制作'];
 
+/**
+ * 「体裁跑偏」关键词：不是违禁，但会让题目变成另一种东西，或观感很差。
+ *   超自然/灵异：谜底是鬼、恶魔、诅咒 → 玩家没法用"是/否"推出，客观上不可解；
+ *   猎奇血腥：眼球、掏空、内脏… → 朋友局里容易引起不适（我们的分级上限也压不住）。
+ * 这两类在导入时必须拦掉（AI 创作的提示词里已经明确禁止，这里是运行时兜底）。
+ */
+const SUPERNATURAL = ['恶魔', '鬼魂', '恶灵', '诅咒', '附体', '僵尸', '吸血鬼', '巫术', '灵魂被', '超能力', '外星人', '穿越到', '转世', '投胎'];
+const GORE = ['眼球', '挖出', '掏空', '内脏', '肠子', '脑浆', '血浆', '肢解', '碎尸', '尸体被', '割下', '啃食'];
+
 const LIMITS = {
   title: [2, 24] as const,
   surface: [10, 200] as const,
@@ -143,6 +152,12 @@ export function checkAndNormalizePuzzle(
   for (const word of BANNED) {
     if (allText.includes(word)) fail('$', `命中违禁/高风险关键词：${word}`);
   }
+  for (const word of SUPERNATURAL) {
+    if (allText.includes(word)) fail('$', `谜底靠超自然/灵异（"${word}"）——这类题目玩家无法用是/否推出来`);
+  }
+  for (const word of GORE) {
+    if (allText.includes(word)) fail('$', `猎奇血腥描写（"${word}"）——不适合朋友局`);
+  }
 
   if (issues.length > 0) return { ok: false, issues };
 
@@ -186,6 +201,51 @@ function hash(text: string): number {
 /** 供 UI 展示的一句话结论（把 issues 收成一行） */
 export function summarizePuzzleIssues(issues: PuzzleCheckIssue[]): string {
   return issues.slice(0, 4).map((i) => `${i.path}: ${i.reason}`).join('；');
+}
+
+/**
+ * 清洗从模型/网上来的题目文本。
+ *
+ * 实测（HuggingFace 数据集）里最常见的三种脏数据：
+ *   · Markdown 残留：`**汤面**：…`、`## 汤底`
+ *   · 标签前缀：`汤面：`、`: `、`答案：`
+ *   · 模型客套话：`当然可以！下面是一个有趣的海龟汤示例：`、`希望你喜欢`
+ * 这些不清掉，汤面读起来就很怪，而且会污染事实点抽取。
+ */
+export function cleanPuzzleText(text: unknown): string {
+  let t = String(text ?? '').replace(/\r/g, '');
+  t = t.replace(/\*\*|__|`/g, '');                                  // markdown 强调记号
+  t = t.replace(/^[ \t]*#{1,6}[ \t]*/gm, '');                       // 行首标题记号
+  // 模型客套话（通常在最前面，且以冒号结尾）
+  t = t.replace(/^\s*(当然可以|好的|没问题|可以)[！!，,。. ]*[^\n]{0,60}?(示例|题目|海龟汤|如下)[^\n]*[:：]\s*/i, '');
+  // 标签前缀：`汤面：xxx`、`汤面\nxxx`、纯冒号开头（跑两遍以处理"客套话 + 标签"叠在一起的情况）
+  for (let i = 0; i < 2; i++) {
+    t = t.replace(/^\s*(汤面|汤底|题目|谜面|谜底|答案|真相|story|riddle|solution)\s*[:：]?[ \t]*\n?[ \t]*/i, '');
+    t = t.replace(/^\s*[:：]\s*/, '');
+  }
+  t = t.replace(/(希望你喜欢|希望对你有帮助|以上是)[^\n]*$/i, '');
+  t = t.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return t;
+}
+
+/**
+ * **文本级**质检（不依赖事实点表）——用于导入前的"先看质量再花钱"：
+ * 长度、违禁词、超自然、猎奇。真正的结构检查要等事实点表生成后由
+ * checkAndNormalizePuzzle() 完成。
+ */
+export function screenPuzzleText(input: { surface: unknown; truth: unknown }): { ok: boolean; issues: PuzzleCheckIssue[]; surface: string; truth: string } {
+  const surface = cleanPuzzleText(input.surface);
+  const truth = cleanPuzzleText(input.truth);
+  const issues: PuzzleCheckIssue[] = [];
+  if (len(surface) < LIMITS.surface[0]) issues.push({ path: 'surface', reason: `清洗后汤面只剩 ${len(surface)} 字（太短）` });
+  if (len(surface) > LIMITS.surface[1]) issues.push({ path: 'surface', reason: `清洗后汤面 ${len(surface)} 字，超过 ${LIMITS.surface[1]} 字` });
+  if (len(truth) < LIMITS.truth[0]) issues.push({ path: 'truth', reason: `清洗后汤底只剩 ${len(truth)} 字（太短）` });
+  if (len(truth) > LIMITS.truth[1]) issues.push({ path: 'truth', reason: `清洗后汤底 ${len(truth)} 字，超过 ${LIMITS.truth[1]} 字` });
+  const all = `${surface}\n${truth}`;
+  for (const w of BANNED) if (all.includes(w)) issues.push({ path: '$', reason: `命中违禁关键词：${w}` });
+  for (const w of SUPERNATURAL) if (all.includes(w)) issues.push({ path: '$', reason: `谜底靠超自然/灵异（"${w}"）` });
+  for (const w of GORE) if (all.includes(w)) issues.push({ path: '$', reason: `猎奇血腥（"${w}"）` });
+  return { ok: issues.length === 0, issues, surface, truth };
 }
 
 export type { AnswerEnum };

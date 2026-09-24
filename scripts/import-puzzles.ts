@@ -28,7 +28,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { checkAndNormalizePuzzle, summarizePuzzleIssues } from '../packages/core/src/puzzle-check.ts';
+import { checkAndNormalizePuzzle, cleanPuzzleText, screenPuzzleText, summarizePuzzleIssues } from '../packages/core/src/puzzle-check.ts';
 import { seedPuzzles } from '../packages/server/src/data/seed-puzzles.ts';
 import { HostService } from '../packages/server/src/ai.ts';
 import type { Puzzle } from '../packages/core/src/types.ts';
@@ -226,30 +226,41 @@ if (!dryRun) {
 const raw = await fetchSource(source, Math.max(limit * 2, 120), hfEndpoint);
 const items = genericAdapter(raw);
 console.log(`解析出 ${items.length} 道原始题目（源许可：${license}）`);
-// 去重：与现有题库按汤面去重，源内也去重
-const existingSurfaces = new Set(seedPuzzles().map((p) => p.surface.replace(/\s+/g, '')));
+// 去重：与现有题库按汤面去重，源内也去重（先清洗，避免"同一题只因 markdown 不同"被当成两道）
+const existingSurfaces = new Set(seedPuzzles().map((p) => cleanPuzzleText(p.surface).replace(/\s+/g, '')));
 const seen = new Set<string>();
 const picked: RawItem[] = [];
 for (const it of items) {
-  const key = it.surface.replace(/\s+/g, '');
-  if (existingSurfaces.has(key) || seen.has(key)) continue;
+  const cleaned: RawItem = { surface: cleanPuzzleText(it.surface), truth: cleanPuzzleText(it.truth) };
+  const key = cleaned.surface.replace(/\s+/g, '');
+  if (!key || existingSurfaces.has(key) || seen.has(key)) continue;
   seen.add(key);
-  picked.push(it);
+  picked.push(cleaned);
   if (picked.length >= limit) break;
 }
 console.log(`去重后取前 ${picked.length} 道\n`);
 
+// 文本级质检（清洗 + 长度 + 违禁/超自然/猎奇）—— dry-run 也能看到真实通过率，不花一分钱
+const screened = picked.map((it) => ({ it, screen: screenPuzzleText(it) }));
+const passText = screened.filter((s) => s.screen.ok);
+const failText = screened.filter((s) => !s.screen.ok);
+console.log(`文本级质检：通过 ${passText.length} 道 / 拒绝 ${failText.length} 道`);
+for (const f of failText.slice(0, 10)) {
+  console.log(`  ✗ ${f.screen.surface.slice(0, 26)}… → ${summarizePuzzleIssues(f.screen.issues)}`);
+}
+
 if (dryRun) {
-  console.log('前 3 道预览：');
-  for (const it of picked.slice(0, 3)) {
-    console.log(`· ${it.surface.slice(0, 60)}…`);
-    console.log(`  汤底：${it.truth.slice(0, 60)}…`);
+  console.log('\n通过质检的前 3 道（已清洗，正式导入时再补事实点表）：');
+  for (const s of passText.slice(0, 3)) {
+    console.log(`· 汤面（${s.screen.surface.length} 字）：${s.screen.surface}`);
+    console.log(`  汤底（${s.screen.truth.length} 字）：${s.screen.truth}`);
   }
-  const missingFacts = picked.filter((it) => !/facts/.test(JSON.stringify(it))).length;
-  console.log(`\n注意：源题库只有汤面+汤底，${missingFacts}/${picked.length} 道缺事实点表 —— 正式导入时由模型补齐（需 AI_KEY）。`);
+  console.log(`\n正式导入时：这 ${passText.length} 道会各调一次模型补事实点表（需 AI_KEY），再走结构校验。`);
   console.log('dry-run 结束，未写任何文件。');
   process.exit(0);
 }
+
+const candidates = passText.map((s) => s.it);
 
 const host = makeHost();
 if (!host) {
@@ -260,7 +271,7 @@ if (!host) {
 
 const acceptedPuzzles: Array<{ puzzle: Puzzle; from: RawItem }> = [];
 const rejected: Array<{ surface: string; why: string }> = [];
-for (const [i, it] of picked.entries()) {
+for (const [i, it] of candidates.entries()) {
   process.stdout.write(`\r处理 ${i + 1}/${picked.length}…`);
   const factsRes = await host.generateFacts(
     { apiKey: process.env.AI_KEY!, baseUrl: process.env.AI_BASE_URL!, model: process.env.AI_MODEL!, provider: 'openai-compatible' },
