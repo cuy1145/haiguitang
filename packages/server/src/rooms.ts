@@ -1038,7 +1038,10 @@ export class RoomRuntime {
       if (this.room.turn.phase !== 'ACTIVE' && this.room.turn.phase !== 'GRACE') return { ok: false as const, code: 'NOT_ALLOWED' as ActionReject };
       this.hostSkipUsed += 1;
       this.deps.store.audit({ action: 'host_skip_turn', roomId: this.room.id, actor: memberId, meta: { used: this.hostSkipUsed } });
-      const out = reduce(this.room, { type: 'TURN_TICK' }, { ...this.ctx(), now: this.room.turn.graceDeadlineAt });
+      // ⚠️ 以前这里用 `now = graceDeadlineAt` 伪造一次超时 tick 来触发跳过 ——
+      //    下一回合的截止时间是「now + 每人时长」，拿了未来时间就会把剩余时间叠进去
+      //    （还剩 30 秒时跳过 → 下一回合显示 2 分 30 秒）。现在走显式的手动跳过事件，用真实 now。
+      const out = reduce(this.room, { type: 'TURN_SKIP_MANUAL' }, this.ctx());
       this.room = out.room;
       this.apply(out.events);
       return { ok: true as const };

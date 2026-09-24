@@ -582,8 +582,11 @@
   }
   @keyframes note-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
   @keyframes paper-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-  .chat .msg{animation:note-in .14s ease-out}
-  .log .tl{animation:paper-in .16s ease-out}
+  /* 入场动画只加在**新出现**的那一条上（.fx 由渲染时按 seq 判断）：
+     整页是 innerHTML 全量重渲染，如果动画写死在 .msg / .tl 上，每次重渲染都会重播一遍，
+     点一下空白处、在记录里拖选文字都会看到"闪一下"。 */
+  .chat .msg.fx{animation:note-in .14s ease-out}
+  .log .tl.fx,.log .qa.fx{animation:paper-in .16s ease-out}
 
   /* ---------- 补充：新版结构与旧渲染器的对齐 ---------- */
   /* 问答记录：上下分区（回合/提问者/时间 → 完整问题 → 答案章），不是聊天气泡（§2.12） */
@@ -676,7 +679,6 @@
     <div class="topchips">
       <span class="chip mono clickable" id="roomChip" hidden></span>
       <span class="chip" id="connChip"><i class="lamp"></i>连接中…</span>
-      <button class="chip clickable" id="btnRoomInfo" type="button" title="房间信息与设置">房间信息与设置</button>
     </div>
   </header>
   <div id="app"></div>
@@ -725,7 +727,6 @@ const S = {
   keyMask: null,
   keyTest: null,
   configModal: false,
-  roomInfo: false,                       // 顶栏「房间信息与设置」抽屉
   modalTriggerId: '',                    // 打开弹窗的那个按钮（关闭后把焦点还回去）
   noticeShown: '',                       // 已经弹过的短提示（同一条不重复弹）
   guessModal: false,
@@ -777,7 +778,6 @@ function closeTopModal() {
     if (r && r.truth) S.truthDismissedKey = `${r.id}:${r.roundNo}`;   // 关掉就别再自动弹
     return true;
   }
-  if (S.roomInfo) { S.roomInfo = false; return true; }
   if (S.chatOpen) { S.chatOpen = false; return true; }
   return false;
 }
@@ -1316,19 +1316,24 @@ function isBusy() {
 
 let pointerDown = false;
 
+/**
+ * 被推迟的渲染补上时用**非强制** render()：
+ * 指纹没变就一个字节都不动。以前这里是 render(true)，于是"点一下空白处""在记录里拖选文字"
+ * 都会把整页重建一遍 —— 新记录/便笺的入场动画跟着重播，看起来就像页面在闪。
+ */
 let deferredRenderTimer = null;
 function scheduleDeferredRender() {
   if (deferredRenderTimer) clearTimeout(deferredRenderTimer);
   deferredRenderTimer = setTimeout(() => {
     deferredRenderTimer = null;
-    if (S.renderPending && !isBusy()) render(true);
+    if (S.renderPending && !isBusy()) render();
   }, 700);
 }
 
 /** 操作结束（失焦 / 松开鼠标）后补渲染；延迟一点，避免把正要点击的按钮提前替换掉 */
 function flushDeferredRender() {
   setTimeout(() => {
-    if (S.renderPending && !isBusy()) render(true);
+    if (S.renderPending && !isBusy()) render();
   }, 250);
 }
 
@@ -1347,7 +1352,7 @@ function stateFingerprint() {
     : null;
   return JSON.stringify([
     S.screen, S.connected, S.notice, S.error, S.hint,
-    S.configModal, S.guessModal, S.keyModal, S.truthModal, S.roomInfo,
+    S.configModal, S.guessModal, S.keyModal, S.truthModal,
     // 讨论区：消息条数与未读数进指纹（否则新消息不会触发重渲染）；草稿刻意不进（打字不重渲染）；
     // chatOpen 进指纹（打开/关闭面板要立刻重画）；chatPinned 不进（只看不重画，改了由滚动处理器显式 render）
     S.chat.length, S.chatUnread, S.chatOpen, S.railTab,
@@ -1433,6 +1438,11 @@ function render(force = false) {
       if (S.chatUnread !== before) setTimeout(() => render(), 0);
     }
   }
+  // 记录本次渲染到哪儿了：下次渲染时用它判断"哪几条是新的"，只给新条目加入场动画。
+  // 乐观便笺（chatSeq 是哨兵值）在服务端真值回来后就换成真序号，这里跳过它避免序号被顶高。
+  S.fxLogAt = S.log.reduce((mx, t) => Math.max(mx, Number(t.at || 0)), 0);
+  S.fxChatSeq = S.chat.reduce((mx, m) => (m.pending === true ? mx : Math.max(mx, Number(m.chatSeq || 0))), 0);
+
   // 窄屏讨论面板打开时锁住页面滚动（面板本身是 fixed 覆盖层）。
   // 容错：测试用的 DOM 桩没有 body.classList / matchMedia。
   const narrow = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width:900px)').matches : false;
@@ -1751,7 +1761,6 @@ function viewRoom() {
     ${composerCard(room, you, turn, myTurn, draft)}
   </div>
 
-  ${S.roomInfo ? roomInfoModal(room, you) : ''}
   ${S.configModal ? cfgModal(room) : ''}
   ${S.guessModal ? guessModal(v) : ''}
   ${(S.truthModal && room.truth) ? truthModal(room, you) : ''}
@@ -1776,7 +1785,7 @@ function composerCard(room, you, turn, myTurn, draft) {
     <div class="askrow">
       <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${grace && myTurn ? '发送（宽限期内仍有效）' : (myTurn ? '发送' : '等待回合')}</button>
       ${room.status === 'playing' ? `<button id="btnGuessQuick" class="reason" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>` : ''}
-      <button id="btnChatOpen" class="note">讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
+      <button id="btnChatOpen" class="btnchat note">讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
       <span class="dim">${myTurn ? '轮到你发言了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}${turn.lateSubmit ? ' · 上一轮为临界提交' : ''}</span>
     </div>
     ${S.hint ? `<div class="notice hintbar">提示：${esc(S.hint)}</div>` : ''}
@@ -1812,14 +1821,11 @@ function puzzleCard(puzzle, room, you) {
   </div>
   <div class="toolbar">
     <span class="eyebrow">TOOLS / 案卷工具</span>
-    ${you.isHost && playing ? '<button id="btnCfgQuick" class="ghost">对局参数</button>' : ''}
     ${hintsOn ? `
       <button class="hintbtn t1" data-hint="1" ${you.canHintT12 ? '' : 'disabled'}><span class="t">T1</span><span class="c">轻</span></button>
       <button class="hintbtn t2" data-hint="2" ${you.canHintT12 ? '' : 'disabled'}><span class="t">T2</span><span class="c">中</span></button>
       <button class="hintbtn t3" data-hint="3" ${you.canHintT3 ? '' : 'disabled'}><span class="t">T3</span><span class="c">深</span></button>`
-    : '<span class="dim">本局未开启提示（房主可在「对局参数」里打开）</span>'}
-    <span class="grow"></span>
-    <button class="reason" id="btnGuess" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>
+    : '<span class="dim">本局未开启提示（房主可在左侧「对局参数」里打开）</span>'}
   </div>`;
 }
 
@@ -1833,11 +1839,14 @@ function guessButtonLabel(room) {
 
 /** 公共记录里的一条：提问（含判定）或系统事件 */
 function logEntry(t, room, you) {
+  // .fx = "这条是刚出现的"：只有当它的时间戳晚于上次渲染过的最新一条时才加入场动画
+  // （公开问答投影里没有全局自增序号，只有 at = 服务端写入时刻，用它做标记最稳）
+  const fx = Number(t.at || 0) > Number(S.fxLogAt || 0) ? ' fx' : '';
   if (t.kind === 'question') {
     const who = t.memberName || nameOf(room, t.memberId || '');
     const mine = Boolean(t.memberId && you && t.memberId === you.memberId);
     const ans = String(t.answer || '');
-    return `<div class="qa${mine ? ' mine' : ''} ${esc(ans)}">
+    return `<div class="qa${mine ? ' mine' : ''}${fx} ${esc(ans)}">
       <div class="head"><span class="who">${esc(who)}${mine ? '（你）' : ''}</span><span>第 ${t.turnSeq} 轮 · ${fmtClock(t.at)}</span></div>
       <div class="q">${esc(t.text)}</div>
       <div class="a">主持人：<span class="verdict ${esc(ans)}">${answerLabel(t.answer)}</span>${t.reasonCode && t.reasonCode !== 'NONE' ? `<span class="dim">（${esc(t.reasonCode)}）</span>` : ''}${t.source ? sourceTag(t.source) : ''}${t.late ? '<span class="late">· 临界提交</span>' : ''}</div>
@@ -1845,7 +1854,7 @@ function logEntry(t, room, you) {
     </div>`;
   }
   const cls = t.kind === 'rejected' ? 'err' : t.kind === 'vote' ? 'vote' : 'sys';
-  return `<div class="tl ${cls}">${t.memberId ? `<b>${esc(nameOf(room, t.memberId))}</b>：` : ''}${esc(t.text)}
+  return `<div class="tl ${cls}${fx}">${t.memberId ? `<b>${esc(nameOf(room, t.memberId))}</b>：` : ''}${esc(t.text)}
     <div class="meta">${fmtClock(t.at)}${t.meta ? ' · ' + esc(t.meta) : ''}</div></div>`;
 }
 
@@ -1894,7 +1903,9 @@ function chatCard(room, you, bare = false) {
 
 function chatEntry(m, meId) {
   const mine = m.memberId === meId;
-  return `<div class="msg${mine ? ' mine' : ''}">
+  // 只有"新贴上来的便笺"才播入场动画（同上：整页重渲染不该重播）
+  const fx = Number(m.chatSeq || 0) > Number(S.fxChatSeq || 0) || m.pending === true ? ' fx' : '';
+  return `<div class="msg${mine ? ' mine' : ''}${fx}">
     <div class="who">${mine ? '你' : esc(m.memberName || '—')}<span class="dim"> ${esc(fmtClock(m.createdAt))}</span></div>
     <div class="txt">${esc(m.text)}</div>
   </div>`;
@@ -2551,41 +2562,6 @@ function recapModal(recap) {
     `<span class="dim">复盘不含任何 Key</span><button id="btnRecapClose">关闭</button>`);
 }
 
-/**
- * 顶栏「房间信息与设置」抽屉（§2.7 / §5.2）：房间元数据、额度铭牌、房主入口都收在这里，
- * 不再占用主内容区（普通玩家看不到房主操作）。
- */
-function roomInfoModal(room, you) {
-  const mask = hostKeyMask(room);
-  const blocked = room.ai.state === 'BLOCKED';
-  return modalShell('ROOM / 03', '房间信息与设置', `
-    <div class="fieldgroup"><h4>房间</h4>
-      <div class="fieldrow"><span class="lab">房号</span><span class="mono" style="letter-spacing:.18em">${esc(room.code)}</span></div>
-      <div class="fieldrow"><span class="lab">状态</span><span>${esc(roomStatusLabel(room))}</span></div>
-      <div class="fieldrow"><span class="lab">进度</span><span class="mono">第 ${room.roundNo} 轮 · 本房间第 ${room.matchNo || 0} 局</span></div>
-      <div class="fieldrow"><span class="lab">邀请</span><span class="row"><button id="btnCopyCode" class="ghost">复制房号</button><button id="btnCopyInvite" class="ghost">复制邀请链接</button></span></div>
-    </div>
-    <div class="fieldgroup"><h4>设备</h4>
-      <div class="fieldrow"><span class="lab">AI 汤主</span>
-        <span class="row"><i class="lamp${blocked ? ' off' : ''}"></i>${blocked ? '异常 · 对局已暂停' : '正常'}${blocked && room.ai.reasonCode ? ` <span class="mono dim">${esc(room.ai.reasonCode)}</span>` : ''}</span></div>
-      <div class="fieldrow"><span class="lab">额度来源</span><span>${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'} <span class="mono dim">${esc(room.credit.reason)}</span></span></div>
-      <div class="fieldrow"><span class="lab">房主 Key</span><span>${mask ? `<span class="mask">${esc(mask)}</span>` : '<span class="dim">未配置</span>'}</span></div>
-    </div>
-    ${you.isHost ? `
-    <div class="fieldgroup"><h4>房主操作</h4>
-      <div class="fieldrow"><span class="lab">对局</span><span class="row">
-        ${room.status === 'waiting' ? '<button class="primary" id="btnStart">开局（随机一道）</button><button id="btnStartVote">投票选汤</button>' : ''}
-        ${room.turn.phase === 'ACTIVE' ? '<button id="btnSkip">跳过本轮</button>' : ''}
-        ${room.status === 'settled' ? '<button class="primary" id="btnNextRound">回到选题（下一局）</button><button id="btnRecap">查看复盘</button>' : ''}
-      </span></div>
-      <div class="fieldrow"><span class="lab">参数与凭据</span><span class="row">
-        <button id="btnCfg">对局参数</button>
-        <button id="btnKey">${mask ? '更换 / 撤销 Key' : '接通 AI 汤主'}</button>
-      </span></div>
-    </div>` : ''}`,
-    `<button id="btnRoomInfoClose">关闭</button>
-     <button class="danger" id="btnLeave">离开房间</button>`);
-}
 
 /* ============================================================================
  * 交互绑定
@@ -2618,7 +2594,7 @@ document.addEventListener('click', async (e) => {
   const kickTarget = el.getAttribute && el.getAttribute('data-kick');
   const room = S.view ? S.view.room : null;
   // 记住是哪个按钮把弹窗打开的：关闭后要把焦点还回去（§23）
-  if (['btnCfg', 'btnCfgQuick', 'btnKey', 'btnGuess', 'btnGuessQuick', 'btnRecap', 'btnRoomInfo'].includes(id)) S.modalTriggerId = id;
+  if (['btnCfg', 'btnKey', 'btnGuessQuick', 'btnRecap'].includes(id)) S.modalTriggerId = id;
 
   try {
     if (kickTarget && room) {
@@ -2692,8 +2668,6 @@ document.addEventListener('click', async (e) => {
       case 'btnTabCrew': S.railTab = 'crew'; render(); break;
       case 'btnTabNotes': S.railTab = 'notes'; markChatRead(); render(); break;
       // 顶栏「房间信息与设置」（§2.7 / §5.2）：房间元数据、额度铭牌与房主入口都收进抽屉
-      case 'btnRoomInfo': S.modalTriggerId = 'btnRoomInfo'; S.roomInfo = true; render(true); break;
-      case 'btnRoomInfoClose': S.roomInfo = false; render(true); break;
       case 'btnSeat': {
         // 待入席者的"举手"= 申请下一轮上桌（服务端按成员状态区分语义）
         const me = room ? room.members.find((m) => m.id === (S.view.you ? S.view.you.memberId : '')) : null;
@@ -2717,7 +2691,6 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnCfg': S.configModal = true; render(true); break;
-      case 'btnCfgQuick': S.configModal = true; render(true); break;
       case 'btnCfgClose':
         Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
         S.configModal = false; render(true); break;
@@ -2796,8 +2769,7 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
-      case 'btnGuess': S.guessModal = true; render(true); break;
-      // 提问框旁边的快捷入口：同一个弹窗，随时可猜（冷却期间按钮是禁用的）
+      // 猜汤底入口只在底部书写板（之前工具条里还有一个重复的，已去掉）
       case 'btnGuessQuick': S.guessModal = true; render(true); break;
       case 'btnTruthClose':
       case 'btnTruthClose2': {

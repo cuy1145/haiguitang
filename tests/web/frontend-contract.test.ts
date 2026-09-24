@@ -44,11 +44,11 @@ test('F1: 风格禁区 —— 没有背景模糊、没有装饰性渐变、没�
 
 test('F2: 三栏骨架、页签、书写板与关键控件 id 都在', () => {
   const html = read(MAIN);
-  for (const need of ['class="grid"', 'col-side', 'col-main', 'col-rail', 'speakerbox', 'puzzle-card', 'records', 'composer', 'tabs', 'btnTabCrew', 'btnTabNotes', 'btnRoomInfo', 'toasts']) {
+  for (const need of ['class="grid"', 'col-side', 'col-main', 'col-rail', 'speakerbox', 'puzzle-card', 'records', 'composer', 'tabs', 'btnTabCrew', 'btnTabNotes', 'toasts']) {
     assert.ok(html.includes(need), `结构缺少：${need}`);
   }
   // 动作绑定靠这些 id，改名就要同步改处理函数 —— 用测试兜住
-  for (const id of ['id="ask"', 'id="btnSend"', 'id="chatInput"', 'id="btnChatSend"', 'id="btnReady"', 'id="btnGuess"', 'id="btnGuessSubmit"', 'id="btnCfg"', 'id="btnCfgApply"', 'id="btnKey"', 'id="btnRecap"', 'id="btnLeave"']) {
+  for (const id of ['id="ask"', 'id="btnSend"', 'id="chatInput"', 'id="btnChatSend"', 'id="btnReady"', 'id="btnGuessQuick"', 'id="btnGuessSubmit"', 'id="btnCfg"', 'id="btnCfgApply"', 'id="btnKey"', 'id="btnRecap"', 'id="btnLeave"']) {
     assert.ok(html.includes(id), `缺少控件：${id}`);
   }
 });
@@ -70,6 +70,32 @@ test('F4: 会话与草稿的本地键（升级不该把正在玩的人弄丢）'
   assert.ok(!classic.includes("const LS_TOKEN = 'ht.token';"), '旧版不得再抢主力版的会话键');
 });
 
+test('F6: 同一个功能只留一个入口（不重复堆放按钮）', () => {
+  const html = read(MAIN);
+  // 猜汤底：只在底部书写板（btnGuessQuick）出现一次；工具条里不再有第二个
+  assert.ok(html.includes('id="btnGuessQuick"'), '底部书写板要有猜汤底');
+  assert.ok(!html.includes('id="btnGuess"'), '工具条里不该再有第二个猜汤底（曾重复）');
+  // 讨论：桌面靠右栏页签，窄屏才用入口按钮 —— 按钮必须带 btnchat（桌面 display:none）
+  assert.ok(/id="btnChatOpen" class="btnchat/.test(html), '窄屏讨论入口按钮要带 btnchat 类（否则桌面上会与右栏页签重复）');
+  assert.ok(html.includes('id="btnTabNotes"'), '右栏要有讨论页签');
+  // 房间信息与设置：只保留左栏「ROOM / 房间」卡片，顶栏不再重复一个入口
+  assert.ok(!html.includes('btnRoomInfo'), '顶栏不该再有房间信息入口');
+  assert.ok(!html.includes('btnCfgQuick'), '工具条里不该再有第二个对局参数（左栏已有）');
+  assert.ok(html.includes('HOST / 房主操作'), '房主操作集中在左栏卡片里');
+});
+
+test('F7: 入场动画只加在新条目上（否则每次重渲染都会闪一遍）', () => {
+  const css = styleOf(read(MAIN));
+  assert.ok(/\.chat \.msg\.fx\{animation/.test(css), '便笺动画必须挂在 .fx 上');
+  assert.ok(/\.log \.tl\.fx,\.log \.qa\.fx\{animation/.test(css), '记录动画必须挂在 .fx 上');
+  assert.ok(!/\.chat \.msg\{animation/.test(css), '不允许把动画直接挂在 .msg 上（重渲染会重播）');
+  assert.ok(!/\.log \.tl\{animation/.test(css), '不允许把动画直接挂在 .tl 上');
+  const html = read(MAIN);
+  assert.ok(/fxLogAt|fxChatSeq/.test(html), '渲染时要记录"已经见过的最新一条"，才能判断谁是新的');
+  // 被推迟的补渲染不能强制重画（指纹没变就一个字节都别动）
+  assert.ok(/if \(S\.renderPending && !isBusy\(\)\) render\(\);/.test(html), '补渲染必须用非强制 render()');
+});
+
 test('F5: 设计令牌齐备且可访问性规则在位', () => {
   const css = styleOf(read(MAIN));
   for (const token of ['--desk-950', '--paper-100', '--brass', '--stamp-yes', '--stamp-no', '--font-story', '--font-mono', '--focus']) {
@@ -80,3 +106,4 @@ test('F5: 设计令牌齐备且可访问性规则在位', () => {
   assert.ok(/min-height:44px/.test(css), '窄屏触控目标至少 44px');
   assert.ok(/@media\(max-width:900px\)/.test(css), '必须有窄屏断点');
 });
+

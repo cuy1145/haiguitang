@@ -170,6 +170,26 @@ test('超时：ACTIVE→GRACE→SKIPPED，跳过的是本轮而不是补回，�
   assert.equal(getMember(skipped.room, 'm1')?.skipStreak, 1);
 });
 
+test('房主手动跳过：用真实时间跳过，剩余时间不许叠进下一回合（回归）', () => {
+  const now = 1_000_000;
+  const room0 = beginMatch(makeRoom(now), ctx(now));
+  const perTurn = room0.config.perTurnSec;
+  // 走到"还剩一半"时由房主手动跳过 —— 旧实现会把这半天剩余叠进下一回合（1.5 倍时长）
+  const skipAt = now + Math.floor(perTurn * 500);
+  const out = reduce(room0, { type: 'TURN_SKIP_MANUAL' }, ctx(skipAt));
+
+  assert.equal(out.room.turn.memberId, 'm2', '跳过之后轮到下一位');
+  assert.equal(out.room.turn.seq, 2);
+  assert.equal(out.room.turn.phase, 'ACTIVE');
+  assert.equal(out.room.turn.startedAt, skipAt, '新回合从"跳过的这一刻"起算');
+  assert.equal(out.room.turn.deadlineAt - skipAt, perTurn * 1000,
+    `下一回合必须给完整时长 ${perTurn} 秒（旧实现会变成 ${perTurn * 1.5} 秒）`);
+  assert.equal(getMember(out.room, 'm1')?.skipStreak, 0, '手动跳过不该算作"超时"，不计 skipStreak');
+  const ev = out.events.find((e) => e.type === 'turn_skipped');
+  assert.ok(ev && ev.type === 'turn_skipped' && ev.reason === 'manual', '事件里记的是"房主手动跳过"');
+  assert.ok(out.events.some((e) => e.type === 'turn_settled' && e.outcome === 'skipped_manual'));
+});
+
 test('判定失败：回退 ACTIVE 且 turnSeq 不变（不会产生第二次判定）', () => {
   const now = 1_000_000;
   let room = beginMatch(makeRoom(now), ctx(now));

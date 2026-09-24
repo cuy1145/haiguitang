@@ -36,10 +36,12 @@ export type TurnOutcome =
   | 'answered'
   | 'skipped_timeout'
   | 'skipped_unavailable'
+  /** 房主手动「跳过本轮」：既不是超时，也不是成员不可用 */
+  | 'skipped_manual'
   | 'voided_transfer'
   | 'voided_restart'
   | null;
-export type SkipReason = 'timeout' | 'disconnected' | 'idle' | 'left' | 'kicked' | 'voided_transfer';
+export type SkipReason = 'timeout' | 'disconnected' | 'idle' | 'left' | 'kicked' | 'voided_transfer' | 'manual';
 
 export type ConnState = 'connected' | 'disconnected';
 export type ActivityState = 'active' | 'idle';

@@ -181,7 +181,8 @@ export const TEXT = {
   turnStarted: (name: string, sec: number, unavailable: boolean) =>
     unavailable ? `轮到 ${name} 了（当前不可用，直接进入宽限）` : `轮到 ${name} 了（${sec} 秒）`,
   graceStarted: (sec: number) => `倒计时结束，进入 ${sec} 秒宽限期（此时提交仍然有效）`,
-  turnSkipped: (name: string, reason: string) => `${name} 已被跳过（${reason === 'timeout' ? '超时未提交' : '当前不可用'}）`,
+  turnSkipped: (name: string, reason: string) => `${name} 已被跳过（${
+    reason === 'timeout' ? '超时未提交' : reason === 'manual' ? '房主手动跳过' : '当前不可用'}）`,
   submitRejected: (code: string) => {
     switch (code) {
       case 'TURN_EXPIRED': return '本轮已跳过，内容未提交。（草稿仍保留在你的浏览器里）';

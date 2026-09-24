@@ -178,11 +178,19 @@ export function tickTurn(room: CoreRoom, now: number, ctx: ReduceCtx): TurnTrans
   return { room, events };
 }
 
-/** 跳过当前回合（不补回，顺序不变）。 */
+/**
+ * 跳过当前回合（不补回，顺序不变）。
+ *
+ * ⚠️ 必须用**真实的 ctx.now** 调用：下一回合的截止时间是从 now 起算的，
+ *    如果拿一个"未来的时间"当 now（以前房主手动跳过是拿 graceDeadlineAt 伪造一次 tick），
+ *    剩余时间就会被叠进下一回合（还剩 30 秒时跳过，下一回合会变成 2 分 30 秒）。
+ */
 export function skipTurn(room: CoreRoom, reason: SkipReason, ctx: ReduceCtx): TurnTransition {
   const memberId = room.turn.memberId ?? '';
   const member = getMember(room, memberId);
-  const outcome: TurnOutcome = reason === 'timeout' ? 'skipped_timeout' : 'skipped_unavailable';
+  const outcome: TurnOutcome = reason === 'timeout'
+    ? 'skipped_timeout'
+    : reason === 'manual' ? 'skipped_manual' : 'skipped_unavailable';
   let next = withRoom(room, {
     turn: { ...room.turn, phase: 'SKIPPED', outcome },
   }, ctx.now);

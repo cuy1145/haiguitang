@@ -7,7 +7,7 @@
  */
 import type { CoreRoom, DomainEvent, ReduceCtx, ReduceResult } from './types.ts';
 import { PLATFORM } from './constants.ts';
-import { getMember, withRoom } from './room.ts';
+import { getMember, isPlaying, withRoom } from './room.ts';
 import * as presence from './presence.ts';
 import * as turn from './turn.ts';
 import * as votes from './vote.ts';
@@ -18,6 +18,8 @@ export type CoreEvent =
   /** 准备状态：玩家自己举手/收回（只在开局前有意义） */
   | { type: 'READY_SET'; memberId: string; ready: boolean }
   | { type: 'TURN_TICK' }
+  /** 房主手动跳过本轮（用真实时间跳过，不是伪造超时） */
+  | { type: 'TURN_SKIP_MANUAL' }
   | { type: 'SUBMIT_ACCEPTED'; memberId: string }
   | { type: 'JUDGE_DONE' }
   | { type: 'JUDGE_FAILED' }
@@ -87,6 +89,18 @@ export function reduce(room: CoreRoom, event: CoreEvent, ctx: ReduceCtx): Reduce
 
     case 'TURN_TICK': {
       const out = turn.tickTurn(room, ctx.now, ctx);
+      return { room: out.room, events: out.events };
+    }
+
+    /**
+     * 房主手动跳过本轮。
+     * 与 TURN_TICK 的关键区别：它是**显式意图**，用真实 now 直接跳过，
+     * 不能靠"把 now 设成 graceDeadlineAt"来伪造超时 —— 那会把剩余时间叠进下一回合。
+     */
+    case 'TURN_SKIP_MANUAL': {
+      if (!isPlaying(room)) return { room, events: [] };
+      if (room.turn.phase !== 'ACTIVE' && room.turn.phase !== 'GRACE') return { room, events: [] };
+      const out = turn.skipTurn(room, 'manual', ctx);
       return { room: out.room, events: out.events };
     }
 
