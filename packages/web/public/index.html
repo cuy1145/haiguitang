@@ -515,7 +515,17 @@ function saveSession(roomId, memberId, tok) {
   // 只存会话凭证，不存任何密钥或汤底（汤底服务端根本不下发）
   localStorage.setItem(LS_TOKEN, tok);
 }
+/**
+ * 会话代次：每次"会话结束"（主动离开 / 令牌失效 / 房间被清理）+1。
+ * 所有跨网络的异步回调（轮询、动作）都在发起前记下代次，回来时对不上就**整包丢弃**。
+ * 否则会出现这类竞态：点「离开」时已有一个轮询在飞，它比离开请求晚回来，
+ * 于是把房间页又渲染回来（或写上一句 HTTP 404），页面卡死只能刷新。
+ */
+let sessionEpoch = 0;
+
 function clearSession() {
+  sessionEpoch++;
+  S.connected = false;             // 别再用旧会话的"已连接"去上报活动/心跳
   localStorage.removeItem(LS_TOKEN);
   localStorage.removeItem(LS_DRAFT);
   S.me = null;
@@ -523,6 +533,18 @@ function clearSession() {
   S.drafts = {};                 // 会话结束：连同内存里的 API Key 草稿一起丢掉
   S.questions = [];
   S.log = [];
+}
+
+/** 房间在服务端已经不存在（最后一人离开会立刻清理 / 过期回收）：回入口页，别一直重试 */
+function roomGone(message = '房间已结束或已被清理，请重新创建或加入房间') {
+  const wasInRoom = S.screen === 'room';
+  clearSession();
+  stopPolling();
+  S.screen = 'entry';
+  S.view = null;
+  S.error = '';
+  S.notice = wasInRoom ? message : '';
+  render();
 }
 
 async function api(path, opts = {}) {
@@ -595,16 +617,29 @@ function stopPolling() {
 
 async function pollOnce() {
   if (pollInFlight || !token()) return;
+  const epoch = sessionEpoch;
   pollInFlight = true;
   try {
     const res = await fetch(`/api/rooms/state?since=${S.lastSeq}`, { headers: { authorization: `Bearer ${token()}` } });
+    // 响应回来时如果会话已经结束（用户已离开 / 房间被清理），整包丢弃：
+    // 既不能把页面拉回房间，也不能写一句"连接中断（HTTP 404）"把入口页卡住。
+    if (epoch !== sessionEpoch || !token()) return;
     if (res.status === 401) { expireSession(); return; }
+    // 404 有两种，必须分开：ROOM_NOT_FOUND = 房间真没了（回入口页）；
+    // 其它 404（例如路由不存在 = 前后端版本不匹配）是连接问题，要照实报出来，不能悄悄踢人。
+    if (res.status === 404) {
+      const body = await res.json().catch(() => null);
+      if (body && body.error === 'ROOM_NOT_FOUND') { roomGone(); return; }
+      throw new Error(`HTTP 404${body && body.path ? ` ${body.path}` : ''}`);
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (epoch !== sessionEpoch) return;
     S.connected = true;
     S.error = '';
     applyState(data);
   } catch (err) {
+    if (epoch !== sessionEpoch) return;
     S.connected = false;
     S.error = `连接中断（${err.message}），正在重试…`;
     render();
@@ -663,7 +698,10 @@ function buildLog(questions, timeline) {
  * 失败时返回 null，并把错误显示出来。
  */
 async function sendAction(action, opts = {}) {
-  if (!token()) { S.error = '会话已失效，请重新加入房间'; render(); return null; }
+  // 没有令牌 = 已经不在房间里（刚离开/被清理）。直接静默返回：
+  // 页面上不该出现"会话已失效"这种噪音 —— 用户什么都没做错。
+  if (!token()) return null;
+  const epoch = sessionEpoch;
   try {
     const res = await fetch('/api/rooms/actions', {
       method: 'POST',
@@ -671,7 +709,11 @@ async function sendAction(action, opts = {}) {
       body: JSON.stringify(action),
     });
     const data = await res.json().catch(() => ({}));
+    // 会话已经结束（用户已离开）：这份响应属于上一个房间，丢弃
+    if (epoch !== sessionEpoch || !token()) return null;
     if (res.status === 401) { expireSession(); return null; }
+    // 同上：只有 ROOM_NOT_FOUND（房间真没了）才回入口页
+    if (res.status === 404 && data && data.error === 'ROOM_NOT_FOUND') { roomGone(); return null; }
     if (!res.ok || data.ok === false) {
       const detail = data.detail && data.detail.errors
         ? '（' + data.detail.errors.map((e) => `${e.path}: ${e.reason}`).join('；') + '）'
@@ -690,6 +732,7 @@ async function sendAction(action, opts = {}) {
     else await pollOnce();
     return data;
   } catch (err) {
+    if (epoch !== sessionEpoch) return null;      // 离开房间后才回来的失败，同样丢弃
     S.connected = false;
     S.error = `请求失败：${err.message}`;
     render();
@@ -988,6 +1031,7 @@ function viewEntry() {
         <button id="btnResume" ${token() ? '' : 'disabled'}>回到我的房间</button>
       </div>
       ${S.error ? `<div class="err" style="margin-top:12px">${esc(S.error)}</div>` : ''}
+      ${S.notice ? `<div class="notice" style="margin-top:12px">${esc(S.notice)}</div>` : ''}
       <div class="dim" style="margin-top:12px">
         ${S.config ? `服务端模型：${S.config.realModelEnabled ? '已配置平台额度' : '未配置（可由房主自备 API Key）'} · 密钥保险箱：${S.config.vaultEnabled ? '已启用' : '未启用'}` : ''}
       </div>
@@ -995,23 +1039,31 @@ function viewEntry() {
   </div>`;
 }
 
+/**
+ * 入口页的「创建 / 加入」：留空房间码就新建，否则按房号加入。
+ * 单独抽成函数（而不是塞在 onclick 里）是为了能测：离开房间后立刻重开，
+ * 上一次会话留下的报错/说明不许带进新房间。
+ */
+async function joinOrCreate() {
+  const nickname = ($('#nick').value || '').trim() || '玩家';
+  const code = ($('#code').value || '').trim().toUpperCase();
+  const preset = $('#preset').value;
+  localStorage.setItem(LS_NICK, nickname);
+  S.error = '';
+  S.notice = '';                   // 上一次会话的说明（如"房间已被清理"）不要带进新房间
+  const res = code
+    ? await api(`/api/rooms/${code}/join`, { method: 'POST', body: JSON.stringify({ nickname }) })
+    : await api('/api/rooms', { method: 'POST', body: JSON.stringify({ nickname, preset }) });
+  saveSession(res.roomId, res.memberId, res.token);
+  if (res.view) { S.view = res.view; S.screen = 'room'; }
+  startPolling();
+  render();
+}
+
 function bindEntry() {
   const go = $('#btnGo');
   if (go) go.onclick = async () => {
-    const nickname = ($('#nick').value || '').trim() || '玩家';
-    const code = ($('#code').value || '').trim().toUpperCase();
-    const preset = $('#preset').value;
-    localStorage.setItem(LS_NICK, nickname);
-    try {
-      S.error = '';
-      const res = code
-        ? await api(`/api/rooms/${code}/join`, { method: 'POST', body: JSON.stringify({ nickname }) })
-        : await api('/api/rooms', { method: 'POST', body: JSON.stringify({ nickname, preset }) });
-      saveSession(res.roomId, res.memberId, res.token);
-      if (res.view) { S.view = res.view; S.screen = 'room'; }
-      startPolling();
-      render();
-    } catch (e) { S.error = e.message; render(); }
+    try { await joinOrCreate(); } catch (e) { S.error = e.message; render(); }
   };
   const resume = $('#btnResume');
   if (resume) resume.onclick = async () => {
@@ -1993,13 +2045,15 @@ document.addEventListener('visibilitychange', () => {
     S.config = await api('/api/config');
   } catch { /* 忽略：入口页会用默认文案 */ }
   if (token()) {
+    const bootEpoch = sessionEpoch;      // 启动期的会话检查同样是异步的：期间会话可能已经结束
     try {
       const me = await api('/api/session');
+      if (bootEpoch !== sessionEpoch || !token()) return;   // 已经离开/被清理 → 丢弃这次结果
       S.me = { roomId: me.roomId, memberId: me.memberId, token: token() };
       S.view = me.view; S.screen = 'room';
       if (S.view && S.view.room) S.serverOffset = S.view.room.serverTime - Date.now();
       startPolling();
-    } catch { clearSession(); }
+    } catch { if (bootEpoch === sessionEpoch) clearSession(); }
   }
   startTicker();          // 倒计时按秒走（只改文本/进度条，不整页重渲染）
   render();
