@@ -92,6 +92,7 @@ export type ActionReject =
   | 'GUESS_NOT_IN_WINDOW'
   | 'GUESS_ATTEMPTS_EXHAUSTED'
   | 'GUESS_TOO_SHORT'
+  | 'GUESS_COOLDOWN'
   | 'VOTE_NOT_ELIGIBLE'
   | 'VOTE_NOT_OPEN'
   | 'NOT_HOST'
@@ -147,8 +148,12 @@ export interface GameConfig {
   perTurnSec: number;
   graceSec: number;
   timeoutSkip: boolean;
+  /** 已废弃：以前靠「每 N 轮才能揭秘」限流，现在改成「随时可以猜 + 共用冷却」。保留字段只为兼容旧配置。 */
   guessEveryRounds: number;
+  /** 每人猜汤底次数上限：0 = 不限（默认，节奏交给共用冷却） */
   guessMaxPerMember: number;
+  /** 猜汤底**共用冷却**（秒）：任何人猜过一次，全房间都要等这么久才能再猜；0 = 不限 */
+  guessCooldownSec: number;
   /** 提示系统总开关：默认关闭（房主可在对局参数里打开）。关闭时 requestHint 一律被拒。 */
   hintsEnabled: boolean;
   hintQuotaPerMember: number;
@@ -251,6 +256,8 @@ export interface CoreRoom {
     count: number;
     cooldownUntil: number;
   };
+  /** 猜汤底**共用冷却**的截止时间（0 = 现在谁都可以猜）。任何人猜一次都会把它推后。 */
+  guessCooldownUntil: number;
   result: { result: MatchResult; reason: string } | null;
   createdAt: number;
   updatedAt: number;
@@ -288,6 +295,7 @@ export type DomainEvent =
   | { type: 'member_state_changed'; memberId: string; line: 'activity' | 'conn'; from: string; to: string }
   | { type: 'room_paused'; reason: string }
   | { type: 'room_resumed' }
+  | { type: 'room_reopened' }
   | { type: 'vote_opened'; voteId: string; voteType: VoteType; deadlineAt: number; eligible: string[] }
   | { type: 'vote_settled'; voteId: string; status: VoteStatus; result: string; tally: CoreVote['tally'] }
   | { type: 'credit_switch'; from: CreditMode; to: CreditMode; reason: CreditReason; auto: boolean }

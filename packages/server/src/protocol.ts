@@ -70,6 +70,8 @@ export type ClientFrame =
   | { t: 'ready'; id?: string; ready: boolean }
   | { t: 'kick'; id?: string; memberId: string }
   | { t: 'create_ai_puzzle'; id?: string }
+  /** 回到选题：上一局结束后把房间放回等待状态（仅房主），房主接着选下一道题 */
+  | { t: 'next_round'; id?: string }
   | { t: 'resume_transfer'; id?: string }
   | { t: 'return_host'; id?: string }
   | { t: 'decline_return'; id?: string }
@@ -142,6 +144,7 @@ export function messageOf(code: string): string {
     case 'GUESS_NOT_IN_WINDOW': return '还没到可以揭秘的轮次。';
     case 'GUESS_ATTEMPTS_EXHAUSTED': return '你的揭秘次数已用尽。';
     case 'GUESS_TOO_SHORT': return '推理内容太短。';
+    case 'GUESS_COOLDOWN': return '猜汤底是**所有人共用一个冷却**：刚有人猜过（不管对错），等冷却结束再猜。';
     // ---- 模型凭据（自备 Key / 平台额度）----
     case 'AI_UNAVAILABLE': return '当前没有可用的模型凭据：服务端没配平台额度，你也没填自备 Key。填一把自己的 Key（先点「测试连接」验证）即可；或让运维配置 AI_KEY。';
     case 'HTTP_401': return '模型鉴权失败：API Key 无效或已被撤销。';

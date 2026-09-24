@@ -286,7 +286,7 @@ test('assertNoLeak 能抓住被手写对象绕过的泄露（负面测试）', (
   }, /密钥泄露/);
 });
 
-test('aborted 对局不得揭晓汤底（canRevealTruth=false）', () => {
+test('aborted 对局不得揭晓汤底（canRevealTruth=false，投影里也没有汤底）', () => {
   const now = 1_000_000;
   const puzzle = leakPuzzle();
   let room = makeRoom(now);
@@ -296,9 +296,20 @@ test('aborted 对局不得揭晓汤底（canRevealTruth=false）', () => {
   assert.equal(view.status, 'settled');
   assert.equal(view.result?.result, 'aborted');
   assert.equal(view.canRevealTruth, false, '中止对局不揭晓汤底（防"开局→立刻结束→读汤底"）');
+  assert.equal(view.truth, null, '中止对局的投影里绝不能带汤底');
 });
 
-test('解题成功后允许揭晓，但汤底只由服务端注入（投影本身仍不含汤底）', () => {
+test('没被猜出来的对局也不公示汤底（只有 solved 才公开）', () => {
+  const now = 1_000_000;
+  const puzzle = leakPuzzle();
+  let room = makeRoom(now);
+  room = reduce(room, { type: 'MATCH_BEGIN', puzzleId: puzzle.id }, ctx(now)).room;
+  room = reduce(room, { type: 'MATCH_END', result: 'unsolved', reason: '轮次用尽' }, ctx(now)).room;
+  const view = toPublicRoom(room, 'm1', { serverTime: now, puzzle, candidates: [], keyOf: () => ({ hasKey: false, keyMask: null, keyState: 'none', formerHost: false }) });
+  assert.equal(view.truth, null, '没解出来的局，汤底仍然只有房主复盘能看到');
+});
+
+test('被猜出来 → 汤底对所有人公示（这是红线的唯一例外，且必须显式放行断言）', () => {
   const now = 1_000_000;
   const puzzle = leakPuzzle();
   let room = makeRoom(now);
@@ -306,5 +317,49 @@ test('解题成功后允许揭晓，但汤底只由服务端注入（投影本�
   room = reduce(room, { type: 'GUESS', memberId: 'm1', verdict: 'hit', hits: 5, total: 5 }, ctx(now)).room;
   const view = toPublicRoom(room, 'm1', { serverTime: now, puzzle, candidates: [], keyOf: () => ({ hasKey: false, keyMask: null, keyState: 'none', formerHost: false }) });
   assert.equal(view.canRevealTruth, true);
-  assertNoLeak(view, { truth: puzzle.truth.truth, facts: leakFacts });
+  assert.equal(view.truth, puzzle.truth.truth, '猜出来之后人人可见汤底（产品要求：当场公示）');
+  assert.ok(view.truthNote, '要附一句说明，别让玩家以为是自己看错了');
+  // 显式放行才不报错 —— 说明"允许汤底出现"是一个需要主动声明的出口，而不是默认行为
+  assertNoLeak(view, { truth: puzzle.truth.truth, facts: leakFacts, allowTruth: true });
+  assert.throws(() => assertNoLeak(view, { truth: puzzle.truth.truth, facts: leakFacts }), /汤底泄露/,
+    '忘了显式放行时必须报错：红线的例外只能是这一条路径');
+  // 事实点原文任何时候都不下发
+  assert.equal(JSON.stringify(view).includes(leakFacts[0]!.text), false, '事实点原文永不下发');
+});
+
+test('猜汤底：共用冷却写在房间状态里，任何人猜一次都会推后', () => {
+  const now = 1_000_000;
+  const puzzle = leakPuzzle();
+  let room = makeRoom(now);
+  room = reduce(room, { type: 'MATCH_BEGIN', puzzleId: puzzle.id }, ctx(now)).room;
+  assert.equal(room.guessCooldownUntil, 0, '开局时没有冷却');
+
+  room = reduce(room, { type: 'GUESS', memberId: 'm1', verdict: 'miss', hits: 0, total: 5, cooldownUntil: now + 180_000 }, ctx(now)).room;
+  assert.equal(room.guessCooldownUntil, now + 180_000, '猜一次就把共用冷却推后（对所有人都生效）');
+
+  // 冷却还没到时 canGuess=false；过了就恢复
+  const deps = { serverTime: now + 1000, puzzle, candidates: [], keyOf: () => ({ hasKey: false, keyMask: null, keyState: 'none' as const, formerHost: false }) };
+  assert.equal(toPublicRoom(room, 'm2', deps).canGuess, false, '冷却期间谁都不能猜');
+  assert.equal(toPublicRoom(room, 'm2', { ...deps, serverTime: now + 180_001 }).canGuess, true, '冷却结束即可再猜');
+});
+
+test('回到选题：settled → waiting，清掉题目与冷却，房间可以再开一局', () => {
+  const now = 1_000_000;
+  const puzzle = leakPuzzle();
+  let room = makeRoom(now);
+  room = reduce(room, { type: 'MATCH_BEGIN', puzzleId: puzzle.id }, ctx(now)).room;
+  room = reduce(room, { type: 'GUESS', memberId: 'm1', verdict: 'hit', hits: 5, total: 5, cooldownUntil: now + 60_000 }, ctx(now)).room;
+  assert.equal(room.status, 'settled');
+
+  const reopened = reduce(room, { type: 'ROOM_REOPEN' }, ctx(now)).room;
+  assert.equal(reopened.status, 'waiting');
+  assert.equal(reopened.puzzleId, null, '要回到"房主选题"的状态');
+  assert.equal(reopened.result, null);
+  assert.equal(reopened.guessCooldownUntil, 0);
+  assert.deepEqual(reopened.ready, []);
+  assert.equal(reopened.turn.seq, 0, '回合状态要复位，否则下一局的 seq 会接着上一局');
+  // 幂等：已经回到 waiting 再点一次不会有任何变化
+  const again = reduce(reopened, { type: 'ROOM_REOPEN' }, ctx(now));
+  assert.equal(again.room, reopened, '不在 settled 时忽略（幂等）');
+  assert.deepEqual(again.events, []);
 });

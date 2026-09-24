@@ -72,7 +72,7 @@ function loadClientScript(opts: HarnessOpts = {}) {
   runInContext(script + `
 ;globalThis.__probe = {
   stateFingerprint, viewRoom, S,
-  pollOnce, sendAction, send, leaveRoom, startPolling, stopPolling, roomGone, joinOrCreate,
+  pollOnce, sendAction, send, leaveRoom, startPolling, stopPolling, roomGone, joinOrCreate, applyViewPayload,
   token, setToken: (t) => saveSession('r1', 'm1', t), epoch: () => sessionEpoch, pollTimer: () => pollTimer,
 };`, createContext(sandbox));
   // ready() 必须用**宿主机**的定时器：沙箱里的 setTimeout 是桩，永远不会回调（否则测试会挂住）。
@@ -89,6 +89,7 @@ function loadClientScript(opts: HarnessOpts = {}) {
     stopPolling: () => void;
     roomGone: (message?: string) => void;
     joinOrCreate: () => Promise<void>;
+    applyViewPayload: (data: unknown) => void;
     token: () => string | null;
     setToken: (t: string) => void;
     ready: () => Promise<void>;
@@ -360,6 +361,66 @@ test('W7: 离开房间后不再上报活动/心跳（旧令牌不许再发请求
   assert.deepEqual(sent, [], '旧会话不该再发任何请求');
   assert.equal(c.S.error, '', '更不该冒出"会话已失效"这种噪音');
   assert.equal(c.S.connected, false, '离开后连接状态要复位');
+});
+
+/* ============================================================================
+ * W9：汤底公示（被猜出后对所有人公开）+ 回到选题
+ * 这些是纯客户端的状态机：谁都能猜到"被猜出时要弹窗、返回后别再弹"。
+ * ==========================================================================*/
+function solvedRoom(serverTime: number) {
+  const room = playingRoom(serverTime, false).room as Record<string, any>;
+  room.status = 'settled';
+  room.result = { result: 'solved', reason: '有人还原了真相' };
+  room.truth = '多年前他和同伴在海上遇难漂流，同伴给他端来一碗"海龟汤"。';
+  room.truthNote = '本局已被玩家猜出：汤底对所有人公开';
+  room.canGuess = false;
+  return room;
+}
+
+test('W9: 被猜出后自动弹一次汤底公示；返回后不再重复弹；下一局复位', () => {
+  const { S, viewRoom, stateFingerprint } = loadClientScript();
+  S.screen = 'room';
+  S.questions = []; S.log = []; S.drafts = {}; S.pendingTimeline = [];
+  S.config = { realModelEnabled: true, vaultEnabled: true };
+
+  // 1) 还没结束：没有公示、也不弹窗
+  const playing = playingRoom(1000, false);
+  S.view = { room: playing.room, you: playing.you, candidates: [] };
+  assert.equal(S.truthModal, false);
+  assert.doesNotMatch(viewRoom(), /truthcard/, '进行中不得出现汤底公示');
+
+  // 2) 被猜出：applyViewPayload 会弹一次
+  const probe = loadClientScript();
+  probe.S.screen = 'room';
+  probe.S.questions = []; probe.S.log = []; probe.S.drafts = {}; probe.S.pendingTimeline = [];
+  probe.S.config = { realModelEnabled: true, vaultEnabled: true };
+  probe.applyViewPayload({ view: { room: solvedRoom(1000), you: { memberId: 'm1', isHost: true, canSubmit: false }, candidates: [] }, timeline: [], questions: [] });
+  assert.equal(probe.S.truthModal, true, '被猜出的那一刻要自动弹窗（所有人）');
+  const html = probe.viewRoom();
+  assert.match(html, /truthcard/, '页面上有汤底公示卡片');
+  assert.match(html, /汤底揭晓/, '弹窗里有汤底揭晓');
+  assert.match(html, /同伴给他端来一碗/, '弹窗里是汤底原文');
+  assert.match(html, /btnTruthNext/, '房主有「回到选题」按钮');
+  assert.match(html, /btnNextRound/, '结束卡片上也有「回到选题」入口');
+
+  // 3) 点「返回」后：同一局不再自动弹（否则用户关不掉）
+  probe.S.truthModal = false;
+  probe.S.truthDismissedKey = `${probe.S.view.room.id}:${probe.S.view.room.roundNo}`;
+  probe.applyViewPayload({ view: { room: solvedRoom(1200), you: { memberId: 'm1', isHost: true, canSubmit: false }, candidates: [] }, timeline: [], questions: [] });
+  assert.equal(probe.S.truthModal, false, '点过返回之后不能再弹出来');
+  assert.match(probe.viewRoom(), /truthcard/, '但卡片还在（还能回看汤底）');
+
+  // 4) 房主「回到选题」→ 房间回到 waiting，公示收起、下一局可以重新弹
+  const reopened = { ...solvedRoom(1400), status: 'waiting', result: null, truth: null, truthNote: null, puzzle: null };
+  probe.applyViewPayload({ view: { room: reopened, you: { memberId: 'm1', isHost: true, canSubmit: false }, candidates: [] }, timeline: [], questions: [] });
+  assert.equal(probe.S.truthDismissedKey, '', '回到大厅后复位，下一局被猜出时还能弹');
+  assert.doesNotMatch(probe.viewRoom(), /truthcard/, '下一局的等待状态里没有上一局的汤底公示');
+
+  // 弹窗开关必须进指纹，否则弹出来也不会重渲染（闪回 bug 的反面）
+  S.truthModal = false;
+  const before = stateFingerprint();
+  S.truthModal = true;
+  assert.notEqual(stateFingerprint(), before, 'truthModal 必须在状态指纹里');
 });
 
 test('W8: 离开后可以立刻重开房间：入口页不该残留旧会话的报错', async () => {

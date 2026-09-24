@@ -375,7 +375,9 @@ export class RoomRuntime {
     });
     // 运行时兜底断言：投影里绝不能出现汤底/事实点/密钥形态字符串
     // （汤面属于合法公开文本，因此作为 publicText 传入，避免把汤面本身的用词误判为泄露）
-    if (puzzle) assertNoLeak(room, { truth: puzzle.truth.truth, facts: puzzle.facts, publicText: puzzle.surface });
+    // 例外：本局已被猜出时，汤底是**故意公示**的（PublicRoom.truth），断言要显式放行
+    const solved = this.room.status === 'settled' && this.room.result?.result === 'solved';
+    if (puzzle) assertNoLeak(room, { truth: puzzle.truth.truth, facts: puzzle.facts, publicText: puzzle.surface, allowTruth: solved });
     const me = getMember(this.room, viewerId);
     return {
       room,
@@ -724,24 +726,66 @@ export class RoomRuntime {
     });
   }
 
+  /**
+   * 猜汤底（随时可猜，全房间共用冷却）。
+   *
+   * 与以前的不同：
+   *   · 不再要求"每 N 轮才能猜"——玩家读题读到一半想直接猜是自己判断力的体现（旧实现只在特定轮次开窗）；
+   *   · 限流改成**所有人共用一个冷却**：谁先猜谁开始计时，冷却期间谁都不能再猜（房主可配 guessCooldownSec）。
+   *     这比"每人 N 次"更符合多人体验：不会出现"三个人各自闷头猜"。
+   *   · 每人上限保留但默认 0=不限（房主想要防刷可以自己调大）。
+   */
   async submitGuess(memberId: string, text: string): Promise<Result<{ verdict: string }>> {
     const puzzle = this.currentPuzzle();
     const member = getMember(this.room, memberId);
     if (!puzzle || !member) return { ok: false, code: 'NOT_ALLOWED' };
+    if (member.role === 'spectator') return { ok: false, code: 'NOT_ALLOWED' };
     if (this.room.status !== 'playing') return { ok: false, code: 'MATCH_NOT_ACTIVE' };
-    if (this.room.roundNo > 1 && (this.room.roundNo - 1) % this.room.config.guessEveryRounds !== 0) return { ok: false, code: 'GUESS_NOT_IN_WINDOW' };
-    if (member.guessesUsed >= this.room.config.guessMaxPerMember) return { ok: false, code: 'GUESS_ATTEMPTS_EXHAUSTED' };
+    const cooling = this.room.guessCooldownUntil - this.now;
+    if (cooling > 0) {
+      return { ok: false, code: 'GUESS_COOLDOWN', detail: { cooldownLeftMs: cooling, cooldownUntil: this.room.guessCooldownUntil } };
+    }
+    if (this.room.config.guessMaxPerMember > 0 && member.guessesUsed >= this.room.config.guessMaxPerMember) {
+      return { ok: false, code: 'GUESS_ATTEMPTS_EXHAUSTED' };
+    }
     const trimmed = text.trim();
     if (trimmed.length < PLATFORM.guessMinLen) return { ok: false, code: 'GUESS_TOO_SHORT' };
     if (trimmed.length > PLATFORM.guessMaxLen) return { ok: false, code: 'TEXT_TOO_LONG' };
 
     const result = judgeGuess(trimmed, puzzle.facts);
+    const cooldownUntil = this.room.config.guessCooldownSec > 0
+      ? this.now + this.room.config.guessCooldownSec * 1000
+      : 0;
+    this.deps.store.audit({
+      action: 'guess_submitted', roomId: this.room.id, actor: memberId,
+      subject: `verdict=${result.verdict} hits=${result.hits}/${result.total} cooldown_to=${cooldownUntil}`,
+    });
     return this.enqueue(() => {
-      const out = reduce(this.room, { type: 'GUESS', memberId, verdict: result.verdict, hits: result.hits, total: result.total }, this.ctx());
+      const out = reduce(this.room, { type: 'GUESS', memberId, verdict: result.verdict, hits: result.hits, total: result.total, cooldownUntil }, this.ctx());
       this.room = out.room;
       this.room = { ...this.room, members: this.room.members.map((m) => (m.id === memberId ? { ...m, guessesUsed: m.guessesUsed + 1 } : m)) };
       this.apply(out.events);
-      return { ok: true as const, data: { verdict: result.verdict } };
+      return { ok: true as const, data: { verdict: result.verdict, cooldownUntil } };
+    });
+  }
+
+  /**
+   * 回到选题：上一局结束（settled）后把房间放回等待状态，房主可以选下一道题。
+   * 只有房主能做；幂等（不在 settled 时返回 NOT_ALLOWED，不误伤进行中的对局）。
+   */
+  async reopenLobby(memberId: string): Promise<Result> {
+    if (this.room.hostId !== memberId) return { ok: false, code: 'NOT_HOST' };
+    if (this.room.status !== 'settled') return { ok: false, code: 'NOT_ALLOWED' };
+    return this.enqueue(() => {
+      const out = reduce(this.room, { type: 'ROOM_REOPEN' }, this.ctx());
+      this.room = out.room;
+      this.apply(out.events);
+      this.timeline.push({
+        seq: ++this.room.eventSeq, kind: 'system', at: this.now,
+        text: '房主把房间放回了等待状态：可以选下一道题了。',
+      });
+      this.broadcast((id) => ({ t: 'snapshot', serverTime: this.now, view: this.view(id) }));
+      return { ok: true as const };
     });
   }
 

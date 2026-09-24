@@ -463,6 +463,8 @@ const S = {
   keyTest: null,
   configModal: false,
   guessModal: false,
+  truthModal: false,                     // "汤底公示"弹窗（被猜出时自动弹一次）
+  truthDismissedKey: '',                 // 已经点过"返回"的那一局（避免每轮重渲染又弹出来）
   keyModal: false,
 };
 
@@ -579,6 +581,7 @@ let pollInFlight = false;
 
 /** {t:...} 帧 → 服务端动作（保持原有调用点不变） */
 const ACTIONS = {
+  next_round: () => ({ type: 'next_round' }),
   submit: (f) => ({ type: 'submit', turnSeq: f.turnSeq, text: f.text, clientSubmitId: f.clientSubmitId }),
   hint: (f) => ({ type: 'hint', tier: f.tier }),
   guess: (f) => ({ type: 'guess', text: f.text }),
@@ -679,7 +682,18 @@ function applyViewPayload(data) {
   if (Array.isArray(data.events)) {
     for (const e of data.events) if (typeof e.seq === 'number' && e.seq > S.lastSeq) S.lastSeq = e.seq;
   }
-  if (data.view && data.view.room && data.view.room.status === 'settled') S.notice = '对局已结束，可以查看复盘';
+  const roomNow = data.view && data.view.room ? data.view.room : null;
+  if (roomNow && roomNow.status === 'settled') {
+    S.notice = roomNow.truth ? '有人猜出了汤底：已对所有人公示' : '对局已结束，可以查看复盘';
+    S.guessModal = false;                       // 结束了就别再挂着"猜汤底"弹窗
+    const key = roomNow.truth ? `${roomNow.id}:${roomNow.roundNo}` : '';
+    if (key && S.truthDismissedKey !== key) S.truthModal = true;   // 刚被猜出 → 自动弹一次
+  } else if (roomNow) {
+    // 不在"已结束"状态了（回到选题 / 开了下一局）：清掉"已点过返回"的记录，
+    // 否则下一局再被猜出时 roundNo 又是 1，key 相同就再也不弹了（真实缺陷，W9 抓到）
+    S.truthDismissedKey = '';
+    S.truthModal = false;
+  }
   render();
 }
 
@@ -919,7 +933,7 @@ function stateFingerprint() {
     : null;
   return JSON.stringify([
     S.screen, S.connected, S.notice, S.error, S.hint,
-    S.configModal, S.guessModal, S.keyModal,
+    S.configModal, S.guessModal, S.keyModal, S.truthModal,
     S.keyMask, t ? [t.pending === true, t.ok === true, t.reasonCode, t.message, t.url] : null,
     S.recap ? 1 : 0,
     view, S.questions, S.log.length, S.pendingTimeline.length,
@@ -1179,23 +1193,29 @@ function viewRoom() {
         <textarea id="ask" placeholder="随时可以打字（预输入）。轮到你时才能发送。">${esc(draft)}</textarea>
         <div class="row" style="margin-top:10px">
           <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${turn.phase === 'GRACE' && myTurn ? '发送（宽限期内仍有效）' : '发送'}</button>
+          ${room.status === 'playing' ? `<button id="btnGuessQuick" class="guessquick" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>` : ''}
           <span class="dim">${myTurn ? '轮到你发言了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}</span>
           ${turn.lateSubmit ? '<span class="pill l2">上一轮为临界提交</span>' : ''}
         </div>
         ${S.hint ? `<div class="notice" style="margin-top:12px">${esc(S.hint)}</div>` : ''}
       </div>
 
+      ${room.truth ? truthCard(room, you) : ''}
+
       ${room.status === 'settled' ? `
       <div class="card settled"><div class="spread"><h3 style="margin:0">对局结束</h3>
-        ${you.isHost ? '<button class="primary" id="btnRecap">查看复盘 · 揭晓汤底</button>' : '<span class="pill">汤底仅房主可见</span>'}</div>
-        <div class="dim">${you.isHost
-          ? '复盘含汤底揭晓，只有你能看到；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。'
-          : '本局已结束。汤底揭晓只有房主能看到，结束前不会下发到任何其他客户端。'}</div></div>` : ''}
+        ${you.isHost ? '<button class="primary" id="btnRecap">查看复盘</button><button id="btnNextRound">回到选题（下一局）</button>' : '<span class="pill">等房主开下一局</span>'}</div>
+        <div class="dim">${room.truth
+          ? '汤底已经公示（见上方）。房主点「回到选题」就能选下一道题；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。'
+          : you.isHost
+            ? '本局没被猜出来：复盘含汤底揭晓（含事实点与全部提问），只有你能看到；中止的对局不予揭晓。'
+            : '本局没被猜出来。汤底只有房主能揭晓。'}</div></div>` : ''}
     </div>
   </div>
 
   ${S.configModal ? cfgModal(room) : ''}
   ${S.guessModal ? guessModal(v) : ''}
+  ${(S.truthModal && room.truth) ? truthModal(room, you) : ''}
   ${S.keyModal ? keyModal(v) : ''}
   ${S.recap ? recapModal(S.recap) : ''}`;
 }
@@ -1238,9 +1258,17 @@ function puzzleCard(puzzle, room, you) {
         <button data-hint="3" ${you.canHintT3 ? '' : 'disabled'}>T3</button>`
       : '<span class="dim">本局未开启提示（房主可在「对局参数」里打开）</span>'}
       <span style="flex:1"></span>
-      <button class="primary" id="btnGuess" ${you.guessLeft && playing ? '' : 'disabled'}>提交推理 · 揭秘（剩 ${you.guessLeft}）</button>
+      <button class="primary" id="btnGuess" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>
     </div>
   </div>`;
+}
+
+/** 猜汤底按钮的文案：共用冷却期间显示剩余时间（由 tickUi 每 250ms 刷新） */
+function guessButtonLabel(room) {
+  const until = Number((room && room.guessCooldownUntil) || 0);
+  const left = until ? Math.max(0, until - serverNow()) : 0;
+  if (left > 0) return `猜汤底 · 共用冷却 <span data-deadline="${until}">${fmt(left)}</span>`;
+  return '猜汤底（随时可猜）';
 }
 
 /** 公共记录里的一条：提问（含判定）或系统事件 */
@@ -1624,11 +1652,45 @@ function cfgModal(room) {
 
 function guessModal() {
   const text = S.drafts.guessText ?? '';
+  const room = S.view ? S.view.room : null;
+  const cdLeft = room && room.guessCooldownUntil ? Math.max(0, room.guessCooldownUntil - serverNow()) : 0;
+  const cdSec = room && room.config ? room.config.guessCooldownSec : 0;
   return `<div class="overlay"><div class="modal">
-    <div class="spread"><h3 style="margin:0">提交你的推理（揭秘）</h3><button id="btnGuessCancel">取消</button></div>
+    <div class="spread"><h3 style="margin:0">猜汤底（随时可以猜）</h3><button id="btnGuessCancel">返回</button></div>
     <p class="dim">判定尺度：关键事实点全部命中 + 表达出因果链 = 命中；命中 ≥ 60% = 接近（只告诉你数量，不告诉你命中了哪几条）；否则未命中。</p>
+    <p class="dim">猜汤底是<b>所有人共用一个冷却</b>${cdSec > 0 ? `（当前设置 ${cdSec} 秒）` : '（当前设置：不限）'}：
+      谁先猜谁开始计时，冷却期间房间里谁都不能再猜。${cdLeft > 0 ? `现在还剩 <b data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b>。` : ''}</p>
     <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样">${esc(text)}</textarea>
-    <div class="row" style="margin-top:10px"><button class="primary" id="btnGuessSubmit">提交推理</button></div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btnGuessSubmit" ${cdLeft > 0 ? 'disabled' : ''}>${cdLeft > 0 ? '冷却中…' : '提交推理 · 揭晓'}</button>
+      <span class="dim">猜中即当场揭晓汤底，所有人都会看到</span>
+    </div>
+  </div></div>`;
+}
+
+/**
+ * 汤底公示（本局被猜出后**对所有人**公开）。
+ * 这是"汤底永不下发"红线的唯一例外，且只在对局被玩家自己解开时出现（中止/没猜出来都不给）。
+ */
+function truthCard(room, you) {
+  return `
+  <div class="card truthcard">
+    <div class="spread"><h3 style="margin:0">🎉 汤底公示</h3><span class="pill live">本局已被猜出</span></div>
+    <div class="puzzle" style="margin-top:10px"><div class="surface">${esc(room.truth)}</div></div>
+    <div class="dim" style="margin-top:8px">${esc(room.truthNote || '')}${you.isHost ? ' 想再来一局，点下面的「回到选题」。' : ' 等房主开下一局。'}</div>
+  </div>`;
+}
+
+/** 揭晓弹窗：被猜出时自动弹一次；「返回」后回到页面（房主可顺手开下一局） */
+function truthModal(room, you) {
+  return `<div class="overlay"><div class="modal">
+    <div class="spread"><h3 style="margin:0">汤底揭晓</h3><button id="btnTruthClose">返回</button></div>
+    <p class="dim">有人把真相拼出来了 —— 汤底现在对房间里的所有人公开。${you.isHost ? '点「返回」或下面的按钮都能回到选题，接着选下一道题。' : '房主会决定下一道题。'}</p>
+    <div class="puzzle"><div class="surface">${esc(room.truth)}</div></div>
+    <div class="row" style="margin-top:12px">
+      ${you.isHost ? '<button class="primary" id="btnTruthNext">回到选题（下一局）</button>' : ''}
+      <button id="btnTruthClose2">返回</button>
+    </div>
   </div></div>`;
 }
 
@@ -1945,6 +2007,24 @@ document.addEventListener('click', async (e) => {
       }
       case 'btnKeyRevoke': await api('/api/credentials', { method: 'DELETE' }); S.keyMask = null; S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; S.notice = '已撤销并销毁 Key，改用平台备用额度'; render(); break;
       case 'btnGuess': S.guessModal = true; render(); break;
+      // 提问框旁边的快捷入口：同一个弹窗，随时可猜（冷却期间按钮是禁用的）
+      case 'btnGuessQuick': S.guessModal = true; render(); break;
+      case 'btnTruthClose':
+      case 'btnTruthClose2': {
+        const r = S.view ? S.view.room : null;
+        S.truthModal = false;
+        if (r && r.truth) S.truthDismissedKey = `${r.id}:${r.roundNo}`;
+        render();
+        break;
+      }
+      // 「回到选题」：把房间放回等待状态，房主接着选下一道题（只有房主能点）
+      case 'btnTruthNext':
+      case 'btnNextRound': {
+        S.truthModal = false;
+        S.truthDismissedKey = '';
+        await sendAction({ type: 'next_round' });
+        break;
+      }
       case 'btnGuessCancel': S.guessModal = false; delete S.drafts.guessText; render(); break;
       case 'btnGuessSubmit': {
         const text = $('#guessText').value;

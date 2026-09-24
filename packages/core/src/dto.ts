@@ -84,6 +84,20 @@ export interface PublicRoom {
   transfer: { state: CoreRoom['transfer']['state']; fromId: string | null; toId: string | null };
   result: CoreRoom['result'];
   canRevealTruth: boolean;
+  /**
+   * **汤底公示**：只在对局被猜出（result.result === 'solved'）时才有值，人人可见。
+   *
+   * 这是"汤底永不下发"这条红线的**唯一例外**，并且是刻意设计的：谜底已经被玩家自己解开了，
+   * 这时候藏着它只会让非房主玩家一脸茫然（以前只有房主能点复盘看汤底）。
+   * 中止（aborted）与未解出（unsolved）一律为 null —— 防止"开局→立刻结束→读汤底"。
+   */
+  truth: string | null;
+  /** 汤底公示时附带的说明（例如"本局由 阿伟 猜出"） */
+  truthNote: string | null;
+  /** 猜汤底共用冷却截止时间（0 = 现在可以猜）；前端据此显示倒计时 */
+  guessCooldownUntil: number;
+  /** 本局是否还能猜汤底（冷却已过 且 未超个人上限） */
+  canGuess: boolean;
   revealedFacts: string[];
   /**
    * 本题事实点总数 / 其中"必需"条数 —— **只有计数，没有内容**。
@@ -186,6 +200,12 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
   const canReveal = room.status === 'settled'
     && room.result !== null
     && room.result.result !== 'aborted';
+  // 汤底公示：**只**在"被人猜出来"时出现，人人可见（中止/未解出都不给）
+  const solved = room.status === 'settled' && room.result?.result === 'solved';
+  const truth = solved && deps.puzzle ? deps.puzzle.truth.truth : null;
+  const me = room.members.find((m) => m.id === viewerId);
+  const onCooldown = room.guessCooldownUntil > deps.serverTime;
+  const overQuota = room.config.guessMaxPerMember > 0 && (me?.guessesUsed ?? 0) >= room.config.guessMaxPerMember;
   return {
     id: room.id,
     code: room.code,
@@ -215,6 +235,10 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
     transfer: { state: room.transfer.state, fromId: room.transfer.fromId, toId: room.transfer.toId },
     result: room.result ? { ...room.result } : null,
     canRevealTruth: canReveal,
+    truth,
+    truthNote: truth ? '本局已被玩家猜出：汤底对所有人公开' : null,
+    guessCooldownUntil: room.guessCooldownUntil,
+    canGuess: room.status === 'playing' && !onCooldown && !overQuota,
     revealedFacts: [...room.revealedFacts],
     // 计数（非内容）：探索度用"必需事实点"做分母，普通事实点做分子上限
     factTotal: deps.puzzle ? deps.puzzle.facts.length : 0,
@@ -239,6 +263,11 @@ export interface LeakAssertCtx {
   publicText?: string;
   /** 已知的密钥明文（如有），用于断言"绝不出现" */
   secrets?: readonly string[];
+  /**
+   * 允许汤底出现：**只有**"对局已被猜出、走汤底公示"这一条路径可以传 true。
+   * 其余任何投影都必须保持 false，否则这里会直接抛错（红线仍然是红线，只是多了一个显式出口）。
+   */
+  allowTruth?: boolean;
 }
 
 export function assertNoLeak(payload: unknown, ctx: LeakAssertCtx): void {
@@ -254,7 +283,7 @@ export function assertNoLeak(payload: unknown, ctx: LeakAssertCtx): void {
   for (let i = 0; i + 8 <= json.length; i++) {
     const g = json.slice(i, i + 8);
     // 汤面里本来就出现的片段不算泄露
-    if (truthGrams.has(g) && !publicGrams.has(g)) {
+    if (!ctx.allowTruth && truthGrams.has(g) && !publicGrams.has(g)) {
       throw new Error(`汤底泄露：payload 中出现与汤底共享的片段「${g}」`);
     }
   }

@@ -393,7 +393,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     const statements: PendingStatement[] = [{
       sql: `UPDATE rooms SET code=?, status=?, pause_reason=?, host_member_id=?, config_json=?, config_version=?, state_version=?,
               event_seq=?, puzzle_id=?, round_no=?, turn_json=?, revealed_facts_json=?, hint_json=?, vote_json=?, ai_json=?,
-              credit_json=?, transfer_json=?, result_json=?, turn_order_json=?, ready_json=?, puzzle_json=?, turn_index=?, updated_at=?
+              credit_json=?, transfer_json=?, result_json=?, turn_order_json=?, ready_json=?, puzzle_json=?, guess_cooldown_until=?, turn_index=?, updated_at=?
             WHERE id = ? AND state_version = ?`,
       bindings: [room.code, room.status, room.pauseReason, room.hostId, JSON.stringify(room.config), room.configVersion,
         newVersion, room.eventSeq, room.puzzleId, room.roundNo, JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
@@ -401,7 +401,7 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
         JSON.stringify(room.credit), JSON.stringify(room.transfer), room.result ? JSON.stringify(room.result) : null,
         JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []),
         this.customPuzzle ? JSON.stringify(this.customPuzzle) : null,
-        room.turnIndex, room.updatedAt, room.id, this.expectedVersion],
+        room.guessCooldownUntil ?? 0, room.turnIndex, room.updatedAt, room.id, this.expectedVersion],
     }];
 
     // 成员表：先删多余行，再逐行 OR REPLACE（都以新版本为条件）
@@ -521,6 +521,7 @@ function rowToRoom(row: Row): CoreRoom {
     id: String(row.id), code: String(row.code), status: String(row.status) as CoreRoom['status'],
     pauseReason: (row.pause_reason as string | null) ?? null, hostId: (row.host_member_id as string | null) ?? null,
     members: [], turnOrder: JSON.parse(String(row.turn_order_json ?? '[]')), ready: JSON.parse(String(row.ready_json ?? '[]')), turnIndex: Number(row.turn_index ?? 0),
+    guessCooldownUntil: Number(row.guess_cooldown_until ?? 0),
     roundNo: Number(row.round_no ?? 1), turn: JSON.parse(String(row.turn_json)),
     config: JSON.parse(String(row.config_json)) as GameConfig, configVersion: Number(row.config_version ?? 1),
     stateVersion: Number(row.state_version ?? 0), eventSeq: Number(row.event_seq ?? 0),

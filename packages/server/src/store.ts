@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import type { CoreMember, CoreRoom, GameConfig, Puzzle, PuzzleFact, PuzzleMeta } from '@ht/core';
 import type { CredentialRecord, CredentialState, EncryptedBlob } from './vault.ts';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export interface StoredMemberKeyState {
   hasKey: boolean;
@@ -118,6 +118,7 @@ export class Store {
         result_json TEXT,
         turn_order_json TEXT NOT NULL,
         ready_json TEXT NOT NULL DEFAULT '[]',
+        guess_cooldown_until INTEGER NOT NULL DEFAULT 0,
         turn_index INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -265,6 +266,8 @@ export class Store {
     // v1 → v2：questions 增加 explain（「是/否」后的可选补充说明）。
     // 建表语句已经带上该列；对已存在的旧库这里补一次，失败（列已存在）忽略。
     try { this.db.exec('ALTER TABLE questions ADD COLUMN explain TEXT'); } catch { /* 已存在 */ }
+    // v2 → v3：rooms 增加猜汤底共用冷却的截止时间（0 = 当前可猜）
+    try { this.db.exec('ALTER TABLE rooms ADD COLUMN guess_cooldown_until INTEGER NOT NULL DEFAULT 0'); } catch { /* 已存在 */ }
     this.db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, Date.now());
   }
 
@@ -325,8 +328,8 @@ export class Store {
     const tx = this.db.prepare(`
       INSERT INTO rooms(id, code, status, pause_reason, host_member_id, config_json, config_version, state_version,
                         event_seq, puzzle_id, round_no, turn_json, revealed_facts_json, hint_json, vote_json, ai_json,
-                        credit_json, transfer_json, result_json, turn_order_json, ready_json, turn_index, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        credit_json, transfer_json, result_json, turn_order_json, ready_json, guess_cooldown_until, turn_index, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status, pause_reason = excluded.pause_reason, host_member_id = excluded.host_member_id,
         config_json = excluded.config_json, config_version = excluded.config_version,
@@ -336,6 +339,7 @@ export class Store {
         vote_json = excluded.vote_json, ai_json = excluded.ai_json, credit_json = excluded.credit_json,
         transfer_json = excluded.transfer_json, result_json = excluded.result_json,
         turn_order_json = excluded.turn_order_json, ready_json = excluded.ready_json,
+        guess_cooldown_until = excluded.guess_cooldown_until,
         turn_index = excluded.turn_index, updated_at = excluded.updated_at
     `);
     tx.run(
@@ -345,7 +349,8 @@ export class Store {
       JSON.stringify(room.hint), room.vote ? JSON.stringify(room.vote) : null,
       JSON.stringify(room.ai), JSON.stringify(room.credit), JSON.stringify(room.transfer),
       room.result ? JSON.stringify(room.result) : null,
-      JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []), room.turnIndex, room.createdAt, room.updatedAt,
+      JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []), room.guessCooldownUntil ?? 0,
+      room.turnIndex, room.createdAt, room.updatedAt,
     );
 
     const keep = room.members.map((m) => m.id);
@@ -448,6 +453,7 @@ export class Store {
         puzzleId: (row.puzzle_id as string | null) ?? null,
         revealedFacts: JSON.parse(String(row.revealed_facts_json ?? '[]')),
         ready: JSON.parse(String(row.ready_json ?? '[]')),
+        guessCooldownUntil: Number(row.guess_cooldown_until ?? 0),
         hint: JSON.parse(String(row.hint_json ?? '{"tier3Used":0}')),
         vote: row.vote_json ? JSON.parse(String(row.vote_json)) : null,
         ai: JSON.parse(String(row.ai_json)),

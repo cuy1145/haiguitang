@@ -451,6 +451,11 @@ export class App {
           else this.reply(ws, id, false, result.code, result.detail as Record<string, unknown> | undefined);
           break;
         }
+        case 'next_round': {
+          const result = await runtime.reopenLobby(memberId);
+          this.reply(ws, id, result.ok, result.ok ? undefined : result.code);
+          break;
+        }
         case 'resume_transfer': {
           const result = await runtime.resumeTransfer(memberId);
           this.reply(ws, id, result.ok, result.ok ? undefined : result.code);

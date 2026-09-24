@@ -280,7 +280,8 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
       }
       case 'guess': {
         const result = await runtime.submitGuess(memberId, String(body.text ?? ''));
-        return result.ok ? okWithView(result.data) : failWithView(result.code);
+        // detail 要透传：共用冷却被挡时要告诉玩家还剩多久
+        return result.ok ? okWithView(result.data) : failWithView(result.code, result.detail);
       }
       case 'vote': {
         const result = await runtime.castVote(memberId, String(body.choice ?? 'abstain'));
@@ -306,6 +307,11 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
       case 'ready': {
         const r = await runtime.setReady(memberId, body.ready !== false);
         return r.ok ? okWithView(r.data) : failWithView(r.code);
+      }
+      /** 回到选题：上一局结束后（房主）把房间放回等待状态，接着选下一道题 */
+      case 'next_round': {
+        const r = await runtime.reopenLobby(memberId);
+        return r.ok ? okWithView() : failWithView(r.code);
       }
       case 'kick': {
         const r = await runtime.kickMember(memberId, String(body.memberId ?? ''));

@@ -21,7 +21,7 @@ export type CoreEvent =
   | { type: 'SUBMIT_ACCEPTED'; memberId: string }
   | { type: 'JUDGE_DONE' }
   | { type: 'JUDGE_FAILED' }
-  | { type: 'GUESS'; memberId: string; verdict: 'hit' | 'partial' | 'miss'; hits: number; total: number }
+  | { type: 'GUESS'; memberId: string; verdict: 'hit' | 'partial' | 'miss'; hits: number; total: number; cooldownUntil?: number }
   | { type: 'HINT'; memberId: string; tier: 1 | 2 | 3; factId: string }
   | { type: 'FACT_REVEALED'; factIds: string[] }
   | { type: 'MEMBER_CONN'; memberId: string; conn: 'connected' | 'disconnected' }
@@ -45,6 +45,8 @@ export type CoreEvent =
   /** 房主换上/更新了可用的自备 Key：解除 AI 中断、恢复对局，额度来源仍是自备 */
   | { type: 'CREDIT_RESTORED' }
   | { type: 'MATCH_END'; result: 'solved' | 'unsolved' | 'aborted'; reason: string }
+  /** 回到选题：settled → waiting（房主开始下一局前先把房间放回大厅状态） */
+  | { type: 'ROOM_REOPEN' }
   | { type: 'ROOM_SUSPEND'; reason: string }
   | { type: 'ROOM_RESUME' };
 
@@ -106,6 +108,10 @@ export function reduce(room: CoreRoom, event: CoreEvent, ctx: ReduceCtx): Reduce
 
     case 'GUESS': {
       let next = room;
+      // 共用冷却：**任何人**猜一次都把全房间的冷却推后（房主可配 guessCooldownSec，0=不限）
+      if (typeof event.cooldownUntil === 'number' && event.cooldownUntil > 0) {
+        next = withRoom(next, { guessCooldownUntil: event.cooldownUntil }, ctx.now);
+      }
       if (event.verdict === 'hit') {
         next = withRoom(next, {
           members: next.members.map((m) => (m.id === event.memberId ? { ...m, score: m.score + 70 } : m)),
@@ -313,6 +319,29 @@ export function reduce(room: CoreRoom, event: CoreEvent, ctx: ReduceCtx): Reduce
     case 'MATCH_END': {
       const out = turn.endMatch(room, event.result, event.reason, ctx);
       return { room: out.room, events: out.events };
+    }
+
+    /**
+     * 回到选题（上一局已结束 → 重新等待房主选下一道题）。
+     * 只允许从 settled 回到 waiting；其它状态一律忽略（幂等、不误伤进行中的对局）。
+     */
+    case 'ROOM_REOPEN': {
+      if (room.status !== 'settled') return { room, events: [] };
+      return {
+        room: withRoom(room, {
+          status: 'waiting',
+          pauseReason: null,
+          puzzleId: null,
+          roundNo: 0,
+          revealedFacts: [],
+          ready: [],
+          guessCooldownUntil: 0,
+          result: null,
+          vote: null,
+          turn: { seq: 0, memberId: null, phase: 'IDLE', startedAt: 0, deadlineAt: 0, graceDeadlineAt: 0, outcome: null, lateSubmit: false },
+        }, ctx.now),
+        events: [{ type: 'room_reopened' }],
+      };
     }
 
     case 'ROOM_SUSPEND': {
