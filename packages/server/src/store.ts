@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import type { CoreMember, CoreRoom, GameConfig, Puzzle, PuzzleFact, PuzzleMeta } from '@ht/core';
 import type { CredentialRecord, CredentialState, EncryptedBlob } from './vault.ts';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export interface StoredMemberKeyState {
   hasKey: boolean;
@@ -144,6 +144,8 @@ export class Store {
         hints_t3 INTEGER NOT NULL DEFAULT 0,
         guesses_used INTEGER NOT NULL DEFAULT 0,
         last_hint_at INTEGER NOT NULL DEFAULT 0,
+    pending_seat INTEGER NOT NULL DEFAULT 0,
+    seat_requested INTEGER NOT NULL DEFAULT 0,
         resume_token_hash TEXT,
         former_host INTEGER NOT NULL DEFAULT 0,
         key_state TEXT NOT NULL DEFAULT 'none',
@@ -268,6 +270,9 @@ export class Store {
     try { this.db.exec('ALTER TABLE questions ADD COLUMN explain TEXT'); } catch { /* 已存在 */ }
     // v2 → v3：rooms 增加猜汤底共用冷却的截止时间（0 = 当前可猜）
     try { this.db.exec('ALTER TABLE rooms ADD COLUMN guess_cooldown_until INTEGER NOT NULL DEFAULT 0'); } catch { /* 已存在 */ }
+    // v3 → v4：members 增加待入席排队字段（对局进行中进房的人先排队）
+    try { this.db.exec('ALTER TABLE members ADD COLUMN pending_seat INTEGER NOT NULL DEFAULT 0'); } catch { /* 已存在 */ }
+    try { this.db.exec('ALTER TABLE members ADD COLUMN seat_requested INTEGER NOT NULL DEFAULT 0'); } catch { /* 已存在 */ }
     this.db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, Date.now());
   }
 
@@ -361,22 +366,24 @@ export class Store {
     const upsert = this.db.prepare(`
       INSERT INTO members(id, room_id, player_id, name, is_bot, role, join_seq, conn, activity, hidden,
                           last_activity_at, last_heartbeat_at, skip_streak, score, hints_t12, hints_t3,
-                          guesses_used, last_hint_at, former_host, key_state, key_mask, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          guesses_used, last_hint_at, former_host, key_state, key_mask, pending_seat, seat_requested, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name, is_bot = excluded.is_bot, role = excluded.role, join_seq = excluded.join_seq,
         conn = excluded.conn, activity = excluded.activity, hidden = excluded.hidden,
         last_activity_at = excluded.last_activity_at, last_heartbeat_at = excluded.last_heartbeat_at,
         skip_streak = excluded.skip_streak, score = excluded.score, hints_t12 = excluded.hints_t12,
         hints_t3 = excluded.hints_t3, guesses_used = excluded.guesses_used, last_hint_at = excluded.last_hint_at,
-        former_host = excluded.former_host, key_state = excluded.key_state, key_mask = excluded.key_mask
+        former_host = excluded.former_host, key_state = excluded.key_state, key_mask = excluded.key_mask,
+        pending_seat = excluded.pending_seat, seat_requested = excluded.seat_requested
     `);
     for (const m of room.members) {
       const ks = keyStates.get(m.id);
       upsert.run(
         m.id, room.id, m.playerId, m.name, m.isBot ? 1 : 0, m.role, m.joinSeq, m.conn, m.activity, m.hidden ? 1 : 0,
         m.lastActivityAt, m.lastHeartbeatAt, m.skipStreak, m.score, m.hintsUsedT12, m.hintsUsedT3,
-        m.guessesUsed, m.lastHintAt, ks?.formerHost ? 1 : 0, ks?.state ?? 'none', ks?.mask ?? null, room.createdAt,
+        m.guessesUsed, m.lastHintAt, ks?.formerHost ? 1 : 0, ks?.state ?? 'none', ks?.mask ?? null,
+      m.pendingSeat === true ? 1 : 0, m.seatRequested === true ? 1 : 0, room.createdAt,
       );
     }
   }
@@ -434,6 +441,7 @@ export class Store {
         hintsUsedT3: Number(m.hints_t3),
         guessesUsed: Number(m.guesses_used),
         lastHintAt: Number(m.last_hint_at),
+        ...(Number(m.pending_seat ?? 0) === 1 ? { pendingSeat: true, seatRequested: Number(m.seat_requested ?? 0) === 1 } : {}),
       }));
       const room: CoreRoom = {
         id: roomId,

@@ -27,7 +27,7 @@ import { HostService } from './ai.ts';
 import { RoomRegistry, type RoomRuntime, type RuntimeDeps, type SessionLike } from './rooms.ts';
 import type { ClientFrame, ServerFrame } from './protocol.ts';
 import { messageOf as actionMessageOf } from './protocol.ts';
-import { MAX_PLAYERS, MAX_SPECTATORS, MIN_PLAYERS } from '@ht/core';
+import { MAX_PLAYERS, MAX_SPECTATORS, MIN_PLAYERS, PLATFORM } from '@ht/core';
 
 export interface AppDeps {
   config: ServerConfig;
@@ -590,7 +590,8 @@ export class App {
   private async joinRoom(runtime: RoomRuntime, nickname: string, spectator: boolean, isBot = false): Promise<{ member: CoreMember; token: string } | { error: string }> {
     const room = runtime.room;
     const players = room.members.filter((m) => m.role !== 'spectator').length;
-    const specs = room.members.filter((m) => m.role === 'spectator').length;
+    // 待入席者也是 spectator 角色，所以不占玩家位；纯旁观人数单独算（不含排队者）
+    const specs = room.members.filter((m) => m.role === 'spectator' && m.pendingSeat !== true).length;
     if (!spectator && players >= MAX_PLAYERS) return { error: 'ROOM_FULL' };
     if (spectator && specs >= MAX_SPECTATORS) return { error: 'SPECTATOR_FULL' };
     if (room.status === 'settled' || room.status === 'destroyed') return { error: 'ROOM_CLOSED' };
@@ -599,9 +600,14 @@ export class App {
     const playerId = this.deps.newId('p');
     const token = randomBytes(32).toString('base64url');
     const now = this.deps.now();
+    // 对局进行中进房 → 待入席（排队）：不占轮转、不占玩家位，申请后到下一轮才参与
+    const midMatch = room.status === 'playing' && !spectator;
+    const pendingCount = room.members.filter((m) => m.pendingSeat === true).length;
+    const asPending = midMatch && pendingCount < PLATFORM.midJoinPendingMax;
     const member: CoreMember = {
       id: memberId, playerId, name: nickname, isBot,
-      role: spectator ? 'spectator' : (room.members.length === 0 ? 'host' : 'member'),
+      role: spectator ? 'spectator' : (room.members.length === 0 ? 'host' : (midMatch ? 'spectator' : 'member')),
+      ...(asPending ? { pendingSeat: true, seatRequested: false } : {}),
       joinSeq: (room.members.reduce((max, m) => Math.max(max, m.joinSeq), 0) + 1),
       conn: 'connected', activity: 'active', hidden: false,
       lastActivityAt: now, lastHeartbeatAt: now,

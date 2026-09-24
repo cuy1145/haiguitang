@@ -36,6 +36,13 @@ export interface PublicMember {
   isHost: boolean;
   /** 开局前是否已举手「我准备好了」 */
   ready: boolean;
+  /**
+   * 「待入席」= 对局进行中进房、还在排队的人。他不占轮转、不占玩家位，
+   * 界面上应单独分组显示（"待入席（下一轮上桌）"），不能与正式成员混在一起。
+   */
+  pendingSeat: boolean;
+  /** 待入席成员是否已点「申请下一轮上桌」 */
+  seatRequested: boolean;
 }
 
 export interface PublicTurn {
@@ -111,6 +118,8 @@ export interface PublicRoom {
    */
   readyCount: number;
   readyEligible: number;
+  /** 待入席人数（对局进行中进房排队的人，不占轮转与玩家位） */
+  pendingSeatCount: number;
 }
 
 export function toPublicPuzzle(p: Puzzle): PublicPuzzle {
@@ -164,6 +173,8 @@ export function toPublicMember(
     formerHost: key.formerHost,
     isHost: m.id === hostId,
     ready,
+    pendingSeat: m.pendingSeat === true,
+    seatRequested: m.seatRequested === true,
   };
 }
 
@@ -247,6 +258,8 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
     // 离线和旁观不该把大家卡在开场前；房主本来就不需要给自己举手（M4）
     readyEligible: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected' && m.id !== room.hostId).length,
     readyCount: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected' && m.id !== room.hostId && room.ready.includes(m.id)).length,
+    /** 待入席人数（对局进行中进房排队的人）；界面据此显示"待入席（下一轮上桌）"分组 */
+    pendingSeatCount: room.members.filter((m) => m.pendingSeat === true).length,
   };
 }
 

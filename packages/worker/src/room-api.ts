@@ -15,7 +15,7 @@
  * 顺序固定为 tickTurn → presenceTick → 移交 → 投票截止 → 中断超时自动投票（与 Node 版 tick 顺序一致）。
  */
 import {
-  DEFAULT_CONFIG, PRESETS, validateConfig, getMember, toPublicPuzzle,
+  DEFAULT_CONFIG, PLATFORM, PRESETS, validateConfig, getMember, toPublicPuzzle,
 } from '@ht/core';
 import type { CoreMember, GameConfig, Puzzle } from '@ht/core';
 import { RoomRuntime } from '../../server/src/rooms.ts';
@@ -440,9 +440,20 @@ async function joinAsPlayer(
     if (!spectator && players >= 12) { failure = 'ROOM_FULL'; return json({ error: 'ROOM_FULL' }, 409); }
     if (room.status === 'settled' || room.status === 'destroyed') { failure = 'ROOM_CLOSED'; return json({ error: 'ROOM_CLOSED' }, 409); }
 
+    /**
+     * 对局进行中进房 → **待入席**（排队），不占轮转也不占玩家位：
+     * 他先以旁观身份在场，点「申请下一轮上桌」后，等到轮次 wrap 才转正参与轮转。
+     * 排队超过上限（PLATFORM.midJoinPendingMax）就只能纯旁观（pendingSeat=false），
+     * 前端据 pendingSeat 提示"排队已满，你以旁观身份在场"。
+     */
+    const midMatch = room.status === 'playing' && !spectator;
+    const pendingCount = room.members.filter((m) => m.pendingSeat === true).length;
+    const asPending = midMatch && pendingCount < PLATFORM.midJoinPendingMax;
+
     const member: CoreMember = {
       id: memberId, playerId, name: nickname, isBot: false,
-      role: spectator ? 'spectator' : (isHost || room.members.length === 0 ? 'host' : 'member'),
+      role: spectator ? 'spectator' : (isHost || room.members.length === 0 ? 'host' : (midMatch ? 'spectator' : 'member')),
+      ...(asPending ? { pendingSeat: true, seatRequested: false } : {}),
       joinSeq: room.members.reduce((max, m) => Math.max(max, m.joinSeq), 0) + 1,
       conn: 'connected', activity: 'active', hidden: false,
       lastActivityAt: now, lastHeartbeatAt: now,

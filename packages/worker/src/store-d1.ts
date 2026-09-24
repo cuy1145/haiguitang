@@ -416,11 +416,13 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
       statements.push({
         sql: `INSERT OR REPLACE INTO members(id, room_id, player_id, name, is_bot, role, join_seq, conn, activity, hidden,
                 last_activity_at, last_heartbeat_at, skip_streak, score, hints_t12, hints_t3, guesses_used, last_hint_at,
-                former_host, key_state, key_mask, created_at)
-              SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
+                former_host, key_state, key_mask, pending_seat, seat_requested, created_at)
+              SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND state_version = ?)`,
         bindings: [m.id, this.roomId, m.playerId, m.name, m.isBot ? 1 : 0, m.role, m.joinSeq, m.conn, m.activity, m.hidden ? 1 : 0,
           m.lastActivityAt, m.lastHeartbeatAt, m.skipStreak, m.score, m.hintsUsedT12, m.hintsUsedT3, m.guessesUsed, m.lastHintAt,
-          ks?.formerHost ? 1 : 0, ks?.state ?? 'none', ks?.mask ?? null, room.createdAt, this.roomId, newVersion],
+          ks?.formerHost ? 1 : 0, ks?.state ?? 'none', ks?.mask ?? null,
+          m.pendingSeat === true ? 1 : 0, m.seatRequested === true ? 1 : 0,
+          room.createdAt, this.roomId, newVersion],
       });
     }
 
@@ -541,6 +543,7 @@ function rowToMember(m: Row): CoreMember {
     lastActivityAt: Number(m.last_activity_at), lastHeartbeatAt: Number(m.last_heartbeat_at),
     skipStreak: Number(m.skip_streak), score: Number(m.score), hintsUsedT12: Number(m.hints_t12),
     hintsUsedT3: Number(m.hints_t3), guessesUsed: Number(m.guesses_used), lastHintAt: Number(m.last_hint_at),
+    ...(Number(m.pending_seat) === 1 ? { pendingSeat: true, seatRequested: Number(m.seat_requested) === 1 } : {}),
   };
 }
 

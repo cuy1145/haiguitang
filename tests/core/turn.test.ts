@@ -13,6 +13,7 @@ import {
 } from '../../packages/core/src/index.ts';
 import type { CoreRoom, ReduceCtx } from '../../packages/core/src/index.ts';
 import { buildTurnOrder, canSubmit } from '../../packages/core/src/turn.ts';
+import * as turn from '../../packages/core/src/turn.ts';
 import { pickNewHost, transferGate } from '../../packages/core/src/host.ts';
 
 let idc = 0;
@@ -56,6 +57,80 @@ test('开局：生成轮转顺序、启动第一回合（ACTIVE + 完整时长 +
   assert.equal(room.turn.graceDeadlineAt, now + DEFAULT_CONFIG.perTurnSec * 1000 + DEFAULT_CONFIG.graceSec * 1000);
   assert.ok(orderInvariantHolds(room));
 });
+
+/* ============================================================================
+ * 「待入席」：对局进行中进房的人先排队，申请后**从下一轮起**才进入轮转。
+ * 目的：不让他抢掉本局某位老成员的提问机会，也不让他刚进来就上桌。
+ * ==========================================================================*/
+function joinPending(room: CoreRoom, id: string, now: number, requested: boolean): CoreRoom {
+  return {
+    ...room,
+    members: [...room.members, {
+      id, playerId: `p-${id}`, name: `迟到者-${id}`, isBot: false,
+      role: 'spectator' as const, pendingSeat: true, seatRequested: requested, joinSeq: 99,
+      conn: 'connected' as const, activity: 'active' as const, hidden: false,
+      lastActivityAt: now, lastHeartbeatAt: now,
+      skipStreak: 0, score: 0, hintsUsedT12: 0, hintsUsedT3: 0, guessesUsed: 0, lastHintAt: -1e9,
+    }],
+  };
+}
+
+test('待入席：不占轮转；申请后到跨轮那一刻才转正（不抢老成员本轮的机会）', () => {
+  const now = 1_000_000;
+  let room = beginMatch(makeRoom(now), ctx(now));
+  const orderBefore = [...room.turnOrder];
+
+  room = joinPending(room, 'm9', now, false);
+  assert.deepEqual(room.turnOrder, orderBefore, '排队者不能进 turnOrder');
+  assert.equal(room.members.find((m) => m.id === 'm9')!.role, 'spectator', '排队期间是旁观语义');
+
+  // 申请上桌：本轮之内仍然不进轮转
+  room = { ...room, members: room.members.map((m) => (m.id === 'm9' ? { ...m, seatRequested: true } : m)) };
+  const mid = turn.advanceTurn(room, ctx(now));
+  room = mid.room;
+  assert.deepEqual(room.turnOrder, orderBefore, '同轮之内不插入（老成员的提问顺序不受影响）');
+  assert.equal(room.members.find((m) => m.id === 'm9')!.pendingSeat, true, '还没到跨轮时仍在排队');
+
+  // 再推进到跨轮（m3 之后 wrap 回 m1）：这一刻转正
+  room = turn.advanceTurn(room, ctx(now)).room;   // m1 → m2
+  room = turn.advanceTurn(room, ctx(now)).room;   // m2 → m3
+  const wrapped = turn.advanceTurn(room, ctx(now)); // m3 → wrap
+  room = wrapped.room;
+
+  assert.equal(room.roundNo, 2, '确实跨到第 2 轮');
+  assert.deepEqual(room.turnOrder, [...orderBefore, 'm9'], '跨轮时追加到队尾');
+  const seated = room.members.find((m) => m.id === 'm9')!;
+  assert.equal(seated.pendingSeat, false, '转正后不再是待入席');
+  assert.equal(seated.seatRequested, false, '申请标记已消费');
+  assert.equal(seated.role, 'member', '转正为正式成员');
+
+  // 从这一轮起，轮到他时真的会开他的回合
+  let guard = 0;
+  while (room.turn.memberId !== 'm9' && guard++ < 10) room = turn.advanceTurn(room, ctx(now)).room;
+  assert.equal(room.turn.memberId, 'm9', '第 2 轮里会轮到他');
+  assert.ok(orderInvariantHolds(room), '轮转不变量仍然成立');
+});
+
+test('待入席：没申请就一直旁观；掉线的人不会被转正', () => {
+  const now = 1_000_000;
+  let room = beginMatch(makeRoom(now), ctx(now));
+  const joined = joinPending(room, 'm9', now, true);
+  room = { ...joined, members: joined.members.map((m) => (m.id === 'm9' ? { ...m, conn: 'disconnected' as const } : m)) };
+  for (let i = 0; i < 4; i++) room = turn.advanceTurn(room, ctx(now)).room;
+  assert.equal(room.members.find((m) => m.id === 'm9')!.pendingSeat, true, '掉线的人不该占掉一个轮转位');
+  assert.equal(room.turnOrder.includes('m9'), false);
+});
+
+test('待入席：不能接盘房主位（刚进房还在排队的人绝不当房主）', () => {
+  const now = 1_000_000;
+  let room = beginMatch(makeRoom(now), ctx(now));
+  room = joinPending(room, 'm9', now, true);
+  room = { ...room, hostId: null, members: room.members.map((m) => (m.id === 'm1' ? { ...m, conn: 'disconnected' as const } : m)) };
+  const picked = pickNewHost(room, now);
+  assert.notEqual(picked, 'm9', '待入席者不是房主候选');
+  assert.ok(picked === 'm2' || picked === 'm3', `应当从正式成员里挑：${picked}`);
+});
+
 
 test('提交校验：非本回合 / 陈旧 turnSeq / 重复提交 全部被拒（服务端权威）', () => {
   const now = 1_000_000;

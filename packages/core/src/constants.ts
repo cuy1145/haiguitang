@@ -40,6 +40,11 @@ export const PLATFORM = {
   /** 推理文本长度上限 */
   guessMaxLen: 500,
   guessMinLen: 4,
+  /**
+   * 「待入席」排队上限：对局进行中进房的人先排队（不占轮转、不占玩家位），
+   * 超过这个数就只能纯旁观，避免有人拿排队占位。
+   */
+  midJoinPendingMax: 3,
   /** 判定单次超时（毫秒） */
   judgeTimeoutMs: 20000,
   /** 事件环形缓冲条数（超出后客户端需全量快照） */

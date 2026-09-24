@@ -209,8 +209,28 @@ export function advanceTurn(room: CoreRoom, ctx: ReduceCtx): TurnTransition {
     return endMatch(withRoom(room, { turnIndex: nextIndex, roundNo: room.config.maxRounds }, ctx.now),
       'unsolved', '达到总回合上限', ctx);
   }
-  const next = withRoom(room, { turnIndex: nextIndex, roundNo: nextRound }, ctx.now);
+  let base = room;
+  if (wrapped) {
+    // 跨轮这一刻，把「待入席且已申请上桌」的人**转正**：追加到轮转队尾。
+    // 语义：新成员从这一轮开始才参与轮转（不会挤掉老成员本轮的提问机会），
+    // 也避免了"刚进房就抢走一次提问"的不公平。
+    const granted = seatGranted(room);
+    if (granted.length > 0) {
+      base = withRoom(room, {
+        members: room.members.map((m) => (granted.includes(m.id) ? { ...m, role: 'member' as const, pendingSeat: false, seatRequested: false } : m)),
+        turnOrder: [...room.turnOrder, ...granted],
+      }, ctx.now);
+    }
+  }
+  const next = withRoom(base, { turnIndex: nextIndex, roundNo: nextRound }, ctx.now);
   return startTurn(next, ctx);
+}
+
+/** 本刻应当转正的待入席成员（已申请上桌、仍在房间里、且没掉线）。 */
+export function seatGranted(room: CoreRoom): string[] {
+  return room.members
+    .filter((m) => m.pendingSeat === true && m.seatRequested === true && m.conn === 'connected')
+    .map((m) => m.id);
 }
 
 /** 结算整局。aborted 不揭晓汤底（由服务端在 recap 门禁处再校验一次）。 */

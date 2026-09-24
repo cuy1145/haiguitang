@@ -37,7 +37,9 @@ export function transferGate(room: CoreRoom, now: number): TransferGate {
 
 /** 顺位选新房主：加入顺序环形，跳过挂机/断连者与"心跳已过期"的成员。 */
 export function pickNewHost(room: CoreRoom, now: number): string | null {
-  const ring = membersByJoin(room).filter((m) => m.role !== 'spectator');
+  // 旁观者与**待入席**者都不能接盘：刚进房还在排队的人对局局一无所知，
+  // 把房主位交给他是最糟的选择（他们本来就都是 spectator 角色，这里显式写出意图）。
+  const ring = membersByJoin(room).filter((m) => m.role !== 'spectator' && !m.pendingSeat);
   if (ring.length === 0) return null;
   const startIdx = Math.max(0, ring.findIndex((m) => m.id === room.hostId));
   for (let step = 1; step <= ring.length; step++) {

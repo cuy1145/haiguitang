@@ -623,6 +623,66 @@ test('I-23c: 房主不需要举手，也不会被算进"还差几个人"', async
   guest.close();
 });
 
+test('I-29: 对局进行中进房 = 待入席：不占轮转；申请后到下一轮才参与', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  const p2 = await joinRoom(room.code, '阿伟');
+  const g2 = await Client.open(booted.url, p2.token, '阿伟');
+  await startMatch(host, room.roomId);                       // 进入 playing
+  const orderBefore = [...roomState(room.roomId).turnOrder];
+
+  // 第三个人在对局进行中加入
+  const res = await fetch(`${booted.url}/api/rooms/${room.code}/join`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nickname: '迟到者' }),
+  });
+  assert.equal(res.status, 200, '对局进行中仍然可以进房（以待入席身份）');
+  const late = await res.json() as { token: string; memberId: string };
+  await settle();
+
+  let st = roomState(room.roomId);
+  let me = st.members.find((m) => m.id === late.memberId)!;
+  assert.equal(me.pendingSeat, true, '应当是待入席');
+  assert.equal(me.role, 'spectator', '待入席不占玩家位、不占轮转');
+  assert.deepEqual(st.turnOrder, orderBefore, '不能挤进本局的轮转');
+  assert.equal(st.status, 'playing');
+
+  // 视图里要能看出"我在排队"以及房间有几个排队的
+  const viewRes = await fetch(`${booted.url}/api/session`, { headers: { authorization: `Bearer ${late.token}` } });
+  const view = (await viewRes.json() as { view: { room: { pendingSeatCount: number } } }).view;
+  assert.equal(view.room.pendingSeatCount, 1, '待入席人数要能下发（前端据此分组显示）');
+
+  // 申请下一轮上桌（复用 ready 动作；对待入席者它表示"申请"）
+  const lateClient = await Client.open(booted.url, late.token, '迟到者');
+  const ack = await lateClient.request({ t: 'ready', ready: true });
+  assert.equal(ack.t, 'ack', `申请上桌失败：${JSON.stringify(ack)}`);
+  assert.equal((ack as unknown as { data?: { seatRequested?: boolean } }).data?.seatRequested, true, '要回 seatRequested');
+  await settle();
+  st = roomState(room.roomId);
+  assert.equal(st.members.find((m) => m.id === late.memberId)!.seatRequested, true);
+  assert.equal(st.turnOrder.includes(late.memberId), false, '本轮之内不进轮转（不抢老成员的提问机会）');
+
+  // 让本局推进到下一轮
+  const beforeRound = st.roundNo;
+  for (let i = 0; i < 12 && roomState(room.roomId).roundNo === beforeRound; i++) {
+    const s = roomState(room.roomId);
+    advance(s.config.perTurnSec * 1000 + s.config.graceSec * 1000 + 500);
+    await settle();
+  }
+  st = roomState(room.roomId);
+  assert.ok(st.roundNo > beforeRound, `应当已经跨轮（roundNo=${st.roundNo}）`);
+  assert.equal(st.turnOrder.includes(late.memberId), true, '跨轮时转正进轮转');
+  me = st.members.find((m) => m.id === late.memberId)!;
+  assert.equal(me.pendingSeat === true, false, '转正后不再是待入席');
+  assert.equal(me.role, 'member', '转正为正式成员');
+
+  // 从这一轮起真的会轮到他
+  await advanceToMember(room.roomId, late.memberId);
+  assert.equal(roomState(room.roomId).turn.memberId, late.memberId, '第 2 轮里会轮到他');
+
+  host.close(); g2.close(); lateClient.close();
+});
+
 test('I-23d: 旁观者无法把自己写进准备名单', async () => {
   const room = await createRoom('房主');
   const spec = await fetch(`${booted.url}/api/rooms/${room.code}/join`, {

@@ -1155,6 +1155,8 @@ function viewRoom() {
         ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
       </div>` : ''}
 
+      ${pendingSeatCard(room, you)}
+
       ${myTurn && room.status === 'playing' ? `<div class="your-turn">🎤 轮到你发言了 —— 想好就直接问，超时会自动跳过本轮</div>` : ''}
 
       ${puzzle ? puzzleCard(puzzle, room, you) : ''}
@@ -1309,6 +1311,34 @@ function aiBlockHint(code) {
 function startBlockedBy(room) {
   if (!room) return 0;
   return Math.max(0, (room.readyEligible || 0) - (room.readyCount || 0));
+}
+
+/**
+ * 「待入席」卡片：只有**对局进行中进房**的人会看到。
+ * 他此刻不占轮转、也不占玩家位：可以先旁观，点「申请下一轮上桌」后，
+ * 到轮次跨轮那一刻才被转正进轮转（不会抢掉老成员本轮的提问机会）。
+ */
+function pendingSeatCard(room, you) {
+  const me = room.members.find((m) => m.id === you.memberId);
+  if (!me || me.pendingSeat !== true) return '';
+  const asked = me.seatRequested === true;
+  const cfg = room.config || {};
+  const perTurn = Number(cfg.perTurnSec || 60);
+  const players = room.members.filter((m) => m.role !== 'spectator').length || 1;
+  const etaMin = Math.max(1, Math.round((perTurn * players) / 60));
+  return `
+  <div class="card waitcard">
+    <div class="spread"><h3 style="margin:0">待入席 <span class="dim">本局已经开始</span></h3>
+      <span class="pill ${asked ? 'live' : 'l2'}">${asked ? '已申请上桌' : '旁观中'}</span></div>
+    <div class="dim">这一局在你进来之前就开始了，所以你先排队：现在能看全部公开信息、不占用提问顺序。
+      ${asked
+        ? `等本局走到下一轮（约 ${etaMin} 分钟）就轮到你，届时你会被正式排进轮转。`
+        : `想加入就点下面的按钮——会从**下一轮**起排进轮转，不会抢掉别人的提问机会。`}</div>
+    <div class="row" style="margin-top:10px">
+      <button class="${asked ? '' : 'primary'}" id="btnSeat">${asked ? '取消申请（继续旁观）' : '申请下一轮上桌'}</button>
+      <span class="dim">${asked ? '取消后本局不再插入你' : '不申请就一直旁观，不影响对局'}</span>
+    </div>
+  </div>`;
 }
 
 /** 还没举手的人（用来在确认框里**点名**，而不是只说"还有 N 人"） */
@@ -1533,7 +1563,9 @@ function speakerPanel(room, you, turn, counting, left, deadline, total, pct, pha
           ${m.formerHost ? '<span class="pill">原房主</span>' : ''}
           ${m.keyState === 'suspended' ? '<span class="pill l2">Key 挂起</span>' : ''}
           ${active ? '<span class="pill live">发言中</span>' : ''}
-          ${m.isHost ? '' : (m.role !== 'spectator' ? (m.ready ? '<span class="pill live">已准备</span>' : '<span class="pill l2">未准备</span>') : '<span class="pill">旁观</span>')}
+          ${m.isHost ? '' : (m.pendingSeat === true
+            ? `<span class="pill l2">待入席${m.seatRequested ? ' · 已申请' : ''}</span>`
+            : (m.role !== 'spectator' ? (m.ready ? '<span class="pill live">已准备</span>' : '<span class="pill l2">未准备</span>') : '<span class="pill">旁观</span>'))}
         </div>
         <div class="meta">
           ${esc(m.stateLabel)} · ${m.score} 分
@@ -1915,6 +1947,14 @@ document.addEventListener('click', async (e) => {
         break;
       }
       case 'btnStart': requestStart('pick'); break;
+      case 'btnSeat': {
+        // 待入席者的"举手"= 申请下一轮上桌（服务端按成员状态区分语义）
+        const me = room ? room.members.find((m) => m.id === (S.view.you ? S.view.you.memberId : '')) : null;
+        const asked = Boolean(me && me.seatRequested);
+        const res = await sendAction({ type: 'ready', ready: !asked });
+        S.notice = res ? (asked ? '已取消申请：本局继续旁观' : '已申请：本局下一轮起排进轮转') : S.notice;
+        break;
+      }
       case 'btnStartVote': requestStart('vote'); break;
       case 'btnCopyCode': {
         const okCopy = await copyText(room.code);

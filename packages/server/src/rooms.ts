@@ -436,9 +436,33 @@ export class RoomRuntime {
   }
 
   /** 举手 / 收回。只在开局前有意义，`reduce` 已保证其它状态会被忽略。 */
-  async setReady(memberId: string, ready: boolean): Promise<Result<{ ready: boolean }>> {
+  async setReady(memberId: string, ready: boolean): Promise<Result<{ ready: boolean; seatRequested?: boolean }>> {
     const member = getMember(this.room, memberId);
     if (!member) return { ok: false, code: 'NOT_ALLOWED' };
+
+    /**
+     * 待入席（对局进行中进房排队的人）：这里的"举手"含义是**申请下一轮上桌**。
+     * 它不进 `ready` 列表（那个列表只在 waiting 阶段有意义），而是打在成员身上，
+     * 等到轮次 wrap（roundNo +1）时由 core/turn.ts 统一转正进 turnOrder。
+     */
+    if (member.pendingSeat === true) {
+      if (this.room.status !== 'playing') return { ok: false, code: 'NOT_ALLOWED' };
+      return this.enqueue(() => {
+        const target = getMember(this.room, memberId);
+        if (!target || target.pendingSeat !== true) return { ok: false as const, code: 'NOT_ALLOWED' as ActionReject };
+        this.room = {
+          ...this.room,
+          members: this.room.members.map((m) => (m.id === memberId ? { ...m, seatRequested: ready === true } : m)),
+          stateVersion: this.room.stateVersion + 1,
+          updatedAt: this.now,
+        };
+        this.persist();
+        this.broadcast((id) => ({ t: 'snapshot', serverTime: this.now, view: this.view(id) }));
+        this.deps.store.audit({ action: ready ? 'seat_requested' : 'seat_request_cancelled', roomId: this.room.id, subject: memberId });
+        return { ok: true as const, data: { ready: false, seatRequested: ready === true } };
+      });
+    }
+
     // 旁观者不是对局参与者：以前能把自己写进 room.ready（不下发计数，但界面会显示"已准备"，纯垃圾）
     if (member.role === 'spectator') return { ok: false, code: 'NOT_ALLOWED' };
     this.room = { ...this.room, ready: this.room.ready.filter((id) => this.room.members.some((m) => m.id === id)) };
