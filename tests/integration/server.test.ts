@@ -663,6 +663,13 @@ test('I-31: 全员讨论区：谁都能发、不进判定、限长限频幂等�
   assert.equal(rows[0]!.memberId === rows[1]!.memberId, false, '两条来自不同的人');
   advance(11_000);                                  // 把这条滑出限流窗口，别干扰后面的限流断言
 
+  // ③c 中文全角标点必须原样保留：讨论正文是给人看的，不能被 NFKC 折成半角
+  // （判定链路用 normalize() 是为了缓存键稳定；把它套到聊天上会把「，」变成「,」）
+  const punct = await host.request({ t: 'chat', text: '我数了，门是从外面锁的！', clientMessageId: 'c-punct' });
+  const punctMsg = (punct as unknown as { data?: { message?: { text?: string } } }).data?.message;
+  assert.equal(punctMsg?.text, '我数了，门是从外面锁的！', '全角标点与叹号必须原样保留');
+  advance(11_000);
+
   // ④ 旁观者也能发（§12.2：所有房间成员共同讨论）
   const specRes = await fetch(`${booted.url}/api/rooms/${room.code}/join`, {
     method: 'POST', headers: { 'content-type': 'application/json' },

@@ -9,7 +9,7 @@
  */
 import {
   PLATFORM, PROMPT_VERSION, assertNoLeak, canSubmit, checkAndNormalizePuzzle, emptyRoom, getMember, hintsExhausted,
-  isLeaky, judgeGuess, normalize, pickHintFact, pickNewHost, reduce, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
+  isLeaky, judgeGuess, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
   transferGate, validateConfigChange,
 } from '@ht/core';
 import type {
@@ -798,7 +798,9 @@ export class RoomRuntime {
     if (!member) return { ok: false, code: 'UNAUTHORIZED' };
     if (this.room.status === 'destroyed') return { ok: false, code: 'MATCH_NOT_ACTIVE' };
 
-    const clean = normalize(text);
+    // ⚠️ 用 sanitizeChatText 而不是 normalize：讨论正文是给人看的，
+    //    NFKC 会把「，！？」折成半角（中文排版就错了）。判定链路才需要 NFKC。
+    const clean = sanitizeChatText(text);
     if (!clean) return { ok: false, code: 'CHAT_EMPTY' };
     if (clean.length > PLATFORM.chatMaxLen) return { ok: false, code: 'CHAT_TOO_LONG' };
 

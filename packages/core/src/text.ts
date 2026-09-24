@@ -25,6 +25,24 @@ export function normalizeLower(input: string): string {
   return normalize(input).toLowerCase();
 }
 
+/**
+ * 讨论消息（全员讨论区）的正文化：**刻意不做 NFKC**。
+ *
+ * 判定链路用 `normalize()` 是为了缓存键稳定，NFKC 会把全角标点（，！？：；（））折成半角，
+ * 中文里那是错的排版；讨论消息是给人看的正文，不该被改写。
+ * 这里只做设计稿 §12.8 要求的事：去零宽 / 控制字符、折叠多余空白、去首尾空白。
+ * 换行保留（最多连续两个），因为讨论区允许多行输入。
+ */
+export function sanitizeChatText(input: string): string {
+  return String(input ?? '')
+    .replace(ZERO_WIDTH, '')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^[ \t\n]+|[ \t\n]+$/g, '');
+}
+
 /** 稳定哈希（判定缓存键用；不要求密码学强度，但要求跨进程一致）。 */
 export function stableHash(input: string): string {
   let h1 = 0x811c9dc5;

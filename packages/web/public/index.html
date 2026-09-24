@@ -326,6 +326,27 @@
   .chat .msg .who{font-size:10.5px;color:var(--fg3);margin-bottom:2px}
   .chat .msg .txt{white-space:pre-wrap;word-break:break-word;line-height:1.6}
   .chatcard .row input{flex:1 1 auto;min-width:0}
+  .chatcard .counter{font-size:11px;color:var(--fg3);white-space:nowrap;align-self:center}
+  .chatcard .badge{display:inline-block;min-width:16px;padding:0 4px;margin-left:5px;border-radius:999px;
+    background:var(--accent);color:#1b1305;font-size:10.5px;font-weight:700;line-height:16px;text-align:center}
+  .chatcard .pill.jump{cursor:pointer;border:1px solid rgba(243,185,95,.5)}
+  /* 「讨论」入口按钮与面板返回键：只在窄屏出现（桌面端一直有侧栏讨论卡片，不需要入口） */
+  .btnchat,.chat-back{display:none}
+  body.chat-open{overflow:hidden}
+  @media(max-width:900px){
+    /* 手机端不把讨论做成长卡片塞进正文流（会把题目顶下去），收成底部一个入口；
+       点开后是近全屏面板，输入框自然贴着软键盘上方（§12.4） */
+    .chatcard{display:none}
+    .btnchat{display:inline-flex;align-items:center;gap:2px}
+    .chatcard.open{
+      display:flex;flex-direction:column;position:fixed;inset:0;z-index:70;margin:0;border-radius:0;
+      height:100vh;height:100dvh;max-height:none;overflow:hidden;
+      padding:calc(12px + env(safe-area-inset-top)) 14px calc(12px + env(safe-area-inset-bottom));
+    }
+    .chatcard.open .chat{flex:1 1 auto;min-height:0;max-height:none}
+    .chatcard.open .chat-back{display:inline-flex;align-items:center;padding:2px 10px;margin-right:7px;vertical-align:middle}
+    .chatcard.open .chat-hint{display:none}
+  }
   .tl{background:rgba(255,255,255,.028);border:1px solid var(--line);border-radius:var(--radius-sm);padding:7px 11px;font-size:12.5px;color:var(--fg2);display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
   .tl.sys{border-style:dashed}
   .tl.err{border-color:rgba(242,96,107,.35);background:rgba(242,96,107,.07);color:#ffc2c7}
@@ -473,6 +494,9 @@ const S = {
   hint: '',  recap: null,
   // 全员讨论区：消息、增量游标、草稿（只在内存里，和正式提问草稿分开）、未读数
   chat: [], chatSeq: 0, chatDraft: '', chatReadSeq: 0, chatUnread: 0,
+  // chatOpen：窄屏的讨论面板是否打开（桌面端忽略，侧栏一直看得见）
+  // chatPinned：讨论列表是否停在底部 —— 停在底部才自动跟随新消息，也才算"已读"
+  chatOpen: false, chatPinned: true, chatScrollToBottom: false,
   keyMask: null,
   keyTest: null,
   configModal: false,
@@ -493,16 +517,65 @@ const serverNow = () => Date.now() + S.serverOffset;
  * 只统计"别人发的、我还没看到的"未读数；未读纯属前端提示，不改房间/对局状态。
  * 打开讨论区并停在底部即视为已读（chatReadSeq 推进到最新）。
  * ------------------------------------------------------------------------- */
+/** 单条讨论消息长度上限，与服务端 `PLATFORM.chatMaxLen` 对齐（这里只用于输入框提示与字数显示） */
+const CHAT_MAXLEN = 500;
 function countChatUnread() {
   const meId = S.view && S.view.you ? S.view.you.memberId : '';
   S.chatUnread = S.chat.filter((m) => (m.chatSeq || 0) > S.chatReadSeq && m.memberId !== meId).length;
 }
 function markChatRead() {
-  const newest = S.chat.reduce((mx, m) => Math.max(mx, m.chatSeq || 0), 0);
+  // ⚠️ 必须跳过本地乐观条目：它的 chatSeq 是哨兵值（CHAT_LOCAL_SEQ = 最大整数），
+  // 一旦算进 max，chatReadSeq 会被顶到最大整数 → 之后**所有**新消息都被判成"已读"，
+  // 未读角标再也不出现（真缺陷，E2E 抓到的）。
+  const newest = S.chat.reduce((mx, m) => (m.pending === true ? mx : Math.max(mx, m.chatSeq || 0)), 0);
   if (newest > S.chatReadSeq) { S.chatReadSeq = newest; countChatUnread(); }
 }
 /** 时刻 → HH:MM:SS（用于对话记录） */
 const fmtClock = (at) => { try { return new Date(at).toLocaleTimeString('zh-CN', { hour12: false }); } catch { return ''; } };
+/**
+ * 元素此刻是否真的看得见（display:none / 被折叠都算看不见）。
+ * 讨论区的"已读"判定必须建立在它之上：手机上面板没打开时列表是隐藏的，
+ * 把隐藏列表当成"停在底部"会把人没看过的消息标成已读。
+ * 测试用的 DOM 桩没有 getBoundingClientRect，这里要容错（否则整页渲染会抛）。
+ */
+function isVisible(el) {
+  if (!el || el.offsetParent === null) return false;
+  const r = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
+  return r ? r.height > 0 : true;
+}
+/** 讨论列表的 HTML（整页渲染与局部补渲染共用同一份，避免两处写法漂移） */
+function chatListHtml() {
+  const meId = S.view && S.view.you ? S.view.you.memberId : '';
+  const msgs = S.chat.slice(-80);
+  return msgs.length ? msgs.map((m) => chatEntry(m, meId)).join('') : '<div class="empty">还没人说话。想商量就打个招呼。</div>';
+}
+/** 讨论卡片右上角：未读提示 / 「有 N 条新消息 ↓」入口（§12.7） */
+function chatPillHtml() {
+  const unread = S.chatUnread || 0;
+  const n = unread > 99 ? '99+' : unread;
+  // 用户正在往上翻旧消息：**不强行拉到底**，只给一个入口
+  if (unread && !S.chatPinned) return `<button class="pill live jump" id="btnChatJump">有 ${n} 条新消息 ↓</button>`;
+  return `<span class="pill ${unread ? 'live' : ''}">${unread ? `${n} 条新消息` : '房间内自由发言'}</span>`;
+}
+/**
+ * 局部补渲染讨论区。
+ *
+ * 为什么需要它：整页是 innerHTML 全量重渲染，而 `isBusy()`（输入框带焦点 / 正在组字）会把
+ * 重渲染整个推迟 —— 否则中文输入法组字会被打断。可只要用户把光标留在输入框里，
+ * **整个页面就再也不更新**。所以被推迟时至少把讨论区补上：只替换列表与角标这几块，
+ * 绝不碰输入框本身，组字安全。
+ */
+function patchChatList() {
+  if (!S.view || S.screen !== 'room') return;
+  const log = $('#chatLog');
+  if (!log) return;
+  log.innerHTML = chatListHtml();
+  const pill = $('#chatPill');
+  if (pill) pill.innerHTML = chatPillHtml();
+  const cnt = $('#chatCount');
+  if (cnt) cnt.textContent = `${S.chat.length} 条`;
+  if (S.chatPinned) log.scrollTop = log.scrollHeight;
+}
 
 /* ---------------------------------------------------------------- 计时（按秒走）
  * 轮询每 1.8 秒才回来一次，但倒计时必须按秒动，所以这里单独跑一个轻量 ticker：
@@ -984,8 +1057,9 @@ function stateFingerprint() {
   return JSON.stringify([
     S.screen, S.connected, S.notice, S.error, S.hint,
     S.configModal, S.guessModal, S.keyModal, S.truthModal,
-    // 讨论区：消息条数与未读数进指纹（否则新消息不会触发重渲染）；草稿刻意不进（打字不重渲染）
-    S.chat.length, S.chatUnread,
+    // 讨论区：消息条数与未读数进指纹（否则新消息不会触发重渲染）；草稿刻意不进（打字不重渲染）；
+    // chatOpen 进指纹（打开/关闭面板要立刻重画）；chatPinned 不进（只看不重画，改了由滚动处理器显式 render）
+    S.chat.length, S.chatUnread, S.chatOpen,
     S.keyMask, t ? [t.pending === true, t.ok === true, t.reasonCode, t.message, t.url] : null,
     S.recap ? 1 : 0,
     view, S.questions, S.log.length, S.pendingTimeline.length,
@@ -998,7 +1072,13 @@ function stateFingerprint() {
 function render(force = false) {
   const app = $('#app');
   if (!app.firstChild) force = true;                 // 首次渲染必须画
-  if (!force && isBusy()) { S.renderPending = true; scheduleDeferredRender(); return; }
+  if (!force && isBusy()) {
+    S.renderPending = true;
+    // 整页渲染推迟了，但讨论区不能跟着停摆：把列表/角标局部补上（不碰输入框，组字安全）
+    patchChatList();
+    scheduleDeferredRender();
+    return;
+  }
 
   const fingerprint = stateFingerprint();
   if (!force && fingerprint === S.lastFingerprint) return;   // 状态没变：一个字节都不动
@@ -1011,6 +1091,18 @@ function render(force = false) {
     : null;
   const oldLog = $('#log');
   const pinned = oldLog ? (oldLog.scrollHeight - oldLog.scrollTop - oldLog.clientHeight < 48) : S.logPinned;
+  // 讨论列表同理：重渲染前先记住"是不是停在底部"和滚动位置。
+  // ⚠️ 不可见时（手机上面板没打开）**不能**当成停在底部 —— 否则会把人没看过的消息算成已读。
+  const oldChat = $('#chatLog');
+  const chatVisible = isVisible(oldChat);
+  // S.chatScrollToBottom：点「有 N 条新消息 ↓」或打开面板时的一次性指令 ——
+  // 否则重渲染后会按"重渲染前的位置"还原，把用户又扔回列表顶部（点了个寂寞）。
+  const chatPinnedBefore = S.chatScrollToBottom === true
+    ? true
+    : (oldChat && chatVisible
+      ? (oldChat.scrollHeight - oldChat.scrollTop - oldChat.clientHeight < 24)
+      : S.chatPinned);
+  const chatScrollBefore = oldChat ? oldChat.scrollTop : 0;
   // 弹窗内部可能被滚动过（Key 弹窗、参数弹窗内容多），重渲染后要还原，否则会"跳回顶部"
   const oldModal = document.querySelector('.modal');
   const modalScroll = oldModal ? oldModal.scrollTop : 0;
@@ -1027,6 +1119,28 @@ function render(force = false) {
   }
   const log = $('#log');
   if (log) { log.scrollTop = pinned ? log.scrollHeight : Math.min(log.scrollTop, log.scrollHeight); S.logPinned = pinned; }
+  // 讨论列表：停在底部 → 跟随到底；往上翻 → 保持原位置（新消息只提示，不强行拉走）
+  const chatLog = $('#chatLog');
+  if (chatLog) {
+    if (chatPinnedBefore) chatLog.scrollTop = chatLog.scrollHeight;
+    else chatLog.scrollTop = Math.min(chatScrollBefore, chatLog.scrollHeight);
+    const vis = isVisible(chatLog);
+    S.chatPinned = vis ? (chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 24) : chatPinnedBefore;
+    S.chatScrollToBottom = false;                  // 一次性指令已消费
+    if (vis && S.chatPinned) {
+      // 看得见 + 停在底部 = 已读。未读数变了就下一拍补一次渲染让角标消失
+      // （用 setTimeout 而不是直接递归 render：避免"渲染中再渲染"）
+      const before = S.chatUnread;
+      markChatRead();
+      if (S.chatUnread !== before) setTimeout(() => render(), 0);
+    }
+  }
+  // 窄屏讨论面板打开时锁住页面滚动（面板本身是 fixed 覆盖层）。
+  // 容错：测试用的 DOM 桩没有 body.classList / matchMedia。
+  const narrow = typeof window.matchMedia === 'function' ? window.matchMedia('(max-width:900px)').matches : false;
+  if (document.body && document.body.classList && typeof document.body.classList.toggle === 'function') {
+    document.body.classList.toggle('chat-open', Boolean(S.chatOpen && narrow));
+  }
   if (modalScroll > 0) {
     const modal = document.querySelector('.modal');
     if (modal) modal.scrollTop = modalScroll;
@@ -1250,6 +1364,7 @@ function viewRoom() {
         <div class="row" style="margin-top:10px">
           <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${turn.phase === 'GRACE' && myTurn ? '发送（宽限期内仍有效）' : '发送'}</button>
           ${room.status === 'playing' ? `<button id="btnGuessQuick" class="guessquick" ${room.canGuess ? '' : 'disabled'}>${guessButtonLabel(room)}</button>` : ''}
+          <button id="btnChatOpen" class="btnchat">讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
           <span class="dim">${myTurn ? '轮到你发言了' : '等待 ' + (turn.memberId ? esc(nameOf(room, turn.memberId)) + ' 发言' : '开局')}</span>
           ${turn.lateSubmit ? '<span class="pill l2">上一轮为临界提交</span>' : ''}
         </div>
@@ -1367,22 +1482,21 @@ function aiBlockHint(code) {
  * 谁都能发（含旁观者与待入席者）；限长 500 字、独立限流（10 秒 5 条）。
  */
 function chatCard(room, you) {
-  const meId = you.memberId;
-  const unread = S.chatUnread || 0;
-  const msgs = S.chat.slice(-80);
+  const draftLen = String(S.chatDraft || '').length;
   return `
-  <div class="card chatcard">
+  <div class="card chatcard${S.chatOpen ? ' open' : ''}">
     <div class="spread" style="margin-bottom:10px">
-      <h3 style="margin:0">讨论 <span class="dim">${S.chat.length} 条</span></h3>
-      <span class="pill ${unread ? 'live' : ''}">${unread ? `${unread > 99 ? '99+' : unread} 条新消息` : '房间内自由发言'}</span>
+      <h3 style="margin:0"><button class="chat-back" id="btnChatClose" title="返回房间">← 返回</button>全员讨论 <span class="dim" id="chatCount">${S.chat.length} 条</span></h3>
+      <span id="chatPill">${chatPillHtml()}</span>
     </div>
-    <div class="dim" style="margin-bottom:8px">只用来商量怎么问、怎么推理。这里说的话不会进判定，也不占提问回合。</div>
+    <div class="dim chat-hint" style="margin-bottom:8px">房号 ${esc(room.code)} · 只用来商量怎么问、怎么推理。这里说的话不会进判定，也不占提问回合。</div>
     <div class="chat" id="chatLog">
-      ${msgs.length ? msgs.map((m) => chatEntry(m, meId)).join('') : '<div class="empty">还没人说话。想商量就打个招呼。</div>'}
+      ${chatListHtml()}
     </div>
     <div class="row" style="margin-top:9px;align-items:flex-end">
-      <input id="chatInput" maxlength="${'500'}" autocomplete="off" spellcheck="false" placeholder="发消息…（Enter 发送 / Shift+Enter 换行）" value="${esc(S.chatDraft || '')}">
+      <input id="chatInput" maxlength="${CHAT_MAXLEN}" autocomplete="off" spellcheck="false" placeholder="发消息…（Enter 发送 / Shift+Enter 换行）" value="${esc(S.chatDraft || '')}">
       <button class="primary" id="btnChatSend" ${String(S.chatDraft || '').trim() ? '' : 'disabled'}>发送</button>
+      <span class="counter">${draftLen}/${CHAT_MAXLEN}</span>
     </div>
   </div>`;
 }
@@ -1975,6 +2089,21 @@ function recapModal(recap) {
 /* ============================================================================
  * 交互绑定
  * ==========================================================================*/
+/**
+ * 讨论列表滚动（§12.7）：滚到底 → 视为已读、恢复自动跟随；往上翻 → 保持位置并显示「有 N 条新消息」。
+ * 注意 scroll 事件不冒泡，必须用捕获阶段委托（列表每次重渲染都会换新节点）。
+ * 只有"可见"的列表才算已读 —— 手机上面板没打开时列表是 display:none，绝不能把没看过的消息标成已读。
+ */
+document.addEventListener('scroll', (e) => {
+  const t = e.target;
+  if (!t || t.id !== 'chatLog' || t.offsetParent === null) return;
+  const pinned = t.scrollHeight - t.scrollTop - t.clientHeight < 24;
+  if (pinned === S.chatPinned) return;
+  S.chatPinned = pinned;
+  if (pinned) markChatRead();
+  render();
+}, true);
+
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[id],[data-pick],[data-hint],[data-vote],[data-votepuzzle],[data-reenable],[data-cfg],[data-preset],[data-kick]');
   if (!el) return;
@@ -2049,6 +2178,13 @@ document.addEventListener('click', async (e) => {
       }
       case 'btnStart': requestStart('pick'); break;
       case 'btnChatSend': await sendChat(); break;
+      // 窄屏：打开近全屏讨论面板（桌面端这两个按钮被 CSS 隐藏，侧栏一直看得见讨论卡片）
+      // 注意用 render(true)：点这两个按钮时聊天输入框通常还带着焦点，非强制渲染会被
+      // isBusy() 推迟最多 700ms —— 表现就是"点了返回没反应"。
+      case 'btnChatOpen': S.chatOpen = true; S.chatPinned = true; S.chatScrollToBottom = true; markChatRead(); render(true); break;
+      case 'btnChatClose': S.chatOpen = false; render(true); break;
+      // 「有 N 条新消息 ↓」：用户主动要求跳到底部（我们不强行拉走他）
+      case 'btnChatJump': S.chatPinned = true; S.chatScrollToBottom = true; markChatRead(); render(true); break;
       case 'btnSeat': {
         // 待入席者的"举手"= 申请下一轮上桌（服务端按成员状态区分语义）
         const me = room ? room.members.find((m) => m.id === (S.view.you ? S.view.you.memberId : '')) : null;
