@@ -76,7 +76,9 @@ Cron（每小时）只负责清理无人访问的房间与过期密钥，**不�
    - 凭据：连接测试 + WebCrypto 加密入库 + 撤销销毁（逻辑可从 Node 版 `server.ts` 直接搬）
 2. `src/index.ts` 路由收口（把 501 换成真实实现）
 3. 前端 `packages/web/public/index.html`：WebSocket → 轮询（约 30 行：`send()` → `POST actions`；`onmessage` → 轮询回调 + `since=seq` 增量）
-4. `src/cron.ts`：每小时清理（等待开局超时 / 长时间空闲 / 结算后过期 / 密钥 TTL）
+4. Cron 清理（已实现，在 `src/index.ts` 的 `scheduled()` 里，不在单独的 `src/cron.ts`）：
+   空房间 / 等待开局超时 / **没人了**（无状态变化且无心跳，`PLATFORM.roomDestroySec`）/ 过期密钥 TTL。
+   判据与 Node 参考实现共用 `core/room.ts` 的 `isRoomAbandoned()` 语义；每次销毁写 `room_destroyed` 审计。
 5. 测试：核心 50 项不动；集成测试从「WS 客户端」改为「HTTP 客户端 + 假时钟手动驱动 catch-up」
 6. 部署：`wrangler d1 migrations apply haiguitang --remote` → `pnpm cf:deploy` → 两台设备试玩验收
 
