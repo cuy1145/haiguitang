@@ -3126,7 +3126,18 @@ document.addEventListener('visibilitychange', () => {
       S.view = me.view; S.screen = 'room';
       if (S.view && S.view.room) S.serverOffset = S.view.room.serverTime - Date.now();
       startPolling();
-    } catch { if (bootEpoch === sessionEpoch) clearSession(); }
+    } catch (e) {
+      if (bootEpoch !== sessionEpoch) return;
+      // 房间真的没了（长时间没人参与被回收 / 已经散场 / 最后一人离席即清理）：
+      // 清掉旧令牌并说明一句 —— 别让人以为是自己网络坏了。
+      if (e && (e.status === 401 || e.status === 404)) {
+        clearSession();
+        S.notice = '上一个房间已经关闭了（长时间没有人参与，或已经散场）。重新开一局，或在下面输入房号加入。';
+      } else {
+        // 网络抖动 / 5xx：**不能**扔掉令牌 —— 房间多半还在，扔了就再也回不去了
+        S.error = `恢复房间失败：${e ? e.message : '未知错误'}（房间可能还在，刷新页面重试即可）`;
+      }
+    }
   }
   startTicker();          // 倒计时按秒走（只改文本/进度条，不整页重渲染）
   render();
