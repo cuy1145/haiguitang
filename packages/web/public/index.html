@@ -582,6 +582,45 @@
   .chat .msg.fx{animation:note-in .14s ease-out}
   .log .tl.fx,.log .qa.fx{animation:paper-in .16s ease-out}
 
+  /* ---------- 小转场：让切换不那么生硬 ----------
+     和上面同一条纪律：动画**绝不挂在常驻节点上**，只由 JS 在"这次渲染确实是它第一次出现"
+     时补一个类（.screen-in / .panel-in / .card-in / .in / .out）。否则整页重渲染会反复重播。 */
+  @keyframes fade-up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  @keyframes fade-slide-left{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+  @keyframes fade-only{from{opacity:0}to{opacity:1}}
+  @keyframes fade-out-only{from{opacity:1}to{opacity:0}}
+  @keyframes curtain-in{from{opacity:0;transform:translateY(10px) scale(.994)}to{opacity:1;transform:none}}
+  @keyframes curtain-out{from{opacity:1;transform:none}to{opacity:0;transform:translateY(6px) scale(.996)}}
+  /* 换屏与页签用各自的动画名（同名的话测试与调试都分不清是哪一处转场） */
+  @keyframes screen-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  @keyframes panel-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+  /* 换屏（入口 ⇄ 房间）：整屏轻微上浮淡入 */
+  .screen-in{animation:screen-in .2s cubic-bezier(.22,.61,.36,1)}
+  /* 右栏切页签、别的"整块替换" */
+  .panel-in{animation:panel-in .16s ease-out}
+  /* 新出现的区块：汤面、轮到你、公告条 */
+  .card-in{animation:fade-up .18s ease-out}
+  .your-turn.card-in{animation:fade-slide-left .18s ease-out}
+  /* 弹窗：进场一次；关闭先加 .out 播完再真正移除（见 JS closeWithFx） */
+  .overlay.in{animation:fade-only .12s ease-out}
+  .overlay.out{animation:fade-out-only .13s ease-in forwards}
+  .overlay .modal.in{animation:curtain-in .18s cubic-bezier(.22,.61,.36,1)}
+  .overlay .modal.out{animation:curtain-out .13s ease-in forwards}
+  /* 倒计时进度条由 tickUi 每 250ms 改 width：让它滑过去而不是一格一格跳 */
+  [data-bar]{transition:width .25s linear}
+  /* 机械刻度：亮/灭之间做 180ms 渐变，不是硬切 */
+  .ticks i{transition:background-color .18s linear}
+  /* 短收据：滑入 + 到期前淡出（pushToast 负责加 .gone） */
+  .toast{animation:fade-slide-left .16s ease-out}
+  .toast.gone{animation:fade-out-only .2s ease-in forwards}
+  /* 交互反馈：hover 底色过渡统一，按下有 1px 回弹（原本只有个别按钮有） */
+  button,.mode,.cand,.tab{transition:background-color .14s ease,border-color .14s ease,color .14s ease,transform .07s ease}
+  button:active:not(:disabled),.mode:active,.cand:active,.tab:active{transform:translateY(1px)}
+  /* 可点的候选卡：hover 时边框抬一点（不做位移，避免整列抖动） */
+  .cand{transition:border-color .16s ease}
+  .cand:hover{border-color:var(--brass)}
+
   /* ---------- 补充：新版结构与旧渲染器的对齐 ---------- */
   /* 问答记录：上下分区（回合/提问者/时间 → 完整问题 → 答案章），不是聊天气泡（§2.12） */
   .log .qa{display:flex;flex-direction:column;gap:6px;padding:11px 0;border-bottom:1px solid var(--rule-soft)}
@@ -738,6 +777,67 @@ const nowMs = () => Date.now();
 /** 服务端当前时间（以服务端快照为基准对齐本机时钟） */
 const serverNow = () => Date.now() + S.serverOffset;
 
+/* ---------------------------------------------------------------- 小转场的记账
+ * 整页是 innerHTML 全量重渲染，所以动画类只能加在"刚出现/刚变化"的节点上。
+ * 这份账由 fxEnter() 维护（见下），这里只留一个"上一次弹窗组合"给关闭逻辑用。
+ * ------------------------------------------------------------------------- */
+let lastFxModalKey = null;
+let modalExitTimer = null;    // 弹窗淡出定时器
+
+/**
+ * 转场窗口：某个"第一次出现"的东西，在它出现后的短窗口内允许（重新）播入场动画。
+ *
+ * 为什么不是简单的"值变了才播一次"：入场后往往紧跟一次渲染
+ * （建房返回→立刻一次轮询、开局返回→立刻一次轮询），
+ * 那次渲染会把刚加的类连同节点一起换掉，动画还没开始就没了 —— 表现就是"没有转场"。
+ * 所以这里记一个 260ms 的窗口：窗口内同值再渲染仍然补类（重新起播，肉眼看不出来），
+ * 窗口过了就再也不补，避免"每次重渲染都重播"的老毛病。
+ */
+const FX_WINDOW_MS = 260;
+const fxWindows = Object.create(null);
+function fxEnter(key, value) {
+  const t = Date.now();
+  const prev = fxWindows[key];
+  if (!prev || prev.value !== value) {
+    fxWindows[key] = { value, until: t + FX_WINDOW_MS };
+    return true;
+  }
+  return t < prev.until;
+}
+
+/** 当前应当显示的弹窗组合键（顺序与 viewRoom 里的拼装顺序一致） */
+function modalKeyOf() {
+  const room = S.view ? S.view.room : null;
+  return [
+    S.recap ? 'recap' : '',
+    (S.truthModal && room && room.truth) ? 'truth' : '',
+    S.keyModal ? 'key' : '',
+    S.configModal ? 'cfg' : '',
+    S.guessModal ? 'guess' : '',
+  ].filter(Boolean).join('+');
+}
+
+/**
+ * 关弹窗时先播 130ms 淡出再真正改状态。
+ *
+ * 为什么不能在 CSS 里"关的时候过渡一下"：关 = 状态变了 → 整页重渲染 → 节点当场被替换掉，
+ * 没有机会播退场。所以先给现有的 .overlay/.modal 加 .out，等它播完再执行 apply()。
+ * 期间再次调用（连点两下返回）只保留最后一次。
+ */
+function closeWithFx(apply) {
+  const ov = document.querySelector('.overlay');
+  if (!ov) { apply(); return; }
+  ov.classList.add('out');
+  const card = ov.querySelector('.modal');
+  if (card) card.classList.add('out');
+  if (modalExitTimer) clearTimeout(modalExitTimer);
+  modalExitTimer = setTimeout(() => {
+    modalExitTimer = null;
+    lastFxModalKey = null;      // 下一次打开要重新播进场
+    apply();
+  }, 130);
+}
+
 /* ---------------------------------------------------------------- 全员讨论区
  * 只统计"别人发的、我还没看到的"未读数；未读纯属前端提示，不改房间/对局状态。
  * 打开讨论区并停在底部即视为已读（chatReadSeq 推进到最新）。
@@ -759,7 +859,11 @@ function pushToast(text, kind = 'ok') {
   el.setAttribute('data-at', String(Date.now()));
   box.appendChild(el);
   while (box.children.length > 4) box.removeChild(box.firstChild);
-  setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, TOAST_MS);
+  // 到期前 200ms 先加 .gone 播一段淡出，再真正移除（不然收据是"啪"地消失）
+  setTimeout(() => {
+    el.classList.add('gone');
+    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 200);
+  }, Math.max(300, TOAST_MS - 200));
 }
 
 /**
@@ -1453,6 +1557,10 @@ function render(force = false) {
   S.renderPending = false;
   S.lastFingerprint = fingerprint;
 
+  // 哪些"小转场"该播：只在"这个东西刚出现/刚变化"的窗口内补类（见 fxEnter 的说明）
+  const screenChanged = fxEnter('screen', S.screen);
+  const modalKeyNow = modalKeyOf();
+
   const active = document.activeElement;
   const keep = active && active.id && app.contains(active) && typeof active.selectionStart === 'number'
     ? { id: active.id, start: active.selectionStart, end: active.selectionEnd }
@@ -1481,6 +1589,18 @@ function render(force = false) {
 
   if (!S.view || S.screen === 'entry') { app.innerHTML = viewEntry(); bindEntry(); }
   else app.innerHTML = viewRoom();
+
+  // 换屏 / 弹窗进场：这里统一补类（不改 viewEntry/viewRoom 的返回值，也不改 modalShell 的签名）
+  const rootEl = app.firstElementChild;
+  if (rootEl && screenChanged) rootEl.classList.add('screen-in');
+  if (modalKeyNow && fxEnter('modal', modalKeyNow)) {
+    const ov = document.querySelector('.overlay');
+    const card = ov ? ov.querySelector('.modal') : null;
+    if (ov) ov.classList.add('in');
+    if (card) card.classList.add('in');
+  }
+  if (!modalKeyNow) lastFxModalKey = null;             // 关掉了：下次再开要重新播进场
+  else lastFxModalKey = modalKeyNow;
 
   if (keep) {
     const el = document.getElementById(keep.id);
@@ -1764,6 +1884,13 @@ function viewRoom() {
   /** 单人模式：隐藏一切多人专属部件（名册 / 讨论区 / 房号邀请 / 投票 / 跳过 / 准备） */
   const solo = room.solo === true;
 
+  // 小转场记账（见文件顶部的 fxEnter）：只在"刚出现/刚变化"的窗口内给类，避免整页重渲染反复重播
+  const tabFx = fxEnter('railTab', railTab) ? ' panel-in' : '';
+  const puzzleFx = (puzzle && fxEnter('puzzle', puzzle.id)) ? ' card-in' : '';
+  const turnFx = (myTurn && room.status === 'playing' && fxEnter('turn', turn.seq)) ? ' card-in' : '';
+  const msgKey = `${S.notice || ''}|${S.error || ''}`;
+  const msgFx = (msgKey !== '|' && fxEnter('msg', msgKey)) ? ' card-in' : '';
+
   return `
   <div class="grid">
     <div class="col-side">
@@ -1795,16 +1922,16 @@ function viewRoom() {
     </div>
 
     <div class="col-main">
-      ${(S.notice || S.error) ? `<div class="topmsg">
+      ${(S.notice || S.error) ? `<div class="topmsg${msgFx}">
         ${S.notice ? `<div class="notice">${esc(S.notice)}</div>` : ''}
         ${S.error ? `<div class="err">${esc(S.error)}</div>` : ''}
       </div>` : ''}
 
       ${pendingSeatCard(room, you)}
 
-      ${myTurn && room.status === 'playing' ? `<div class="your-turn"><b>${solo ? '想好就问' : '轮到你发言'}</b> · ${solo ? '不限时，慢慢推；一句话问两件事会得到「部分接近」' : '想好就直接问，超时会自动跳过本轮'}</div>` : ''}
+      ${myTurn && room.status === 'playing' ? `<div class="your-turn${turnFx}"><b>${solo ? '想好就问' : '轮到你发言'}</b> · ${solo ? '不限时，慢慢推；一句话问两件事会得到「部分接近」' : '想好就直接问，超时会自动跳过本轮'}</div>` : ''}
 
-      ${puzzle ? puzzleCard(puzzle, room, you) : ''}
+      ${puzzle ? puzzleCard(puzzle, room, you, puzzleFx) : ''}
       ${puzzle ? statStrip(room, you) : ''}
 
       ${(you.isHost && room.status === 'waiting') ? aiPuzzleCard(room, you) : ''}
@@ -1871,7 +1998,7 @@ function viewRoom() {
           <button class="tab${railTab === 'crew' ? ' on' : ''}" id="btnTabCrew" role="tab" aria-selected="${railTab === 'crew' ? 'true' : 'false'}">CREW / 玩家 <span class="dim">${room.members.length}</span></button>
           <button class="tab${railTab === 'notes' ? ' on' : ''}" id="btnTabNotes" role="tab" aria-selected="${railTab === 'notes' ? 'true' : 'false'}">NOTES / 讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
         </div>
-        ${railTab === 'crew' ? crewPanel(room, you, turn) : chatCard(room, you, true)}
+        ${railTab === 'crew' ? `<div class="railpanel${tabFx}">${crewPanel(room, you, turn)}</div>` : `<div class="railpanel${tabFx}">${chatCard(room, you, true)}</div>`}
       </div>`}
       <div class="creditcard hd">
         <h3>CREDIT / 额度来源</h3>
@@ -1923,12 +2050,12 @@ function composerCard(room, you, turn, myTurn, draft) {
  * 题目块：汤面 + 所有**操作按钮**（提示 / 揭秘）都放这里。
  * 提示由 config.hintsEnabled 控制，默认关闭 —— 关闭时连按钮都不显示，只留一句说明。
  */
-function puzzleCard(puzzle, room, you) {
+function puzzleCard(puzzle, room, you, fx = '') {
   const hintsOn = Boolean(room.config && room.config.hintsEnabled);
   const playing = room.status === 'playing';
   const diff = Math.max(1, Math.min(5, Number(puzzle.difficulty) || 1));
   return `
-  <div class="puzzle-card">
+  <div class="puzzle-card${fx}">
     <div class="spread">
       <div class="eyebrow" style="color:var(--ink-600)">CASE SURFACE / <b style="color:var(--ink-900)">汤面</b></div>
       <div class="attrs">
@@ -2877,8 +3004,11 @@ document.addEventListener('click', async (e) => {
       // 便笺栏自己的「贴上」按钮（讨论区在右栏页签 / 窄屏内联，都在同一张卡片里）
       case 'btnChatSend': await sendChat(); break;
       case 'btnCfgClose':
-        Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
-        S.configModal = false; render(true); break;
+        closeWithFx(() => {
+          Object.keys(S.drafts).filter((k) => k.startsWith('cfg:')).forEach((k) => delete S.drafts[k]);
+          S.configModal = false; render(true);
+        });
+        break;
       case 'btnCfgApply': {
         const patch = {};
         document.querySelectorAll('[data-cfg]').forEach((input) => {
@@ -2899,7 +3029,7 @@ document.addEventListener('click', async (e) => {
       case 'btnSkip': request({ t: 'skip_turn' }); break;
       case 'btnKey': S.keyModal = true; S.keyTest = null; render(); break;
       case 'btnKeyFromBanner': S.keyModal = true; S.keyTest = null; render(); break;
-      case 'btnKeyClose': S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; render(true); break;
+      case 'btnKeyClose': closeWithFx(() => { S.keyModal = false; S.keyTest = null; delete S.drafts.keyValue; render(true); }); break;
       case 'btnKeyToggle': {
         const el = $('#keyValue');
         if (el) el.classList.toggle('secret');
@@ -2959,9 +3089,11 @@ document.addEventListener('click', async (e) => {
       case 'btnTruthClose':
       case 'btnTruthClose2': {
         const r = S.view ? S.view.room : null;
-        S.truthModal = false;
-        if (r && r.truth) S.truthDismissedKey = `${r.id}:${r.roundNo}`;
-        render();
+        closeWithFx(() => {
+          S.truthModal = false;
+          if (r && r.truth) S.truthDismissedKey = `${r.id}:${r.roundNo}`;
+          render();
+        });
         break;
       }
       // 「回到选题」：把房间放回等待状态，房主接着选下一道题（只有房主能点）
@@ -2972,12 +3104,15 @@ document.addEventListener('click', async (e) => {
         await sendAction({ type: 'next_round' });
         break;
       }
-      case 'btnGuessCancel': S.guessModal = false; delete S.drafts.guessText; render(true); break;
+      case 'btnGuessCancel': closeWithFx(() => { S.guessModal = false; delete S.drafts.guessText; render(true); }); break;
       case 'btnGuessSubmit': {
         const text = $('#guessText').value;
-        S.guessModal = false;
-        delete S.drafts.guessText;
-        request({ t: 'guess', text });
+        // 提交后弹窗同样淡出再走（request 内部会重渲染，所以先让 .out 播起来）
+        closeWithFx(() => {
+          S.guessModal = false;
+          delete S.drafts.guessText;
+          request({ t: 'guess', text });
+        });
         break;
       }
       case 'btnResumeTurn': request({ t: 'resume_transfer' }); break;
@@ -2999,7 +3134,7 @@ document.addEventListener('click', async (e) => {
         S.recap = recap; render();
         break;
       }
-      case 'btnRecapClose': S.recap = null; render(); break;
+      case 'btnRecapClose': closeWithFx(() => { S.recap = null; render(); }); break;
       case 'btnSend': doSend(); break;
     }
   } catch (err) {
@@ -3144,12 +3279,16 @@ document.addEventListener('change', (e) => {
 document.addEventListener('keydown', (e) => {
   // Esc 关弹窗（§23）：关掉最上面一层，把焦点还给打开它的按钮
   if (e.key === 'Escape') {
-    if (closeTopModal()) {
+    // 先播 130ms 淡出再真正关（否则弹窗"啪"地消失，很生硬）
+    if (modalKeyOf()) {
       e.preventDefault();
-      const back = S.modalTriggerId ? document.getElementById(S.modalTriggerId) : null;
-      render(true);
-      const el = back || document.getElementById(S.modalTriggerId);
-      if (el && el.focus) el.focus();
+      const back = S.modalTriggerId;
+      closeWithFx(() => {
+        closeTopModal();
+        render(true);
+        const el = back ? document.getElementById(back) : null;
+        if (el && el.focus) el.focus();
+      });
       return;
     }
   }
