@@ -2033,9 +2033,9 @@ function composerCard(room, you, turn, myTurn, draft) {
   <div class="composer${grace ? ' grace' : ''} sticky">
     <div class="spread">
       <div class="eyebrow">ASK / <b>正式提问</b></div>
-      <span class="dim">${solo ? '发送后进入记录，无法撤回 · 草稿只存在本机浏览器' : '发送后公开且不可撤回 · 草稿只存在本机浏览器'}</span>
+      <span class="dim">${solo ? '回车发送（Shift+回车换行）· 发送后进入记录，无法撤回' : '回车发送（Shift+回车换行）· 发送后公开且不可撤回'} · 草稿只存在本机浏览器</span>
     </div>
-    <textarea id="ask" style="margin-top:10px" placeholder="${solo ? '想好了就写下来 —— 不限时，没有人催你。' : '随时可以打字（预输入）。轮到你时才能发送。'}">${esc(draft)}</textarea>
+    <textarea id="ask" enterkeyhint="send" style="margin-top:10px" placeholder="${solo ? '想好了就写下来 —— 不限时，没有人催你。回车发送。' : '随时可以打字（预输入）。回车发送，Shift+回车换行。'}">${esc(draft)}</textarea>
     ${grace && myTurn ? '<div class="notice warn hintbar">宽限期内仍有效：现在发送依然算这一轮。</div>' : ''}
     <div class="askrow">
       <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${grace && myTurn ? '发送（宽限期内仍有效）' : (myTurn ? '发送' : '等待回合')}</button>
@@ -2159,7 +2159,7 @@ function chatCard(room, you, bare = false) {
       ${chatListHtml()}
     </div>
     <div class="row" style="margin-top:9px;align-items:flex-end">
-      <input id="chatInput" maxlength="${CHAT_MAXLEN}" autocomplete="off" spellcheck="false" placeholder="发消息…（Enter 发送 / Shift+Enter 换行）" value="${esc(S.chatDraft || '')}">
+      <input id="chatInput" maxlength="${CHAT_MAXLEN}" autocomplete="off" spellcheck="false" enterkeyhint="send" placeholder="发消息…（回车发送）" value="${esc(S.chatDraft || '')}">
       <button class="note" id="btnChatSend" ${String(S.chatDraft || '').trim() ? '' : 'disabled'}>贴上</button>
       <span class="counter">${draftLen}/${CHAT_MAXLEN}</span>
     </div>
@@ -2671,7 +2671,7 @@ function guessModal() {
       ${solo ? '猜一次就开始计时，冷却期间不能再猜。' : '谁先猜谁开始计时，冷却期间房间里谁都不能再猜。'}${cooling ? `现在还剩 <b class="mono" data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b>。` : ''}</p>
     <div class="papernote" style="margin-top:12px">
       <div class="eyebrow" style="color:var(--ink-600);margin-bottom:6px">STATEMENT / 结案陈词</div>
-      <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样">${esc(text)}</textarea>
+      <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样（回车换行，Ctrl/Cmd+回车提交）">${esc(text)}</textarea>
     </div>`,
     `<button id="btnGuessCancel">返回</button>
      <span class="row">${cooling ? `<span class="mono dim">冷却中 <b data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b></span>` : ''}
@@ -3192,11 +3192,17 @@ async function sendChat() {
   const input = $('#chatInput'); if (input) { input.value = ''; input.focus(); }
 }
 
-function doSend() {  const ta = $('#ask');
+function doSend() {
+  const ta = $('#ask');
   const text = (ta ? ta.value : '').trim();
   if (!text) return;
   const v = S.view;
+  // 清干净三处：本机草稿（localStorage）、内存草稿（S.drafts.ask）、输入框本身。
+  // 不清会怎样：渲染时输入框是从 S.drafts.ask 回填的 → 发送后那句话还留在框里，
+  // 用户很容易以为没发出去，再按一次回车 / 再点一次发送（"重复提问"的来源）。
   localStorage.removeItem(LS_DRAFT);
+  delete S.drafts.ask;
+  if (ta) ta.value = '';
   request({ t: 'submit', turnSeq: v.room.turn.seq, text, clientSubmitId: (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())) });
 }
 
@@ -3307,12 +3313,41 @@ document.addEventListener('keydown', (e) => {
       }
     }
   }
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && $('#ask')) { e.preventDefault(); doSend(); }
-  // 讨论区：Enter 发送 / Shift+Enter 换行；中文输入法组字期间（isComposing / keyCode 229）绝不发送
+  // 提问框：**回车发送**（Shift+回车换行），Ctrl/Cmd+回车也照旧发送。
+  // 中文输入法组字期间（isComposing / keyCode 229）绝不发送 —— 那时回车是在选字。
+  // 弹窗开着时不发送（焦点可能在弹窗里，别把键盘事件当成"发送提问"）。
+  if (e.key === 'Enter' && e.target && e.target.id === 'ask') {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.shiftKey) return;                     // Shift+回车 = 换行（textarea 默认行为）
+    if (document.querySelector('.overlay')) return;
+    e.preventDefault();
+    // 焦点留在输入框里会让整页渲染被推迟（isBusy 保护正在输入的内容），
+    // 于是"发出去了，但记录和判定迟迟不出现" —— 发送就意味着这句话写完了，主动交还焦点。
+    e.target.blur();
+    doSend();
+    return;
+  }
+  // 讨论区：Enter 发送 / Shift+Enter 换行；中文输入法组字期间绝不发送
   if (e.key === 'Enter' && e.target && e.target.id === 'chatInput' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
     if (e.isComposing || e.keyCode === 229) return;
     e.preventDefault();
     void sendChat();
+    return;
+  }
+  // 猜汤底结案陈词：是一段话，回车留给换行；Ctrl/Cmd+回车提交（与提问框的手感一致：想发就按修饰键）
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.target && e.target.id === 'guessText') {
+    e.preventDefault();
+    const btn = $('#btnGuessSubmit');
+    if (btn && !btn.disabled) btn.click();
+    return;
+  }
+  // 入口页：署名/房号里按回车 = 点「创建 / 加入」（表单里回车的默认期待）
+  if (e.key === 'Enter' && e.target && (e.target.id === 'nick' || e.target.id === 'code')) {
+    if (e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    e.target.blur();                            // 同上：焦点不移开的话，房间页会被推迟渲染
+    const go = $('#btnGo');
+    if (go) go.click();
     return;
   }
   // 任何交互都算活动信号（服务端据此推导挂机状态；只上报"有活动"这一事实）
