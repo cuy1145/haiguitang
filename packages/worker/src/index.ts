@@ -13,6 +13,7 @@ import { json, securityHeaders } from './http.ts';
 import { handleApi, siteAiConfig, DEFAULT_HOST_BASE_URL, DEFAULT_HOST_MODEL } from './room-api.ts';
 import { listPurgeableRooms, purgeRoom } from './store-d1.ts';
 import { ConsoleLogger } from './log.ts';
+import { PLATFORM } from '@ht/core';
 
 const logger = new ConsoleLogger('info');
 
@@ -109,8 +110,13 @@ export default {
    * Cron 清理（wrangler.toml: `crons = ["17 * * * *"]`）。
    * 只做"没人访问、也就没人会来管"的收尾 —— 对局计时由请求内的惰性推进负责，不依赖 Cron。
    *  · 空房间（含单人退出后残留的）→ 立即清理
-   *  · 未开局超 6 小时 / 已结束超 24 小时 / 超 24 小时无更新
+   *  · 未开局超 `PLATFORM.roomWaitExpireSec`（6 小时）
+   *  · **没人了**：没状态变化、也没人心跳超过 `PLATFORM.roomDestroySec`（6 小时）
+   *    —— 晚上关掉网页没点"离开房间"的房间，第二天早上就会被这里收掉
    *  · 过期密钥密文物理清空
+   *
+   * 每次销毁都补一条 `room_destroyed` 审计（这条路径没有玩家动作，不记的话
+   * 事后完全看不出房间是什么时候没的、为什么没的）。
    */
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     const now = Date.now();
@@ -118,6 +124,14 @@ export default {
       const purgeable = await listPurgeableRooms(env.DB, now);
       for (const room of purgeable) {
         await purgeRoom(env.DB, room.id);
+        await env.DB.prepare(
+          `INSERT INTO audit_events(id, ts, room_id, actor, action, subject, result, ip_hash, meta_json)
+           VALUES(?,?,?,?,?,?,?,?,?)`,
+        ).bind(
+          `aud_${now}_${Math.random().toString(36).slice(2, 8)}`, now, room.id, 'system',
+          'room_destroyed', room.reason, 'cron', null,
+          JSON.stringify({ ttl_h: PLATFORM.roomDestroySec / 3600, wait_ttl_h: PLATFORM.roomWaitExpireSec / 3600 }),
+        ).run();
         logger.info('room_purged', { room_id: room.id, code: room.reason });
       }
       const destroyed = await env.DB.prepare(

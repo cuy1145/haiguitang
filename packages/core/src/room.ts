@@ -52,6 +52,31 @@ export function isPlaying(room: CoreRoom): boolean {
   return room.status === 'playing';
 }
 
+/** 最近一次成员心跳的时刻（没有任何成员发过心跳时为 0）。 */
+export function lastHeartbeatAt(room: Pick<CoreRoom, 'members'>): number {
+  return room.members.reduce((mx, m) => Math.max(mx, Number(m.lastHeartbeatAt || 0)), 0);
+}
+
+/**
+ * 房间是不是"没人了"（可以销毁）：**既没有状态变化、也没有任何成员的心跳**，都超过 ttl。
+ *
+ * 为什么要带心跳这一条（只看 updatedAt 是不够的）：
+ *  · `updatedAt` 只在**状态变化**时刷新（回合推进、提问、投票…），心跳本身不改房间状态；
+ *  · 于是"开放页面但没人操作"的房间会和"浏览器已经关了"的房间长得一模一样，
+ *    只按 updatedAt 回收就会把还有人看着的房间一起收走。
+ * 心跳（20 秒一次）是"这一端还开着页面"的唯一可靠信号：
+ *  有页面开着 → 一直有心跳 → 房间留着；网页关了 → 心跳停了 → 到点回收。
+ * 这也正是"晚上玩完直接关网页、第二天早上不该还被拉回那个房间"要的行为。
+ */
+export function isRoomAbandoned(
+  room: Pick<CoreRoom, 'updatedAt' | 'members'>,
+  now: number,
+  ttlMs: number,
+): boolean {
+  if (now - room.updatedAt <= ttlMs) return false;
+  return now - lastHeartbeatAt(room) > ttlMs;
+}
+
 /** 参与者（非旁观）数量。 */
 export function playerCount(room: CoreRoom): number {
   return room.members.filter((m) => m.role !== 'spectator').length;

@@ -67,7 +67,18 @@ export const PLATFORM = {
   /** 房间生命周期 */
   roomWaitExpireSec: 6 * 3600,
   roomIdleSec: 2 * 3600,
-  roomDestroySec: 24 * 3600,
+  /**
+   * 「没人了」多久之后销毁房间：**既没有状态变化、也没有任何成员心跳**超过这个时长即销毁
+   * （判据见 core/room.ts 的 isRoomAbandoned）。
+   *
+   * 取值理由（用户反馈的实际场景）：晚上在一个房间里玩到很晚，走的时候直接把网页关了、
+   * 没点「离开房间」，第二天早上打开不应该还被拉回那个已经散场的房间。
+   *  · 6 小时：关掉网页到第二天早上基本都会超过；同一晚临时断开/换设备回来还在；
+   *  · 只要还有任何一个页面开着（20 秒一次心跳），房间就**不会**被收走 ——
+   *    哪怕所有人都在挂机、什么都没操作（挂机由 idleSkip / 回合超时各自处理，不影响房间存活）。
+   * 改动这一个常量即可整体调整（Node 参考实现与 Cloudflare Cron 都读它）。
+   */
+  roomDestroySec: 6 * 3600,
   roomSuspendedDowngradeSec: 30 * 60,
 } as const;
 

@@ -1683,7 +1683,18 @@ function bindEntry() {
       S.view = me.view; S.screen = 'room';
       startPolling();
       render();
-    } catch (e) { S.error = e.message; clearSession(); render(); }
+    } catch (e) {
+      // 房间已经没了（长时间没人 → 被回收；或最后一人离开后立即清理）。
+      // 这不是"出错了"，是正常生命周期：给一句中文说明，别甩一个 ROOM_NOT_FOUND 错误码。
+      clearSession();
+      if (e.status === 401 || e.status === 404) {
+        S.error = '';
+        S.notice = '上一个房间已经关闭了（长时间没有人参与，或已经散场）。重新开一局，或在下面输入房号加入。';
+      } else {
+        S.error = e.message;
+      }
+      render();
+    }
   };
 }
 

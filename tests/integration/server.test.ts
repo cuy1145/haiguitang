@@ -1285,6 +1285,41 @@ test('I-20: 参数变更：非法值整批拒绝、开局后只允许增大、�
   host.close();
 });
 
+test('I-33: 房间生命周期 ——「没人了」才回收；只要还有心跳（页面开着）就留着', async () => {
+  const ttl = PLATFORM.roomDestroySec * 1000;
+
+  // ① 场景：晚上玩到一半直接关网页（没点"离开房间"）→ 第二天早上不该还被拉回这个房间
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  await startMatch(host, room.roomId);
+  assert.ok(booted.app.registry.get(room.roomId), '开局后房间在');
+  const beatsBefore = booted.store.countAudit('room_destroyed', room.roomId);
+
+  advance(ttl + 60_000);                       // 关掉网页：既没有状态变化，也没有心跳
+  booted.app.registry.sweepLifecycle(now());
+  assert.equal(booted.app.registry.get(room.roomId), undefined, '超过 6 小时没人了就应当销毁');
+  assert.equal(booted.store.countAudit('room_destroyed', room.roomId), beatsBefore + 1, '销毁要留审计（否则事后查不出房间什么时候没的）');
+  // 立刻关掉这个客户端：readyAll() 会遍历所有还开着的连接，
+  // 房间没了的连接一旦被带上就会以 NOT_ALLOWED 失败（测试夹具的已知约束）。
+  host.close();
+
+  // ② 反例：同样过了 6 小时，但页面还开着（有心跳）→ **不能**收走
+  const room2 = await createRoom('房主二');
+  const host2 = await Client.open(booted.url, room2.token, '房主二');
+  await startMatch(host2, room2.roomId);
+  advance(ttl + 60_000);
+  await booted.app.registry.get(room2.roomId)!.reportSignal(host2.memberId, 'heartbeat', false);
+  booted.app.registry.sweepLifecycle(now());
+  assert.ok(booted.app.registry.get(room2.roomId), '还有人在看（心跳在）就不该销毁');
+  host2.close();
+
+  // ③ 未开局的房间光挂着不开始 → 到点也收（waiting 走另一条规则）
+  const room3 = await createRoom('房主三');
+  advance(PLATFORM.roomWaitExpireSec * 1000 + 60_000);
+  booted.app.registry.sweepLifecycle(now());
+  assert.equal(booted.app.registry.get(room3.roomId), undefined, '一直不开局的房间应当过期');
+});
+
 
 
 

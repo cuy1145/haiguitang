@@ -19,7 +19,7 @@
  *   这样"串行队列"由 D1 的写入串行 + CAS 重试等价替代，第 10 节的五条不变量继续成立。
  */
 import type { CoreMember, CoreRoom, GameConfig, Puzzle, PuzzleFact, PuzzleMeta } from '@ht/core';
-import { PROMPT_VERSION, ngrams } from '@ht/core';
+import { PROMPT_VERSION, PLATFORM, ngrams } from '@ht/core';
 import type { RoomStorePort, VerdictCachePort } from '../../server/src/ports.ts';
 import type { CredentialRecord, CredentialState } from '../../server/src/vault.ts';
 import type { QuestionRecord, ChatRecord, VerdictCacheRow } from '../../server/src/store.ts';
@@ -514,26 +514,29 @@ export async function purgeRoom(db: D1Database, roomId: string): Promise<void> {
 /**
  * 找出应当清理的房间（Cron 使用）：
  *  · 已经没有任何成员（含"单人退出"之后残留的空房间）
- *  · 未开局且创建超过 6 小时
- *  · 已结束且超过 24 小时
- *  · 超过 24 小时没有任何更新（兜底）
+ *  · 未开局且创建超过 `roomWaitExpireSec`（6 小时）：光挂着不开始的房间不留
+ *  · **没人了**：既没有状态变化、也没有任何成员心跳，都超过 `roomDestroySec`（6 小时）
+ *    —— 判据与 Node 参考实现的 `isRoomAbandoned()` 一致，只是这里用 SQL 表达：
+ *    `last_heartbeat_at` 是"这一端还开着页面"的信号（20 秒一次），
+ *    关掉网页后心跳停止，`updated_at` 也停在最后一次状态变化上，到点就回收。
  */
 export async function listPurgeableRooms(db: D1Database, now: number): Promise<Array<{ id: string; reason: string }>> {
+  const ttl = PLATFORM.roomDestroySec * 1000;
+  const stale = now - ttl;
   const rows = await db.prepare(`
     SELECT r.id, r.status, r.created_at, r.updated_at,
-           (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id) AS member_count
+           (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id) AS member_count,
+           (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id AND m.last_heartbeat_at > ?) AS live_members
       FROM rooms r
      WHERE (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id) = 0
         OR (r.status = 'waiting' AND r.created_at < ?)
-        OR (r.status = 'settled' AND r.updated_at < ?)
-        OR (r.updated_at < ?)
+        OR (r.updated_at < ? AND (SELECT COUNT(*) FROM members m WHERE m.room_id = r.id AND m.last_heartbeat_at > ?) = 0)
      LIMIT 200
-  `).bind(now - 6 * 3600 * 1000, now - 24 * 3600 * 1000, now - 24 * 3600 * 1000).all<Row>();
+  `).bind(stale, now - PLATFORM.roomWaitExpireSec * 1000, stale, stale).all<Row>();
   return (rows.results ?? []).map((r) => ({
     id: String(r.id),
     reason: Number(r.member_count) === 0 ? 'NO_MEMBERS'
-      : String(r.status) === 'waiting' ? 'WAIT_EXPIRED'
-        : String(r.status) === 'settled' ? 'SETTLED_TIMEOUT' : 'IDLE_TIMEOUT',
+      : String(r.status) === 'waiting' ? 'WAIT_EXPIRED' : 'ABANDONED',
   }));
 }
 

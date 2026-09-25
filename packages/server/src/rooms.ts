@@ -9,7 +9,7 @@
  */
 import {
   PLATFORM, PROMPT_VERSION, assertNoLeak, canSubmit, checkAndNormalizePuzzle, emptyRoom, getMember, hintsExhausted,
-  isLeaky, judgeGuess, coherentExplain, contextExplain, finalExplain, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
+  isLeaky, judgeGuess, coherentExplain, contextExplain, finalExplain, isRoomAbandoned, normalize, pickHintFact, pickNewHost, reduce, sanitizeChatText, summarizePuzzleIssues, toPublicPuzzle, toPublicRoom,
   transferGate, validateConfigChange,
 } from '@ht/core';
 import type {
@@ -1303,15 +1303,23 @@ export class RoomRegistry {
     return resumed;
   }
 
+  /**
+   * 生命周期扫描（《阶段2》§5）：把"没人管了"的房间收掉。
+   *
+   * 三条规则，按优先级：
+   *   ① 最后一名成员主动离开 → 由 leave 立即销毁（不在这里）
+   *   ② 未开局（waiting）超过 roomWaitExpireSec → 光挂着不开始的房间不留
+   *   ③ 没状态变化 **且** 没心跳超过 roomDestroySec → 没人了（见 core 的 isRoomAbandoned）
+   *
+   * ③ 取代了原来"settled 单独留 24 小时"的写法：结算后有人还在看复盘 → 有心跳 → 留着；
+   * 关掉页面 → 到点收走。一套判据管所有状态，行为更好解释。
+   */
   sweepLifecycle(now: number): void {
     for (const runtime of [...this.rooms.values()]) {
       const room = runtime.room;
-      const idleFor = now - room.updatedAt;
       if (room.status === 'waiting' && now - room.createdAt > PLATFORM.roomWaitExpireSec * 1000) {
         this.destroy(runtime, now, 'WAIT_EXPIRED');
-      } else if (room.status === 'settled' && idleFor > 24 * 3600 * 1000) {
-        this.destroy(runtime, now, 'SETTLED_TIMEOUT');
-      } else if (idleFor > PLATFORM.roomDestroySec * 1000) {
+      } else if (isRoomAbandoned(room, now, PLATFORM.roomDestroySec * 1000)) {
         this.destroy(runtime, now, 'IDLE_TIMEOUT');
       }
     }
