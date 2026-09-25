@@ -1312,6 +1312,92 @@ test('I-34: 玩家一句话问两件事 → 判定是「部分接近」，说明
   host.close();
 });
 
+test('I-35: 单人模式 —— 全流程可用，多人专属动作一律被拒，别人进不来', async () => {
+  // ① 建房时带 solo:true
+  const created = await fetch(`${booted.url}/api/rooms`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nickname: '独行者', preset: 'standard', solo: true }),
+  });
+  assert.equal(created.status, 200);
+  const room = await created.json() as { roomId: string; code: string; token: string; view: { room: { solo?: boolean } } };
+  assert.equal(room.view.room.solo, true, '公开视图要带 solo 标记（前端据此隐藏多人部件）');
+
+  const me = await Client.open(booted.url, room.token, '独行者');
+  assert.equal(me.latestView().room.solo, true, '客户端快照里也有 solo');
+
+  // ② 别人进不来（包括旁观）
+  const join = await fetch(`${booted.url}/api/rooms/${room.code}/join`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nickname: '不速之客' }),
+  });
+  assert.equal(join.status, 403);
+  assert.equal((await join.json() as { error: string }).error, 'SOLO_NO_JOIN');
+
+  // ③ 多人专属动作一律被拒（界面上不显示，接口也必须挡住）
+  for (const frame of [
+    { t: 'chat', text: '有人吗', clientMessageId: 'solo-chat' },
+    { t: 'ready', ready: true },
+    { t: 'vote', choice: 'yes' },
+    { t: 'kick', memberId: me.memberId },
+    { t: 'skip_turn' },
+    { t: 'return_host' },
+  ]) {
+    const ack = await me.request(frame);
+    assert.equal(ack.t, 'error', `${frame.t} 在单人房里必须被拒：${JSON.stringify(ack)}`);
+    assert.equal((ack as { code?: string }).code, 'SOLO_NO_MULTIPLAYER');
+  }
+  assert.equal(booted.store.listChat(room.roomId).length, 0, '单人房里不该落任何讨论消息');
+
+  // ④ 单人模式下"不用举手就能开局"（房主即唯一玩家），且开局后**不计时**
+  const started = await me.request({ t: 'start', mode: 'pick', puzzleId: 'p1' });
+  assert.equal(started.t, 'ack', `单人开局应直接成功（不需要准备）：${JSON.stringify(started)}`);
+  await settle();
+  let st = roomState(room.roomId);
+  assert.equal(st.status, 'playing');
+  assert.equal(st.turn.memberId, me.memberId, '回合永远是自己');
+  assert.equal(st.turn.deadlineAt, 0, '单人模式不计时');
+  assert.equal(st.turn.graceDeadlineAt, 0);
+
+  // ⑤ 放很久也不会"超时跳过"：回合数不涨、不会被判 abort
+  advance(2 * 3600 * 1000);
+  await settle();
+  st = roomState(room.roomId);
+  assert.equal(st.status, 'playing', `挂两小时也不该结束对局：${JSON.stringify({ status: st.status, result: st.result, pause: st.pauseReason, turn: st.turn })}`);
+  assert.equal(st.turn.phase, 'ACTIVE');
+  assert.equal(st.turn.seq, 1, '没有超时跳过，回合序号不该自己往前走');
+
+  // ⑥ 判定链路照常：提问 → 记录（这里 p1 的「内疚 + 下毒」正好是"部分接近"）
+  const ack = await me.request({ t: 'submit', turnSeq: st.turn.seq, text: '他是不是因为内疚才下毒的？', clientSubmitId: randomUUID() });
+  assert.equal(ack.t, 'ack', JSON.stringify(ack));
+  await settle();
+  const q = booted.store.listQuestions(room.roomId).at(-1)!;
+  assert.equal(q.answer, 'partial');
+  st = roomState(room.roomId);
+  assert.equal(st.turn.memberId, me.memberId, '下个回合还是自己');
+  assert.equal(st.turn.deadlineAt, 0);
+
+  // ⑦ 单人也有：提示 / 猜汤底 / 复盘 / 下一局
+  const hintOn = await me.request({ t: 'config', patch: { hintsEnabled: true, hintQuotaPerMember: 3 }, expectedVersion: st.configVersion });
+  assert.equal(hintOn.t, 'ack', `单人模式必须能开提示：${JSON.stringify(hintOn)}`);
+  const hint = await me.request({ t: 'hint', tier: 1 });
+  assert.equal(hint.t, 'ack', `单人模式必须能拿提示：${JSON.stringify(hint)}`);
+  const guess = await me.request({ t: 'guess', text: '他在海上遇难，靠同伴的肉活下来，最后承受不了真相而自杀。' });
+  assert.equal(guess.t, 'ack', `单人模式必须能猜汤底：${JSON.stringify(guess)}`);
+  await settle();
+  const ended = await me.request({ t: 'end_match' });
+  assert.equal(ended.t, 'ack');
+  await settle();
+  assert.equal(roomState(room.roomId).status, 'settled');
+  const recap = await fetch(`${booted.url}/api/recap?roomId=${room.roomId}`, { headers: { authorization: `Bearer ${room.token}` } });
+  assert.equal(recap.status, 200, '单人模式下复盘照常可用');
+  const next = await me.request({ t: 'next_round' });
+  assert.equal(next.t, 'ack', `单人模式必须能开下一局：${JSON.stringify(next)}`);
+  await settle();
+  assert.equal(roomState(room.roomId).status, 'waiting');
+
+  me.close();
+});
+
 test('I-33: 房间生命周期 ——「没人了」才回收；只要还有心跳（页面开着）就留着', async () => {
   const ttl = PLATFORM.roomDestroySec * 1000;
 

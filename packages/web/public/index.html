@@ -1639,8 +1639,10 @@ function viewEntry() {
       </div>
       <div class="actions" style="margin-top:16px">
         <button class="primary" id="btnGo" style="flex:1 1 160px">创建 / 加入</button>
+        <button id="btnSolo" style="flex:0 1 auto" title="一个人推一道题：没有讨论区、不用等人，也没有回合倒计时">单人模式</button>
         <button id="btnResume" ${token() ? '' : 'disabled'}>回到我的房间</button>
       </div>
+      <div class="dim" style="margin-top:8px">「单人模式」= 自己推一道题：判定、提示、猜汤底、复盘全都在，<b>没有讨论区</b>，也不用等别人、<b>不限时</b>。别人进不来。</div>
       ${S.error ? `<div class="err" style="margin-top:12px">${esc(S.error)}</div>` : ''}
       ${S.notice ? `<div class="notice" style="margin-top:12px">${esc(S.notice)}</div>` : ''}
       <div class="hr"></div>
@@ -1673,10 +1675,34 @@ async function joinOrCreate() {
   render();
 }
 
+/**
+ * 入口页的「单人模式」：自己一个人推一道题。
+ *
+ * 房间还是同一套（同一批判定/提示/猜汤底/复盘代码），只是建房时带 `solo: true`：
+ * 服务端不给这个房间排轮转计时、拒绝讨论区/投票/准备/踢人，也拒绝别人加入。
+ * 所以这里**不看房号输入框** —— 单人模式永远是新建一间自己的房。
+ */
+async function startSolo() {
+  const nickname = ($('#nick').value || '').trim() || '玩家';
+  const preset = $('#preset').value;
+  localStorage.setItem(LS_NICK, nickname);
+  S.error = '';
+  S.notice = '';
+  const res = await api('/api/rooms', { method: 'POST', body: JSON.stringify({ nickname, preset, solo: true }) });
+  saveSession(res.roomId, res.memberId, res.token);
+  if (res.view) { S.view = res.view; S.screen = 'room'; }
+  startPolling();
+  render();
+}
+
 function bindEntry() {
   const go = $('#btnGo');
   if (go) go.onclick = async () => {
     try { await joinOrCreate(); } catch (e) { S.error = e.message; render(); }
+  };
+  const solo = $('#btnSolo');
+  if (solo) solo.onclick = async () => {
+    try { await startSolo(); } catch (e) { S.error = e.message; render(); }
   };
   const resume = $('#btnResume');
   if (resume) resume.onclick = async () => {
@@ -1735,6 +1761,8 @@ function viewRoom() {
   const pct = counting ? Math.max(0, Math.min(100, (left / total) * 100)) : 0;
   const railTab = S.railTab === 'notes' ? 'notes' : 'crew';
   const waiting = room.status === 'waiting';
+  /** 单人模式：隐藏一切多人专属部件（名册 / 讨论区 / 房号邀请 / 投票 / 跳过 / 准备） */
+  const solo = room.solo === true;
 
   return `
   <div class="grid">
@@ -1742,26 +1770,27 @@ function viewRoom() {
       ${speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel)}
       ${engineBar(room, you)}
       <div class="card roomcard hd">
-        <h3>ROOM / 房间</h3>
+        <h3>${solo ? 'SOLO / 单人这局' : 'ROOM / 房间'}</h3>
         <div class="kv">
-          <div class="k">房号</div><div class="mono" style="letter-spacing:.18em">${esc(room.code)}</div>
+          ${solo ? '' : `<div class="k">房号</div><div class="mono" style="letter-spacing:.18em">${esc(room.code)}</div>`}
           <div class="k">状态</div><div>${esc(roomStatusLabel(room))}</div>
           <div class="k">进度</div><div class="mono">第 ${room.roundNo} 轮 · 本房间第 ${room.matchNo || 0} 局</div>
         </div>
+        ${solo ? '' : `
         <div class="actions">
           <button id="btnCopyCode" class="ghost">复制房号</button>
           <button id="btnCopyInvite" class="ghost">复制邀请链接</button>
-        </div>
+        </div>`}
         ${you.isHost ? `
         <div class="hr"></div>
-        <div class="eyebrow" style="margin-bottom:8px">HOST / 房主操作</div>
+        <div class="eyebrow" style="margin-bottom:8px">${solo ? 'THIS ROUND / 本局操作' : 'HOST / 房主操作'}</div>
         <div class="actions">
-          ${waiting ? '<button class="primary" id="btnStart">开局（随机一道）</button><button id="btnStartVote">投票选汤</button>' : ''}
+          ${waiting ? `<button class="primary" id="btnStart">${solo ? '随机来一道' : '开局（随机一道）'}</button>${solo ? '' : '<button id="btnStartVote">投票选汤</button>'}` : ''}
           <button id="btnCfg">对局参数</button>
-          ${turn.phase === 'ACTIVE' ? '<button id="btnSkip">跳过本轮</button>' : ''}
+          ${(!solo && turn.phase === 'ACTIVE') ? '<button id="btnSkip">跳过本轮</button>' : ''}
         </div>` : ''}
         <div class="hr"></div>
-        <button id="btnLeave" class="danger">离开房间</button>
+        <button id="btnLeave" class="danger">${solo ? '结束单人局' : '离开房间'}</button>
       </div>
     </div>
 
@@ -1773,7 +1802,7 @@ function viewRoom() {
 
       ${pendingSeatCard(room, you)}
 
-      ${myTurn && room.status === 'playing' ? `<div class="your-turn"><b>轮到你发言</b> · 想好就直接问，超时会自动跳过本轮</div>` : ''}
+      ${myTurn && room.status === 'playing' ? `<div class="your-turn"><b>${solo ? '想好就问' : '轮到你发言'}</b> · ${solo ? '不限时，慢慢推；一句话问两件事会得到「部分接近」' : '想好就直接问，超时会自动跳过本轮'}</div>` : ''}
 
       ${puzzle ? puzzleCard(puzzle, room, you) : ''}
       ${puzzle ? statStrip(room, you) : ''}
@@ -1789,7 +1818,7 @@ function viewRoom() {
       ${(you.isHost && pickCandidates(v).length > 0 && waiting) ? `
       <div class="candcard hd"><div class="spread"><h3 style="margin:0">CANDIDATES / 候选题（${pickCandidates(v).length} 道）</h3>
         <span class="row">
-          <span class="dim">点「选这道」直接开局，或发起「投票选汤」让大家一起选</span>
+          <span class="dim">${solo ? '点「选这道」就开始，或让 AI 现写一道' : '点「选这道」直接开局，或发起「投票选汤」让大家一起选'}</span>
           <button id="btnReroll" class="ghost">换一批</button>
         </span></div>
         <div class="cands">
@@ -1814,31 +1843,43 @@ function viewRoom() {
 
       ${room.status === 'settled' ? `
       <div class="settled hd"><div class="spread"><h3 style="margin:0">CLOSED / 本局结束</h3>
-        ${you.isHost ? '<span class="row"><button class="primary" id="btnRecap">查看复盘</button><button id="btnNextRound">回到选题（下一局）</button></span>' : '<span class="seal">等房主开下一局</span>'}</div>
+        ${you.isHost ? `<span class="row"><button class="primary" id="btnRecap">查看复盘</button><button id="btnNextRound">${solo ? '再来一道' : '回到选题（下一局）'}</button></span>` : '<span class="seal">等房主开下一局</span>'}</div>
         <div class="dim">${room.truth
-          ? '汤底已经公示（见上方）。房主点「回到选题」就能选下一道题；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。'
+          ? '汤底已经公示（见上方）。点「' + (solo ? '再来一道' : '回到选题') + '」就能选下一道题；中止的对局不予揭晓（避免"开局→立刻结束→读汤底"）。'
           : you.isHost
-            ? '本局没被猜出来：复盘含汤底揭晓（含事实点与全部提问），只有你能看到；中止的对局不予揭晓。'
+            ? '本局没被猜出来：复盘含汤底揭晓（含事实点与全部提问）' + (solo ? '。' : '，只有你能看到；中止的对局不予揭晓。')
             : '本局没被猜出来。汤底只有房主能揭晓。'}</div></div>` : ''}
 
       ${recordsCard(room, you)}
     </div>
 
     <div class="col-rail">
+      ${solo ? `
+      <div class="card hd">
+        <h3>SOLO / 单人模式</h3>
+        <div class="dim">这一局只有你一个人，所以这些多人玩法<strong>不在</strong>这里：</div>
+        <ul class="dim" style="margin:8px 0 0;padding-left:18px">
+          <li>全员讨论区</li>
+          <li>准备举手 / 等房主开局</li>
+          <li>投票选汤、踢人、房主移交</li>
+          <li>回合倒计时（超时跳过）</li>
+        </ul>
+        <div class="dim" style="margin-top:8px">都有的是：提问判定与说明句、提示、猜汤底、汤底公示、复盘、AI 出题、对局参数。</div>
+      </div>` : `
       <div class="card hd">
         <div class="tabs" role="tablist">
           <button class="tab${railTab === 'crew' ? ' on' : ''}" id="btnTabCrew" role="tab" aria-selected="${railTab === 'crew' ? 'true' : 'false'}">CREW / 玩家 <span class="dim">${room.members.length}</span></button>
           <button class="tab${railTab === 'notes' ? ' on' : ''}" id="btnTabNotes" role="tab" aria-selected="${railTab === 'notes' ? 'true' : 'false'}">NOTES / 讨论${S.chatUnread ? `<span class="badge">${S.chatUnread > 99 ? '99+' : S.chatUnread}</span>` : ''}</button>
         </div>
         ${railTab === 'crew' ? crewPanel(room, you, turn) : chatCard(room, you, true)}
-      </div>
+      </div>`}
       <div class="creditcard hd">
         <h3>CREDIT / 额度来源</h3>
         <div class="kv">
-          <div class="k">模式</div><div>${room.credit.mode === 'host_key' ? '房主自备 API' : '平台备用额度'}</div>
+          <div class="k">模式</div><div>${room.credit.mode === 'host_key' ? (solo ? '你自备的 API' : '房主自备 API') : '平台备用额度'}</div>
           <div class="k">原因</div><div class="mono">${esc(room.credit.reason)}</div>
           ${room.credit.grantLeft ? `<div class="k">临时授权</div><div class="mono">${room.credit.grantLeft} 次</div>` : ''}
-          <div class="k">房主 Key</div><div>${hostKeyMask(room) ? `<span class="mask">${esc(hostKeyMask(room))}</span>` : '<span class="dim">未配置</span>'}</div>
+          <div class="k">${solo ? '你的 Key' : '房主 Key'}</div><div>${hostKeyMask(room) ? `<span class="mask">${esc(hostKeyMask(room))}</span>` : '<span class="dim">未配置</span>'}</div>
         </div>
         <div class="dim" style="margin-top:8px">原文不可回读：任何角色（含房主本人）都取不回明文。调用失败时不会自动改用平台额度。</div>
       </div>
@@ -1860,13 +1901,14 @@ function viewRoom() {
  */
 function composerCard(room, you, turn, myTurn, draft) {
   const grace = turn.phase === 'GRACE';
+  const solo = room.solo === true;
   return `
   <div class="composer${grace ? ' grace' : ''} sticky">
     <div class="spread">
       <div class="eyebrow">ASK / <b>正式提问</b></div>
-      <span class="dim">发送后公开且不可撤回 · 草稿只存在本机浏览器</span>
+      <span class="dim">${solo ? '发送后进入记录，无法撤回 · 草稿只存在本机浏览器' : '发送后公开且不可撤回 · 草稿只存在本机浏览器'}</span>
     </div>
-    <textarea id="ask" style="margin-top:10px" placeholder="随时可以打字（预输入）。轮到你时才能发送。">${esc(draft)}</textarea>
+    <textarea id="ask" style="margin-top:10px" placeholder="${solo ? '想好了就写下来 —— 不限时，没有人催你。' : '随时可以打字（预输入）。轮到你时才能发送。'}">${esc(draft)}</textarea>
     ${grace && myTurn ? '<div class="notice warn hintbar">宽限期内仍有效：现在发送依然算这一轮。</div>' : ''}
     <div class="askrow">
       <button class="primary" id="btnSend" ${myTurn ? '' : 'disabled'}>${grace && myTurn ? '发送（宽限期内仍有效）' : (myTurn ? '发送' : '等待回合')}</button>
@@ -1910,7 +1952,7 @@ function puzzleCard(puzzle, room, you) {
       <button class="hintbtn t1" data-hint="1" ${you.canHintT12 ? '' : 'disabled'}><span class="t">T1</span><span class="c">轻</span></button>
       <button class="hintbtn t2" data-hint="2" ${you.canHintT12 ? '' : 'disabled'}><span class="t">T2</span><span class="c">中</span></button>
       <button class="hintbtn t3" data-hint="3" ${you.canHintT3 ? '' : 'disabled'}><span class="t">T3</span><span class="c">深</span></button>`
-    : '<span class="dim">本局未开启提示（房主可在左侧「对局参数」里打开）</span>'}
+    : `<span class="dim">本局未开启提示（${room.solo === true ? '可在左侧「对局参数」里打开' : '房主可在左侧「对局参数」里打开'}）</span>`}
   </div>`;
 }
 
@@ -2218,6 +2260,7 @@ function keySvg(solid) {
  * 等待阶段同一块牌子切换成「落座记录」（准备人数 + 准备按钮）。
  */
 function speakerPanel(room, you, turn, counting, left, deadline, total, pct, phaseLabel) {
+  const solo = room.solo === true;
   const current = turn.memberId ? room.members.find((m) => m.id === turn.memberId) : null;
   const isMe = Boolean(current && current.id === you.memberId);
   const urgent = counting && left <= 5000;
@@ -2228,6 +2271,34 @@ function speakerPanel(room, you, turn, counting, left, deadline, total, pct, pha
   const allReady = eligible > 0 && readyCount >= eligible;
   const waiting = room.status === 'waiting';
   const TICKS = 24;
+  // 单人模式：没有轮转也没有计时 —— 计时牌换成"你自己慢慢想"的说明（仍然保留当前进度）
+  if (solo) {
+    return `
+  <div class="speakerbox head${room.status === 'playing' ? ' myturn' : ''}">
+    <div class="spread">
+      <div class="eyebrow">SOLO / <b>单人推理</b></div>
+      <span class="mono dim">${waiting ? '未开局' : `第 ${room.roundNo} 轮 · 第 ${turn.seq} 问`}</span>
+    </div>
+    <div class="top">
+      <div class="avatar me">${esc(initialOf(you.name || '我'))}</div>
+      <div class="grow">
+        <div class="nm">${esc(you.name || '我')} · 你</div>
+        <div class="who">${waiting ? '挑一道题开始' : '想好就问 —— 不限时，没有回合压力'}</div>
+      </div>
+      <div style="text-align:right">
+        <div class="timer" style="color:var(--text-muted)">不限时</div><div class="meta">单人模式</div>
+      </div>
+    </div>
+    ${waiting ? `
+      <div class="hr" style="margin:2px 0"></div>
+      <div class="spread">
+        <span class="eyebrow">SOLO / 自己推</span>
+        <span class="seal">无需举手</span>
+      </div>
+      <div class="dim">单人模式不用等别人、也不用举手：选一道题就能开始。判定、提示、猜汤底、复盘都在。</div>
+    ` : ''}
+  </div>`;
+  }
   return `
   <div class="speakerbox head${isMe ? ' myturn' : ''}">
     <div class="spread">
@@ -2391,6 +2462,7 @@ function answerLabel(a) { return { yes: '是', no: '否', partial: '部分接近
  * ==========================================================================*/
 function cfgModal(room) {
   const c = room.config;
+  const solo = room.solo === true;
   // 草稿优先：用户在弹窗里改过的值即使被重渲染也要留住（这些控件没有 id，走 cfg: 前缀）
   const cur = (k) => (S.drafts[`cfg:${k}`] !== undefined ? S.drafts[`cfg:${k}`] : c[k]);
   const row = (k, label, min, max, hint) => `
@@ -2413,19 +2485,23 @@ function cfgModal(room) {
       ${hint ? `<span class="hint">${hint}</span>` : ''}
     </div>`;
   return modalShell('SETTINGS / 01', '对局参数', `
-    <p class="dim">开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。当前 config_version ${room.configVersion}。</p>
+    <p class="dim">${solo
+      ? `单人模式：没有回合倒计时，所以时长 / 宽限 / 超时跳过这几项不适用（已隐藏）；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。当前 config_version ${room.configVersion}。`
+      : `开局后：时长 / 宽限 / 冷却类下一回合生效；次数与上限类只允许增大（防止追溯性剥夺）；题目与评分口径整局锁定。当前 config_version ${room.configVersion}。`}</p>
     <div class="fieldgroup"><h4>01 · 回合</h4>
-      ${row('perTurnSec', '每人提问时长（秒）', 15, 600)}
+      ${solo ? '' : `${row('perTurnSec', '每人提问时长（秒）', 15, 600)}
       ${row('graceSec', '超时宽限（秒）', 0, 30)}
-      ${sel('turnOrderMode', '提问顺序（下一局生效）', [['join', '顺序（按加入顺序，默认）'], ['random', '乱序（开局洗一次牌）']], '乱序是开局时打乱一次，整局按这个顺序轮转；改了要等下一局开局才生效。')}
-      ${row('maxRounds', '总回合上限（轮）', 1, 60)}
-      ${sw('timeoutSkip', '超时自动跳过')}
-      ${sw('idleSkip', '跳过挂机成员的回合')}
+      ${sel('turnOrderMode', '提问顺序（下一局生效）', [['join', '顺序（按加入顺序，默认）'], ['random', '乱序（开局洗一次牌）']], '乱序是开局时打乱一次，整局按这个顺序轮转；改了要等下一局开局才生效。')}`}
+      ${solo
+        ? row('maxRounds', '本局提问次数上限', 1, 60, '单人模式里"一轮"就是"一问"；到上限这一局就结束（想继续可以「再来一道」）。')
+        : row('maxRounds', '总回合上限（轮）', 1, 60)}
+      ${solo ? '' : `${sw('timeoutSkip', '超时自动跳过')}
+      ${sw('idleSkip', '跳过挂机成员的回合')}`}
     </div>
     <div class="fieldgroup"><h4>02 · 猜汤底</h4>
       ${row('guessEveryRounds', '揭秘间隔（每 N 轮）', 1, 10)}
-      ${row('guessMaxPerMember', '每人揭秘次数（0 = 不限）', 0, 10)}
-      ${row('guessCooldownSec', '全桌共用冷却（秒，0 = 不限）', 0, 1800, '任何人猜一次都会重新计时；冷却期间全桌都不能再猜。')}
+      ${row('guessMaxPerMember', solo ? '本局揭秘次数（0 = 不限）' : '每人揭秘次数（0 = 不限）', 0, 10)}
+      ${row('guessCooldownSec', solo ? '猜底冷却（秒，0 = 不限）' : '全桌共用冷却（秒，0 = 不限）', 0, 1800, solo ? '猜一次就重新计时；冷却期间不能再猜。' : '任何人猜一次都会重新计时；冷却期间全桌都不能再猜。')}
     </div>
     <div class="fieldgroup"><h4>03 · 提示</h4>
       ${sw('hintsEnabled', '开启提示系统', '默认关闭；关闭时任何人都拿不到提示。')}
@@ -2434,10 +2510,10 @@ function cfgModal(room) {
       ${row('hintCooldownSec', '提示冷却（秒）', 0, 600)}
     </div>
     <div class="fieldgroup"><h4>04 · 选题与进房</h4>
-      ${row('candidateCount', '候选题数量', 3, 5)}
-      ${row('voteDurationSec', '投票时长（秒）', 30, 600)}
+      ${row('candidateCount', '候选题数量', 1, 5)}
+      ${solo ? '' : `${row('voteDurationSec', '投票时长（秒）', 30, 600)}
       ${sel('midJoinPolicy', '对局中进房的人', [['seated_next_round', '排队待入席（默认）：申请后从下一轮起上桌'], ['spectator_only', '只能旁观（本局不接受上桌）'], ['reject', '拒绝加入（等下一局）']])}
-      ${row('maxPendingSeats', '待入席排队上限（人）', 0, 10)}
+      ${row('maxPendingSeats', '待入席排队上限（人）', 0, 10)}`}
     </div>`,
     `<button id="btnCfgClose">关闭</button>
      <span class="row"><button class="primary" id="btnCfgApply">应用参数</button></span>`);
@@ -2461,10 +2537,11 @@ function guessModal() {
   const cdLeft = room && room.guessCooldownUntil ? Math.max(0, room.guessCooldownUntil - serverNow()) : 0;
   const cdSec = room && room.config ? room.config.guessCooldownSec : 0;
   const cooling = cdLeft > 0;
+  const solo = Boolean(room && room.solo === true);
   return modalShell('FINAL THEORY / 结案推理', '猜汤底', `
     <p class="dim">判定尺度：关键事实点全部命中 + 表达出因果链 = <b>命中</b>；命中 ≥ 60% = <b>接近</b>（只回数量，不告诉你命中了哪几条）；否则未命中。</p>
-    <p class="dim">猜汤底是<b>所有人共用一个冷却</b><span class="mono">${cdSec > 0 ? `（当前设置 ${cdSec} 秒）` : '（当前设置：不限）'}</span>：
-      谁先猜谁开始计时，冷却期间房间里谁都不能再猜。${cooling ? `现在还剩 <b class="mono" data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b>。` : ''}</p>
+    <p class="dim">猜汤底${solo ? '有一个冷却' : '是<b>所有人共用一个冷却</b>'}<span class="mono">${cdSec > 0 ? `（当前设置 ${cdSec} 秒）` : '（当前设置：不限）'}</span>：
+      ${solo ? '猜一次就开始计时，冷却期间不能再猜。' : '谁先猜谁开始计时，冷却期间房间里谁都不能再猜。'}${cooling ? `现在还剩 <b class="mono" data-deadline="${room.guessCooldownUntil}">${fmt(cdLeft)}</b>。` : ''}</p>
     <div class="papernote" style="margin-top:12px">
       <div class="eyebrow" style="color:var(--ink-600);margin-bottom:6px">STATEMENT / 结案陈词</div>
       <textarea id="guessText" autocomplete="off" spellcheck="false" placeholder="用几句话说明：发生了什么、为什么会这样">${esc(text)}</textarea>

@@ -411,11 +411,12 @@ export class D1RoomStore implements RoomStorePort, VerdictCachePort {
     const keyStates = keyStatesOverride ?? this.savedKeyStates;
     const statements: PendingStatement[] = [{
       sql: `UPDATE rooms SET code=?, status=?, pause_reason=?, host_member_id=?, config_json=?, config_version=?, state_version=?,
-              event_seq=?, puzzle_id=?, round_no=?, match_no=?, turn_json=?, revealed_facts_json=?, hint_json=?, vote_json=?, ai_json=?,
+              event_seq=?, puzzle_id=?, round_no=?, match_no=?, solo=?, turn_json=?, revealed_facts_json=?, hint_json=?, vote_json=?, ai_json=?,
               credit_json=?, transfer_json=?, result_json=?, turn_order_json=?, ready_json=?, puzzle_json=?, guess_cooldown_until=?, turn_index=?, updated_at=?
             WHERE id = ? AND state_version = ?`,
       bindings: [room.code, room.status, room.pauseReason, room.hostId, JSON.stringify(room.config), room.configVersion,
-        newVersion, room.eventSeq, room.puzzleId, room.roundNo, room.matchNo ?? 0, JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
+        newVersion, room.eventSeq, room.puzzleId, room.roundNo, room.matchNo ?? 0, room.solo === true ? 1 : 0,
+        JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
         JSON.stringify(room.hint), room.vote ? JSON.stringify(room.vote) : null, JSON.stringify(room.ai),
         JSON.stringify(room.credit), JSON.stringify(room.transfer), room.result ? JSON.stringify(room.result) : null,
         JSON.stringify(room.turnOrder), JSON.stringify(room.ready ?? []),
@@ -547,7 +548,8 @@ function rowToRoom(row: Row): CoreRoom {
     pauseReason: (row.pause_reason as string | null) ?? null, hostId: (row.host_member_id as string | null) ?? null,
     members: [], turnOrder: JSON.parse(String(row.turn_order_json ?? '[]')), ready: JSON.parse(String(row.ready_json ?? '[]')), turnIndex: Number(row.turn_index ?? 0),
     guessCooldownUntil: Number(row.guess_cooldown_until ?? 0),
-    roundNo: Number(row.round_no ?? 1), matchNo: Number(row.match_no ?? 0), turn: JSON.parse(String(row.turn_json)),
+    roundNo: Number(row.round_no ?? 1), matchNo: Number(row.match_no ?? 0), solo: Number(row.solo ?? 0) === 1,
+    turn: JSON.parse(String(row.turn_json)),
     config: JSON.parse(String(row.config_json)) as GameConfig, configVersion: Number(row.config_version ?? 1),
     stateVersion: Number(row.state_version ?? 0), eventSeq: Number(row.event_seq ?? 0),
     puzzleId: (row.puzzle_id as string | null) ?? null, revealedFacts: JSON.parse(String(row.revealed_facts_json ?? '[]')),

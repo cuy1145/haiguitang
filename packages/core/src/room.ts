@@ -83,7 +83,13 @@ export function playerCount(room: CoreRoom): number {
 }
 
 /** 构造一个空白的房间状态（测试与建房共用）。 */
-export function emptyRoom(id: string, code: string, config: CoreRoom['config'], now: number): CoreRoom {
+export function emptyRoom(
+  id: string,
+  code: string,
+  config: CoreRoom['config'],
+  now: number,
+  solo = false,
+): CoreRoom {
   return {
     id, code,
     status: 'waiting',
@@ -94,6 +100,7 @@ export function emptyRoom(id: string, code: string, config: CoreRoom['config'], 
     turnIndex: 0,
     roundNo: 1,
     matchNo: 0,
+    solo,
     turn: {
       seq: 0, memberId: null, phase: 'IDLE',
       startedAt: 0, deadlineAt: 0, graceDeadlineAt: 0, outcome: null, lateSubmit: false,

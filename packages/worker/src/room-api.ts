@@ -15,7 +15,7 @@
  * 顺序固定为 tickTurn → presenceTick → 移交 → 投票截止 → 中断超时自动投票（与 Node 版 tick 顺序一致）。
  */
 import {
-  DEFAULT_CONFIG, PLATFORM, PRESETS, toPublicChat, validateConfig, getMember, toPublicPuzzle,
+  DEFAULT_CONFIG, PLATFORM, PRESETS, SOLO_BLOCKED_ACTIONS as SOLO_BLOCKED_LIST, toPublicChat, validateConfig, getMember, toPublicPuzzle,
 } from '@ht/core';
 import type { CoreMember, GameConfig, Puzzle } from '@ht/core';
 import { RoomRuntime } from '../../server/src/rooms.ts';
@@ -40,6 +40,11 @@ const logger = new ConsoleLogger('info');
 export const DEFAULT_HOST_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_HOST_MODEL = 'deepseek-flash';
 
+/**
+ * 单人房里被禁掉的**多人专属动作**（服务端兜底；界面上这些按钮本来就不显示）。
+ * 名单只有一份：`@ht/core` 的 `SOLO_BLOCKED_ACTIONS`（Node 参考实现读同一份）。
+ */
+const SOLO_BLOCKED_ACTIONS = new Set<string>(SOLO_BLOCKED_LIST);
 /**
  * 平台额度的 AI 配置（判定 / AI 创作共用）。
  *
@@ -283,6 +288,15 @@ async function handleAction(request: Request, env: Env, roomId: string, memberId
       questions: publicQuestionLog(runtime, store.listQuestions(roomId)),
     }, 400);
 
+    /**
+     * 单人房：多人专属动作一律拒绝。
+     * 界面上本来就不显示这些按钮（讨论区 / 准备 / 投票 / 名册 / 踢人 / 跳过本轮 / 房主移交），
+     * 这里是**服务端兜底** —— 直接打接口也一样被挡住，不会出现"单人房里冒出一条讨论区消息"这种事。
+     */
+    if (runtime.room.solo === true && SOLO_BLOCKED_ACTIONS.has(type)) {
+      return failWithView('SOLO_NO_MULTIPLAYER');
+    }
+
     switch (type) {
       case 'heartbeat':
       case 'activity':
@@ -427,21 +441,23 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
   const config = defaultConfigFor(preset, body.config as Partial<GameConfig> | undefined);
   const validation = validateConfig(config);
   if (!validation.ok) return json({ error: 'INVALID_CONFIG', fields: validation.errors }, 400);
+  /** 单人模式：一个人自己推（没有轮转计时、没有讨论/准备/投票，别人也进不来） */
+  const solo = body.solo === true;
 
   const roomId = newId('room');
   let code = generateCode();
   for (let i = 0; i < 8 && await roomCodeTaken(env.DB, code); i++) code = generateCode();
 
   const now = Date.now();
-  const room = emptyRoomRow(roomId, code, config, now);
+  const room = emptyRoomRow(roomId, code, config, now, solo);
   await env.DB.prepare(
     `INSERT INTO rooms(id, code, status, pause_reason, host_member_id, config_json, config_version, state_version, event_seq,
-       puzzle_id, round_no, turn_json, revealed_facts_json, hint_json, vote_json, ai_json, credit_json, transfer_json,
+       puzzle_id, round_no, solo, turn_json, revealed_facts_json, hint_json, vote_json, ai_json, credit_json, transfer_json,
        result_json, turn_order_json, turn_index, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).bind(
     room.id, room.code, room.status, null, null, JSON.stringify(room.config), 1, 0, 0,
-    null, 1, JSON.stringify(room.turn), '[]', JSON.stringify(room.hint), null,
+    null, 1, solo ? 1 : 0, JSON.stringify(room.turn), '[]', JSON.stringify(room.hint), null,
     JSON.stringify(room.ai), JSON.stringify(room.credit), JSON.stringify(room.transfer),
     null, '[]', 0, now, now,
   ).run();
@@ -454,6 +470,11 @@ async function createRoom(request: Request, env: Env): Promise<Response> {
 async function joinRoom(request: Request, env: Env, code: string): Promise<Response> {
   const roomId = await findRoomByCode(env.DB, code);
   if (!roomId) return json({ error: 'ROOM_NOT_FOUND', message: '房间不存在或已结束' }, 404);
+  // 单人房不接受任何加入（含旁观）：这是"自己推题"的房间，混进别人会破坏它随时可停的前提
+  const soloRow = await env.DB.prepare('SELECT solo FROM rooms WHERE id = ?').bind(roomId).first<{ solo: number }>();
+  if (Number(soloRow?.solo ?? 0) === 1) {
+    return json({ error: 'SOLO_NO_JOIN', message: messageOf('SOLO_NO_JOIN') }, 403);
+  }
   const body = await readJson(request);
   const nickname = sanitizeNickname(body.nickname);
   const spectator = body.spectator === true;
@@ -716,12 +737,12 @@ function rerollCandidates<T extends { id: string }>(pool: T[], count: number, av
   return shuffled.slice(0, Math.min(n, shuffled.length)).map((p) => p.id);
 }
 
-function emptyRoomRow(id: string, code: string, config: GameConfig, now: number): {
-  id: string; code: string; status: string; config: GameConfig;
+function emptyRoomRow(id: string, code: string, config: GameConfig, now: number, solo = false): {
+  id: string; code: string; status: string; config: GameConfig; solo: boolean;
   turn: unknown; hint: { tier3Used: number }; ai: unknown; credit: unknown; transfer: unknown;
 } {
   return {
-    id, code, status: 'waiting', config,
+    id, code, status: 'waiting', config, solo,
     turn: { seq: 0, memberId: null, phase: 'IDLE', startedAt: 0, deadlineAt: 0, graceDeadlineAt: 0, outcome: null, lateSubmit: false },
     hint: { tier3Used: 0 },
     ai: { state: 'OK', reasonCode: null, blockedAt: null },

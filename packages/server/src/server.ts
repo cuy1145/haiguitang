@@ -28,7 +28,10 @@ import { HostService } from './ai.ts';
 import { RoomRegistry, type RoomRuntime, type RuntimeDeps, type SessionLike } from './rooms.ts';
 import type { ClientFrame, ServerFrame } from './protocol.ts';
 import { messageOf as actionMessageOf } from './protocol.ts';
-import { MAX_PLAYERS, MAX_SPECTATORS, MIN_PLAYERS, PLATFORM } from '@ht/core';
+import { MAX_PLAYERS, MAX_SPECTATORS, MIN_PLAYERS, PLATFORM, SOLO_BLOCKED_ACTIONS as SOLO_BLOCKED_LIST } from '@ht/core';
+
+/** 单人房禁用的动作（与 Worker 侧同一份名单，见 core/constants.ts） */
+const SOLO_BLOCKED_ACTIONS = new Set<string>(SOLO_BLOCKED_LIST);
 
 export interface AppDeps {
   config: ServerConfig;
@@ -208,7 +211,7 @@ export class App {
         if (!validation.ok) { json(res, 400, { error: 'INVALID_CONFIG', fields: validation.errors }); return; }
         Object.assign(base, patch);
       }
-      const runtime = this.registry.create(base, now);
+      const runtime = this.registry.create(base, now, body.solo === true);
       const joined = await this.joinRoom(runtime, nickname, false);
       if ('error' in joined) { json(res, 409, { error: joined.error, message: messageOf(joined.error) }); return; }
       this.deps.logger.info('room_created', { room_id: runtime.room.id, member_ref: memberRef(joined.member.id), ip_hash: hashIp(ip, 'ht') });
@@ -220,6 +223,8 @@ export class App {
     if (req.method === 'POST' && joinMatch) {
       const runtime = this.registry.byCode(joinMatch[1]!);
       if (!runtime) { json(res, 404, { error: 'ROOM_NOT_FOUND' }); return; }
+      // 单人房不接受任何加入（含旁观）
+      if (runtime.room.solo === true) { json(res, 403, { error: 'SOLO_NO_JOIN', message: messageOf('SOLO_NO_JOIN') }); return; }
       const body = await readJson(req);
       const nickname = sanitizeNickname(body.nickname);
       const spectator = body.spectator === true && runtime.room.config.allowSpectator;
@@ -387,6 +392,11 @@ export class App {
       return;
     }
     const id = 'id' in frame && typeof frame.id === 'string' ? frame.id : randomUUID();
+    // 单人房：多人专属动作一律拒绝（与 Worker 侧同一套名单，界面上也不会出现这些按钮）
+    if (runtime.room.solo === true && SOLO_BLOCKED_ACTIONS.has(frame.t)) {
+      this.reply(ws, id, false, 'SOLO_NO_MULTIPLAYER', messageOf('SOLO_NO_MULTIPLAYER'));
+      return;
+    }
     try {
       switch (frame.t) {
         case 'ping':

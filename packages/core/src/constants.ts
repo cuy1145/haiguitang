@@ -82,6 +82,19 @@ export const PLATFORM = {
   roomSuspendedDowngradeSec: 30 * 60,
 } as const;
 
+/**
+ * **单人房**里禁用的动作（多人专属）。
+ *
+ * 单一来源：Node 参考实现与 Cloudflare Worker 都读它，前端也照它隐藏按钮（`room.solo`）。
+ *  · `chat` 全员讨论区｜`vote` 投票（选题 / 临时启用平台额度）｜`ready` 准备举手
+ *  · `kick` 踢人｜`skip_turn` 跳过本轮（单人跳过只会转回自己）｜房主移交三件套
+ * 保留（单人一样有意义）：submit / hint / guess / config / start / next_round / end_match /
+ * create_ai_puzzle / reroll_candidates / heartbeat / activity / leave / reenable_key。
+ */
+export const SOLO_BLOCKED_ACTIONS: readonly string[] = [
+  'chat', 'vote', 'ready', 'kick', 'skip_turn', 'resume_transfer', 'return_host', 'decline_return',
+];
+
 /** 对局预设（《阶段3》§5.2）。预设只是初始值，套用后仍可逐项修改。 */
 export const PRESETS: Record<'quick' | 'standard' | 'casual', GameConfig> = {
   quick: {

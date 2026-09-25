@@ -1275,13 +1275,13 @@ export class RoomRegistry {
     return generateCode(this.deps.rand);
   }
 
-  create(config: GameConfig, now: number): RoomRuntime {
+  create(config: GameConfig, now: number, solo = false): RoomRuntime {
     const code = this.allocateCode();
     const id = this.deps.newId('room');
-    const runtime = new RoomRuntime(emptyRoom(id, code, config, now), this.deps);
+    const runtime = new RoomRuntime(emptyRoom(id, code, config, now, solo), this.deps);
     this.rooms.set(id, runtime);
     runtime.persist();
-    this.deps.store.audit({ action: 'room_created', roomId: id, meta: { code } });
+    this.deps.store.audit({ action: 'room_created', roomId: id, meta: { code, solo } });
     return runtime;
   }
 

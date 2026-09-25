@@ -39,7 +39,11 @@ export function presenceTick(room: CoreRoom, now: number): PresenceTickResult {
   }
 
   // ---- 房间级：全员挂起 / 全员断连 → 暂停；有人活跃 → 恢复 ----
-  if (next.status === 'playing' && !anyActive(next)) {
+  //
+  // 单人房**不暂停**：这条规则在多人里是为了"没人看的时候别把回合计时烧掉"，
+  // 而单人房本来就没有计时 —— 暂停只会让一个人回来时看到"已暂停 · 全员挂机"，
+  // 还得再点一次"继续对局"（而且单人房里没有房主移交那一套，恢复动作会很别扭）。
+  if (next.solo !== true && next.status === 'playing' && !anyActive(next)) {
     const reason = allDisconnected(next) ? 'all_disconnected' : 'all_idle';
     next = withRoom(next, { status: 'suspended', pauseReason: reason }, now);
     events.push({ type: 'room_paused', reason });

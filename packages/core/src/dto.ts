@@ -122,6 +122,8 @@ export interface PublicRoom {
   readyEligible: number;
   /** 待入席人数（对局进行中进房排队的人，不占轮转与玩家位） */
   pendingSeatCount: number;
+  /** 单人房（主界面的「单人模式」）：前端据此隐藏讨论区/准备/投票/名册等多人部件 */
+  solo: boolean;
 }
 
 /**
@@ -299,6 +301,7 @@ export function toPublicRoom(room: CoreRoom, viewerId: string, deps: RoomViewDep
     readyCount: room.members.filter((m) => m.role !== 'spectator' && m.conn === 'connected' && m.id !== room.hostId && room.ready.includes(m.id)).length,
     /** 待入席人数（对局进行中进房排队的人）；界面据此显示"待入席（下一轮上桌）"分组 */
     pendingSeatCount: room.members.filter((m) => m.pendingSeat === true).length,
+    solo: room.solo === true,
   };
 }
 

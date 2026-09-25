@@ -75,6 +75,30 @@ export function startTurn(room: CoreRoom, ctx: ReduceCtx): TurnTransition {
   const member = getMember(room, memberId);
   if (!member) return endMatch(room, 'aborted', '回合归属成员不存在', ctx);
 
+  /**
+   * 单人房：**不计时**。
+   *  · `deadlineAt` / `graceDeadlineAt` = 0 表示"不限时"（canSubmit 不判过期、tickTurn 不推进阶段）；
+   *  · 也不看 conn/activity —— 一个人"挂机"只是他在想题，不该把回合跳掉、更不该把局烧到上限。
+   */
+  if (room.solo === true) {
+    const soloRoom = withRoom(room, {
+      turnOrder: order,
+      turnIndex: index,
+      turn: {
+        seq: room.turn.seq + 1,
+        memberId,
+        phase: 'ACTIVE',
+        startedAt: ctx.now,
+        deadlineAt: 0,
+        graceDeadlineAt: 0,
+        outcome: null,
+        lateSubmit: false,
+      },
+    }, ctx.now);
+    events.push({ type: 'turn_started', turnSeq: soloRoom.turn.seq, memberId, phase: 'ACTIVE', deadlineAt: 0 });
+    return { room: soloRoom, events };
+  }
+
   const unavailable = member.conn === 'disconnected' || (member.activity === 'idle' && room.config.idleSkip);
   const phase = unavailable ? 'GRACE' : 'ACTIVE';
   const deadlineAt = unavailable ? ctx.now : ctx.now + room.config.perTurnSec * 1000;
@@ -115,7 +139,8 @@ export function canSubmit(
   if (room.turn.phase === 'JUDGING' || room.turn.phase === 'SETTLED') return 'TURN_ALREADY_ANSWERED';
   if (room.turn.phase === 'SKIPPED') return room.turn.outcome === 'voided_transfer' ? 'TURN_VOIDED' : 'TURN_EXPIRED';
   if (room.turn.phase !== 'ACTIVE' && room.turn.phase !== 'GRACE') return 'MATCH_PAUSED';
-  if (receivedAt > room.turn.graceDeadlineAt) return 'TURN_EXPIRED';
+  // graceDeadlineAt <= 0 = 不限时（单人房）：永远不过期
+  if (room.turn.graceDeadlineAt > 0 && receivedAt > room.turn.graceDeadlineAt) return 'TURN_EXPIRED';
   return checkQuestionText(rawText);
 }
 
@@ -138,14 +163,15 @@ export function applyJudgeDone(room: CoreRoom, now: number): TurnTransition {
 
 /** 判定失败：回退到 ACTIVE 并重新给完整时长（不消耗回合，turnSeq 不变 → 不会产生第二次判定）。 */
 export function applyJudgeFailed(room: CoreRoom, now: number): CoreRoom {
-  const deadlineAt = now + room.config.perTurnSec * 1000;
+  // 单人房不限时：deadlineAt/graceDeadlineAt 归零（0 = 不限时），别在判定失败后突然冒出个倒计时
+  const deadlineAt = room.solo === true ? 0 : now + room.config.perTurnSec * 1000;
   return withRoom(room, {
     turn: {
       ...room.turn,
       phase: 'ACTIVE',
       startedAt: now,
       deadlineAt,
-      graceDeadlineAt: deadlineAt + room.config.graceSec * 1000,
+      graceDeadlineAt: room.solo === true ? 0 : deadlineAt + room.config.graceSec * 1000,
       lateSubmit: false,
     },
   }, now);
@@ -155,6 +181,8 @@ export function applyJudgeFailed(room: CoreRoom, now: number): CoreRoom {
 export function tickTurn(room: CoreRoom, now: number, ctx: ReduceCtx): TurnTransition {
   const events: DomainEvent[] = [];
   if (!isPlaying(room)) return { room, events };
+  // 单人房不计时：没有宽限期、没有超时跳过（想多久想多久）
+  if (room.solo === true) return { room, events };
   const t = room.turn;
   // 先判宽限期是否已过：服务器暂停/重启后一次 tick 可能直接跨过两个阶段，
   // 若先处理 ACTIVE→GRACE 就会把过期回合多留一个 tick。

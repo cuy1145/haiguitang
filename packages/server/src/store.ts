@@ -137,6 +137,8 @@ export class Store {
         round_no INTEGER NOT NULL,
         -- 本房间已经开始的局数（0 = 还没开过局）：讨论区分隔线用（§12.8）
         match_no INTEGER NOT NULL DEFAULT 0,
+        -- 单人房（「单人模式」）：没有轮转计时、没有讨论/准备/投票/踢人，别人也进不来
+        solo INTEGER NOT NULL DEFAULT 0,
         turn_json TEXT NOT NULL,
         revealed_facts_json TEXT NOT NULL,
         hint_json TEXT NOT NULL,
@@ -321,6 +323,8 @@ export class Store {
     // v3 → v4：members 增加待入席排队字段（对局进行中进房的人先排队）
     try { this.db.exec('ALTER TABLE members ADD COLUMN pending_seat INTEGER NOT NULL DEFAULT 0'); } catch { /* 已存在 */ }
     try { this.db.exec('ALTER TABLE members ADD COLUMN seat_requested INTEGER NOT NULL DEFAULT 0'); } catch { /* 已存在 */ }
+    // v6 → v7：rooms 增加单人房标记（0 = 多人房）
+    try { this.db.exec('ALTER TABLE rooms ADD COLUMN solo INTEGER NOT NULL DEFAULT 0'); } catch { /* 已存在 */ }
     this.db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(SCHEMA_VERSION, Date.now());
   }
 
@@ -380,14 +384,14 @@ export class Store {
   saveRoom(room: CoreRoom, keyStates: Map<string, { state: string; mask: string | null; formerHost: boolean }>): void {
     const tx = this.db.prepare(`
       INSERT INTO rooms(id, code, status, pause_reason, host_member_id, config_json, config_version, state_version,
-                        event_seq, puzzle_id, round_no, match_no, turn_json, revealed_facts_json, hint_json, vote_json, ai_json,
+                        event_seq, puzzle_id, round_no, match_no, solo, turn_json, revealed_facts_json, hint_json, vote_json, ai_json,
                         credit_json, transfer_json, result_json, turn_order_json, ready_json, guess_cooldown_until, turn_index, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         status = excluded.status, pause_reason = excluded.pause_reason, host_member_id = excluded.host_member_id,
         config_json = excluded.config_json, config_version = excluded.config_version,
         state_version = excluded.state_version, event_seq = excluded.event_seq,
-        puzzle_id = excluded.puzzle_id, round_no = excluded.round_no, match_no = excluded.match_no, turn_json = excluded.turn_json,
+        puzzle_id = excluded.puzzle_id, round_no = excluded.round_no, match_no = excluded.match_no, solo = excluded.solo, turn_json = excluded.turn_json,
         revealed_facts_json = excluded.revealed_facts_json, hint_json = excluded.hint_json,
         vote_json = excluded.vote_json, ai_json = excluded.ai_json, credit_json = excluded.credit_json,
         transfer_json = excluded.transfer_json, result_json = excluded.result_json,
@@ -398,7 +402,7 @@ export class Store {
     tx.run(
       room.id, room.code, room.status, room.pauseReason, room.hostId,
       JSON.stringify(room.config), room.configVersion, room.stateVersion, room.eventSeq,
-      room.puzzleId, room.roundNo, room.matchNo ?? 0, JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
+      room.puzzleId, room.roundNo, room.matchNo ?? 0, room.solo === true ? 1 : 0, JSON.stringify(room.turn), JSON.stringify(room.revealedFacts),
       JSON.stringify(room.hint), room.vote ? JSON.stringify(room.vote) : null,
       JSON.stringify(room.ai), JSON.stringify(room.credit), JSON.stringify(room.transfer),
       room.result ? JSON.stringify(room.result) : null,
@@ -502,6 +506,7 @@ export class Store {
         turnIndex: Number(row.turn_index ?? 0),
         roundNo: Number(row.round_no ?? 1),
         matchNo: Number(row.match_no ?? 0),
+        solo: Number(row.solo ?? 0) === 1,
         turn: JSON.parse(String(row.turn_json)),
         config: JSON.parse(String(row.config_json)) as GameConfig,
         configVersion: Number(row.config_version ?? 1),
