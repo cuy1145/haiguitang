@@ -12,6 +12,7 @@ import { mockJudge } from '../../packages/core/src/mock-host.ts';
 import { matchFactsByKeys, judgeGuess, pickHintFact, hintsExhausted } from '../../packages/core/src/facts.ts';
 import { checkQuestionText, checkGuessText, validateConfig, validateConfigChange } from '../../packages/core/src/text.ts';
 import { DEFAULT_CONFIG, PLATFORM } from '../../packages/core/src/constants.ts';
+import { ANSWER_ENUM } from '../../packages/core/src/types.ts';
 import { leakFacts, leakPuzzle, LEAK_MARKER } from '../fixtures/puzzle.ts';
 
 const puzzle = leakPuzzle();
@@ -73,6 +74,63 @@ test('事实表裁决：命中为真 → 是；全为假 → 否', () => {
   assert.equal(decideFromFacts(matchFactsByKeys('他以前出过海吗？', leakFacts)), 'yes');
   assert.equal(decideFromFacts(matchFactsByKeys('汤里被下了毒吗？', leakFacts)), 'no');
   assert.equal(decideFromFacts(matchFactsByKeys('他认识餐厅的老板吗？', leakFacts)), 'no');
+});
+
+test('事实表裁决：命中里**真假混杂** → partial（部分接近）', () => {
+  // 玩家把两件事塞进一句话："内疚"成立、"下毒"不成立
+  const matched = matchFactsByKeys('他是不是因为内疚才下毒的？', leakFacts).map((f) => f.id);
+  assert.deepEqual([...matched].sort(), ['f5', 'f6'], '两条都要被映射到');
+  assert.equal(decideFromFacts(matchFactsByKeys('他是不是因为内疚才下毒的？', leakFacts)), 'partial');
+  // 全真 / 全假 / 空 都不是 partial
+  assert.equal(decideFromFacts(leakFacts.filter((f) => f.isTrue)), 'yes');
+  assert.equal(decideFromFacts(leakFacts.filter((f) => !f.isTrue)), 'no');
+  assert.equal(decideFromFacts([]), 'irrelevant');
+});
+
+test('L3 校验：partial 至少要两条命中（一真一假），只给一条 / 一条不给都拒收', () => {
+  const f = analyzeInput('他是不是因为内疚才下毒的？').features;
+  const ctx = { truth: puzzle.truth.truth, facts: leakFacts, features: f };
+  // ① 正常：一真一假 → 通过，answer=partial
+  const good = validateJudgeOutput(
+    { answer: 'partial', reason_code: 'NONE', matched_fact_ids: ['f5', 'f6'], explain: '部分接近——你问的「内疚和下毒」只说对了一部分。' },
+    ctx,
+  );
+  assert.equal(good.ok, true, good.ok === false ? good.detail : '');
+  assert.equal(good.ok === true && good.result.answer, 'partial');
+  // ② 只命中一条：那是"一件事"，谈不上部分 → 拒收（由事实表裁决成 是/否）
+  const one = validateJudgeOutput({ answer: 'partial', reason_code: 'NONE', matched_fact_ids: ['f5'] }, ctx);
+  assert.equal(one.ok, false);
+  assert.equal(one.ok === false && one.reason, 'INCONSISTENT');
+  // ③ 一条都没命中 → 拒收
+  const none = validateJudgeOutput({ answer: 'partial', reason_code: 'NONE', matched_fact_ids: [] }, ctx);
+  assert.equal(none.ok, false);
+  assert.equal(none.ok === false && none.reason, 'INCONSISTENT');
+  // ④ 枚举里确实多了 partial（旧值仍然有效）
+  assert.deepEqual([...ANSWER_ENUM], ['yes', 'no', 'partial', 'irrelevant', 'unanswerable']);
+});
+
+test('explain：partial 的「部分接近——」是允许的固定前缀，不会被引导式措辞误杀', () => {
+  const f = analyzeInput('他是不是因为内疚才下毒的？').features;
+  const ctx = { truth: puzzle.truth.truth, facts: leakFacts, features: f };
+  const keep = validateJudgeOutput(
+    { answer: 'partial', reason_code: 'NONE', matched_fact_ids: ['f5', 'f6'], explain: '部分接近——你问的「内疚和下毒」只说对了一部分。' },
+    ctx,
+  );
+  assert.equal(keep.ok === true && keep.result.explain, '部分接近——你问的「内疚和下毒」只说对了一部分。');
+  // 但正文里的引导式措辞照样丢（"接近"出现在前缀里是结论，出现在正文里是提示）
+  for (const bad of [
+    '部分接近——你问的「内疚」那一半是对的，再想想另一半。',
+    '部分接近——方向对了，继续。',
+  ]) {
+    const v = validateJudgeOutput({ answer: 'partial', reason_code: 'NONE', matched_fact_ids: ['f5', 'f6'], explain: bad }, ctx);
+    assert.equal(v.ok, true, '丢说明不该让判定失败');
+    assert.equal(v.ok === true && v.result.explain, null, `应当丢弃：${bad}`);
+  }
+  // 把结论说反的（answer=partial 却写「否——…」）也要丢
+  assert.equal(coherentExplain('否——你问的这件事不成立。', 'partial'), null);
+  assert.equal(coherentExplain('部分接近——只说对了一部分。', 'partial'), '部分接近——只说对了一部分。');
+  assert.equal(coherentExplain('是——只针对你问的这一句。', 'partial'), null);
+  assert.equal(explainConflictsWithAnswer('一半对——只针对你问的这一句。', 'partial'), false);
 });
 
 test('复合提问结论不一致 → COMPOUND_SPLIT_REQUIRED；一致则正常作答', () => {

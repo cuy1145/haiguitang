@@ -8,7 +8,17 @@
  */
 
 // ---------------------------------------------------------------- 基础枚举
-export type AnswerEnum = 'yes' | 'no' | 'irrelevant' | 'unanswerable';
+/**
+ * 主持人能给出的结论。
+ *
+ * 四类基本结论 + `partial`（部分接近）：
+ *  · yes / no        —— 问到的部分事实点全部成立 / 全部不成立
+ *  · partial         —— **命中里既有成立也有不成立的事实点**（"你问的里面一部分对、一部分不对"）。
+ *                       由事实表裁决（decideFromFacts），不由模型自由发挥；玩家看到的是「部分接近」。
+ *  · irrelevant      —— 封闭世界假设：问到的要素在本题里根本没出现（不是"否"）
+ *  · unanswerable    —— 无法用是/否回答（元提问/批量列举/开放提问/世界外/越狱…），必须带 reasonCode
+ */
+export type AnswerEnum = 'yes' | 'no' | 'partial' | 'irrelevant' | 'unanswerable';
 
 /** 判定原因码白名单（《阶段2》§3.2）。unanswerable 必须携带其中之一，且与输入特征一致。 */
 export type ReasonCode =
@@ -22,7 +32,7 @@ export type ReasonCode =
   | 'ENCODING_EVASION'
   | 'SPOILER_REQUEST';
 
-export const ANSWER_ENUM: readonly AnswerEnum[] = ['yes', 'no', 'irrelevant', 'unanswerable'];
+export const ANSWER_ENUM: readonly AnswerEnum[] = ['yes', 'no', 'partial', 'irrelevant', 'unanswerable'];
 export const REASON_CODES: readonly ReasonCode[] = [
   'NONE', 'OUT_OF_SCOPE', 'META_QUESTION', 'LIST_REQUEST', 'SUBJECTIVE',
   'COMPOUND_SPLIT_REQUIRED', 'INSTRUCTION_INJECTION', 'ENCODING_EVASION', 'SPOILER_REQUEST',

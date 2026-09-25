@@ -118,11 +118,22 @@ export function preflight(question: string): JudgeResult | null {
 
 /**
  * 由事实表裁决答案（**权威来源**）：模型只负责映射到事实点，答案由这里算。
- * 封闭世界假设（《阶段2》§3.2）：未命中任何事实点 → irrelevant（不是"否"）。
+ *
+ * 三条规则（全部可机判，与模型无关）：
+ *  · 一条都没命中 → irrelevant（封闭世界假设：问的要素在本题里没出现，**不是"否"**）
+ *  · 命中的事实点里有真有假 → **partial（部分接近）**：玩家问的这件事"对了一半"
+ *  · 全真 → yes；全假 → no
+ *
+ * `partial` 解决的实际问题：玩家常把两件事塞进一句话问，例如"他是不是因为内疚才下毒的？"——
+ * 内疚成立、下毒不成立。以前只会命中成立的那条、答"是"，等于默认了不成立的那半句；
+ * 现在如实回"部分接近"（只说是"一部分"，**不指出哪部分对**，否则就成了免费提示）。
  */
 export function decideFromFacts(matched: readonly PuzzleFact[]): AnswerEnum {
   if (matched.length === 0) return 'irrelevant';
-  return matched.some((f) => f.isTrue) ? 'yes' : 'no';
+  const anyTrue = matched.some((f) => f.isTrue);
+  const anyFalse = matched.some((f) => !f.isTrue);
+  if (anyTrue && anyFalse) return 'partial';
+  return anyTrue ? 'yes' : 'no';
 }
 
 export interface JudgeValidationCtx {
@@ -158,7 +169,7 @@ export function validateJudgeOutput(raw: unknown, ctx: JudgeValidationCtx): Judg
   }
   const answer = obj.answer;
   if (typeof answer !== 'string' || !ANSWER_ENUM.includes(answer as AnswerEnum)) {
-    return { ok: false, reason: 'SCHEMA_INVALID', detail: `answer 不在四类枚举内：${String(answer)}` };
+    return { ok: false, reason: 'SCHEMA_INVALID', detail: `answer 不在结论枚举内：${String(answer)}` };
   }
   const reasonCode = obj.reason_code ?? 'NONE';
   if (typeof reasonCode !== 'string' || !REASON_CODES.includes(reasonCode as ReasonCode)) {
@@ -183,9 +194,13 @@ export function validateJudgeOutput(raw: unknown, ctx: JudgeValidationCtx): Judg
     if (!known.has(id)) return { ok: false, reason: 'INCONSISTENT', detail: `未知的事实点 id：${id}` };
   }
 
-  // 自洽性：yes/no 必须命中事实点；irrelevant 不得命中；unanswerable 必须给出非 NONE 的原因
-  if ((answer === 'yes' || answer === 'no') && matchedRaw.length === 0) {
-    return { ok: false, reason: 'INCONSISTENT', detail: 'yes/no 却未命中任何事实点' };
+  // 自洽性：yes/no/partial 必须命中事实点；irrelevant 不得命中；unanswerable 必须给出非 NONE 的原因
+  if ((answer === 'yes' || answer === 'no' || answer === 'partial') && matchedRaw.length === 0) {
+    return { ok: false, reason: 'INCONSISTENT', detail: `${answer} 却未命中任何事实点` };
+  }
+  if (answer === 'partial' && matchedRaw.length < 2) {
+    // "部分接近"至少要命中两条（一真一假）才有意义；只命中一条时由事实表裁决成 是/否
+    return { ok: false, reason: 'INCONSISTENT', detail: 'partial 只命中了一条事实点（那是一件事，谈不上"部分"）' };
   }
   if (answer === 'irrelevant' && matchedRaw.length > 0) {
     return { ok: false, reason: 'INCONSISTENT', detail: 'irrelevant 却命中了事实点' };
@@ -213,7 +228,7 @@ export function validateJudgeOutput(raw: unknown, ctx: JudgeValidationCtx): Judg
 /**
  * 判定的补充说明（explain）：帮玩家理解这个结论的**范围**，不给新信息。
  *
- * 设计变更（用户要求）：**四类结论都可以带说明**，而且服务端保证每条判定都有一句
+ * 设计变更（用户要求）：**各类结论都可以带说明**，而且服务端保证每条判定都有一句
  * （模型没给就由 contextExplain 用玩家自己的问法兜一句）。
  * 这里仍然是**只丢不杀**的清洗 —— 写得不合适时返回 null，绝不因为这一句把整次判定判失败。
  * 规则：
@@ -228,7 +243,9 @@ export function sanitizeExplain(raw: unknown, answer: AnswerEnum, ctx: JudgeVali
   if (!text) return null;
   if (text.length > EXPLAIN_MAX_CHARS) return null;
   if (/[?？]$/.test(text)) return null;
-  if (GUIDING_PHRASE.test(text)) return null;
+  // 结论前缀（「是——」「部分接近——」）是**允许的固定写法**，查引导式措辞时要先把它剥掉，
+  // 否则「部分接近——只针对你问的这一半」会因为句首出现"接近"被整句丢掉。
+  if (GUIDING_PHRASE.test(text.replace(EXPLAIN_VERDICT, ''))) return null;
   if (isLeaky(text, ctx.truth, ctx.facts)) return null;
   // 模型自己把结论说反了（answer=yes 却写「否——…」）：这句话不能用
   if (explainConflictsWithAnswer(text, answer)) return null;
@@ -238,12 +255,14 @@ export function sanitizeExplain(raw: unknown, answer: AnswerEnum, ctx: JudgeVali
 /**
  * 说明句里"结论性开头"的识别。
  *
- * 只认**明确下结论**的写法（「是——…」「否——…」「对的，…」「不是：…」），
+ * 只认**明确下结论**的写法（「是——…」「否——…」「部分接近——…」「对的，…」「不是：…」），
  * 不碰「你问的『X』在本题设定里没有提到」这类中性说明 —— 后者没有下结论，谈不上说反。
  */
-const EXPLAIN_VERDICT = /^[\s（(【\[]*(是|否|对的|不对|不是)\s*[—\-–－:：,，]/;
+const EXPLAIN_VERDICT = /^[\s（(【\[]*(部分接近|部分|一半|是|否|对的|不对|不是)\s*[—\-–－:：,，]/;
 const VERDICT_ANSWER: Record<string, AnswerEnum> = {
-  是: 'yes', 对的: 'yes', 否: 'no', 不对: 'no', 不是: 'no',
+  是: 'yes', 对的: 'yes',
+  否: 'no', 不对: 'no', 不是: 'no',
+  部分接近: 'partial', 部分: 'partial', 一半: 'partial',
 };
 
 /** 说明句的结论性开头是否与 answer 相反。 */
@@ -284,6 +303,9 @@ export function contextExplain(answer: AnswerEnum, question: string): string {
       return topic ? `是——只针对你问的「${topic}」。` : '是——只针对你问的这一句。';
     case 'no':
       return topic ? `否——你问的「${topic}」在本局设定里不成立。` : '否——你问的这一句在本局设定里不成立。';
+    case 'partial':
+      // 只说"一部分对"，**绝不指出哪一部分对** —— 那就是提示了
+      return topic ? `部分接近——你问的「${topic}」只说对了一部分。` : '部分接近——你问的这件事只说对了一部分。';
     case 'irrelevant':
       return topic ? `你问的「${topic}」在本题设定里没有出现。` : '这个问题问的要素在本题设定里没有出现。';
     default:
@@ -317,7 +339,7 @@ export function isBoilerplateExplain(explain: string): boolean {
  *     其余用兜底句。
  *
  * 为什么 `irrelevant` 特殊：它的兜底句与样板说明是同一个意思（"本题没有这个要素"），
- * 留着只是把「无关」写两遍；而 是/否/无法回答 的兜底句能说明**结论管的是问题里的哪一部分**。
+ * 留着只是把「无关」写两遍；而 是/否/部分接近/无法回答 的兜底句能说明**结论管的是问题里的哪一部分**。
  */
 export function finalExplain(
   result: Pick<JudgeResult, 'answer' | 'explain'>,

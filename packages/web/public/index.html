@@ -26,7 +26,7 @@
     --ink-900:#202526; --ink-600:#596264;
     /* 功能色 */
     --brass:#b99255; --brass-light:#d4b477;
-    --stamp-yes:#287b68; --stamp-no:#a64e45; --stamp-unknown:#a5742f; --stamp-irrelevant:#647176;
+    --stamp-yes:#287b68; --stamp-no:#a64e45; --stamp-partial:#8a6a2f; --stamp-unknown:#a5742f; --stamp-irrelevant:#647176;
     --signal:#83a69e; --danger:#bd554b;
     /* 文本 */
     --text-on-dark:#e9e5da; --text-secondary:#aeb8b6; --text-muted:#75817f;
@@ -196,6 +196,7 @@
     font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--text-secondary);
   }
   .seal.yes{color:var(--stamp-yes)}.seal.no{color:var(--stamp-no)}
+  .seal.partial{color:var(--stamp-partial)}
   .seal.unknown{color:var(--stamp-unknown)}.seal.irrelevant{color:var(--stamp-irrelevant)}
   .seal.brass{color:var(--brass)}
   /* 属性文本：短竖线分隔，不加容器 */
@@ -349,6 +350,7 @@
     transform:rotate(-1.6deg);
   }
   .verdict.yes{color:var(--stamp-yes)}.verdict.no{color:var(--stamp-no)}
+  .verdict.partial{color:var(--stamp-partial)}
   .verdict.unknown{color:var(--stamp-unknown)}.verdict.irrelevant{color:var(--stamp-irrelevant)}
   /* 铅笔批注：灰字 + 左侧短线 */
   .explain{border-left:2px solid var(--rule-dark);padding-left:8px;color:var(--text-muted);font-size:12px;margin-top:4px;flex:1 1 100%}
@@ -1603,11 +1605,12 @@ function viewEntry() {
       <div class="stampmark">${turtleSvg()}</div>
       <div class="eyebrow">CASE FILE / 情境推理档案</div>
       <h1>一个古怪的故事结局，<br>一群只能问「是或否」的人</h1>
-      <p>出题人只给出结局（汤面）。你们轮流提问，主持人回答「是 / 不是 / 与此无关 / 无法回答」，
+      <p>出题人只给出结局（汤面）。你们轮流提问，主持人回答「是 / 不是 / 部分接近 / 与此无关 / 无法回答」，
         靠这些问题把真相拼出来。</p>
       <ol>
         <li>建房或输入房号加入，等房主选一道题。</li>
         <li>轮到你时问一句，答案立刻公开进正式记录。</li>
+        <li>一句话里问了两件事时，主持人会答「<b>部分接近</b>」——只说对了一半，不告诉你是哪一半。</li>
         <li>想清楚了就「猜汤底」——猜中全桌同时看到真相。</li>
       </ol>
       <div class="secret">汤底在猜中前保密 · 猜中后全桌同时揭晓</div>
@@ -2381,7 +2384,7 @@ function bannersBox(room, you) {
 }
 
 function nameOf(room, id) { const m = room.members.find((x) => x.id === id); return m ? m.name : '—'; }
-function answerLabel(a) { return { yes: '是', no: '否', irrelevant: '无关', unanswerable: '无法回答' }[a] || a; }
+function answerLabel(a) { return { yes: '是', no: '否', partial: '部分接近', irrelevant: '无关', unanswerable: '无法回答' }[a] || a; }
 
 /* ============================================================================
  * 弹窗

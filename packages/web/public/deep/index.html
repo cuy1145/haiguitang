@@ -113,7 +113,8 @@
   .echo .dot{width:12px;height:12px;margin-top:4px;border-radius:50%;border:1px solid var(--line2);
     display:grid;place-items:center}
   .echo .dot::after{content:'';width:5px;height:5px;border-radius:50%;background:currentColor}
-  .echo.yes{color:var(--bio)} .echo.no{color:#7d9aa6} .echo.irrelevant{color:#6d8791}
+  .echo.yes{color:var(--bio)} .echo.no{color:#7d9aa6} .echo.partial{color:#c8a24a}
+  .echo.irrelevant{color:#6d8791}
   .echo.unanswerable{color:var(--amber)}
   .echo .who{font-size:11px;color:var(--haze);display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
   .echo .q{font:15px/1.7 var(--serif);color:#eef9fc;margin-top:3px}
@@ -465,7 +466,7 @@ function blips(r) {
 
 function echo(q, mine) {
   const ans = String(q.answer || '');
-  const word = { yes: '是', no: '否', irrelevant: '无关', unanswerable: '无法回答' }[ans] || ans;
+  const word = { yes: '是', no: '否', partial: '部分接近', irrelevant: '无关', unanswerable: '无法回答' }[ans] || ans;
   const isMine = q.memberId === mine;
   return `<div class="echo ${esc(ans)}${isMine ? ' mine' : ''}">
     <div class="dot"></div>

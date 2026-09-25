@@ -1285,6 +1285,33 @@ test('I-20: 参数变更：非法值整批拒绝、开局后只允许增大、�
   host.close();
 });
 
+test('I-34: 玩家一句话问两件事 → 判定是「部分接近」，说明句只说对了一半（不指出哪一半）', async () => {
+  const room = await createRoom('房主');
+  const host = await Client.open(booted.url, room.token, '房主');
+  await startMatch(host, room.roomId, true, 'p1');
+
+  // p1（海龟汤）：f7「他自杀是因为无法承受这个真相」成立；f9「汤里被下了毒」不成立。
+  // 玩家一句话把两件都问了 → 命中一真一假 → partial。
+  const st = roomState(room.roomId);
+  const ack = await host.request({
+    t: 'submit', turnSeq: st.turn.seq, text: '他是不是因为内疚才下毒的？', clientSubmitId: randomUUID(),
+  });
+  assert.equal(ack.t, 'ack', JSON.stringify(ack));
+  await settle();
+
+  const q = booted.store.listQuestions(room.roomId).at(-1)!;
+  assert.equal(q.answer, 'partial', `应判「部分接近」，实际 ${q.answer}`);
+  assert.deepEqual([...q.matchedFactIds].sort(), ['f7', 'f9'], '成立与不成立的两条都要被映射到（便于事后归因）');
+  const explain = String(q.explain ?? '');
+  assert.match(explain, /部分接近/, `说明句要点明"部分接近"：${explain}`);
+  assert.match(explain, /只说对了一部分/, `说明句要说明"只说对了一部分"：${explain}`);
+  // 红线：不能指出哪一部分对（那是免费提示）——只允许引用玩家自己的问法
+  for (const leaky of ['内疚是对的', '那一半对', '下毒不对', '成立的是', '正确的是']) {
+    assert.ok(!explain.includes(leaky), `说明句不得指出哪部分对：${explain}`);
+  }
+  host.close();
+});
+
 test('I-33: 房间生命周期 ——「没人了」才回收；只要还有心跳（页面开着）就留着', async () => {
   const ttl = PLATFORM.roomDestroySec * 1000;
 

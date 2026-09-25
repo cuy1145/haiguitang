@@ -144,8 +144,11 @@ export function checkGuessText(raw: string): 'GUESS_TOO_SHORT' | 'TEXT_TOO_LONG'
  * 判定缓存版本号（提示词改动时递增）。
  * v2：explain 从"可选"改成"必填"（每次判定都要给一句结合提问语境、不给额外提示的说明）。
  *     不递增的话，旧缓存里的判定会把没有说明的历史答案原样喂回来，玩家看到的还是干巴巴的"是/否"。
+ * v3：新增 **partial（部分接近）**：一句话里同时问到多件事时，要求模型把问到的事实点都填进
+ *     `matched_fact_ids`，命中里真假混杂就由事实表裁决成 partial。
+ *     不递增的话，同一个问题会命中 v2 时期"只映射一条"的旧结论，永远看不到"部分接近"。
  */
-export const PROMPT_VERSION = 'judge-v2';
+export const PROMPT_VERSION = 'judge-v3';
 
 // ---------------------------------------------------------------- 配置校验
 export interface ConfigValidation {

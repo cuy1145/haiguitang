@@ -25,7 +25,7 @@ export interface MockHostOptions {
 
 /**
  * 判定一次提问。
- * 顺序：缓存 → L0 预检（不调模型）→ 复合提问拆分 → 事实匹配 → 四类结论。
+ * 顺序：缓存 → L0 预检（不调模型）→ 复合提问拆分 → 事实匹配 → 结论裁决（含 partial 部分接近）。
  */
 export function mockJudge(question: string, opts: MockHostOptions): JudgeResult {
   const puzzleId = opts.puzzleId ?? 'mock';
