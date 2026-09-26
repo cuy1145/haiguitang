@@ -1,8 +1,9 @@
 # packages/worker —— 生产运行时（Cloudflare Workers + D1，无 Durable Objects）
 
-> **状态：基础层已本地实测通过，房间 API 正在落地（见下方待办）。**
-> 你账号的 Durable Objects 需要付费，因此按 `docs/CF-WITHOUT-DO.md` 的**方案 A** 实现：
-> **D1（云端 SQLite）+ 惰性推进 + 客户端轮询 + 乐观锁 CAS**。
+> **状态：已完整落地并在线上运行**（<https://haiguitang.luowanx70636.workers.dev>）。
+> 该账号的 Durable Objects 需要付费，因此按 [`docs/CF-WITHOUT-DO.md`](../../docs/CF-WITHOUT-DO.md) 的**方案 A** 实现：
+> **D1（云端 SQLite）+ 惰性推进 + 客户端轮询 + 乐观锁 CAS + Cron 清理**。
+> 下面的"已实测"与"文件职责"保持更新；**待办清单是历史记录**（当时还没写 room-api，现已完成）。
 
 ## 已实测（本地 workerd，`wrangler dev`）
 
@@ -57,45 +58,39 @@ Cron（每小时）只负责清理无人访问的房间与过期密钥，**不�
 
 | 文件 | 状态 | 说明 |
 |---|---|---|
-| `src/index.ts` | ✅ 基础层 | 路由入口：健康检查（D1 探活）、配置、静态资源、安全头；未完成端点 501 |
+| `src/index.ts` | ✅ | 路由入口：健康检查（D1 探活）、配置、静态资源、安全头、**Cron 清理 `scheduled()`** |
 | `src/http.ts` | ✅ | JSON 响应、请求体解析、昵称清洗、固定文案、房间码、令牌哈希（WebCrypto） |
 | `src/vault.ts` | ✅ | WebCrypto AES-256-GCM 保险箱（AAD 绑定 `credential|owner|room`，与 Node 版行为等价） |
 | `src/log.ts` | ✅ | 控制台脱敏日志（与 Node 版同一套屏蔽字段） |
 | `src/store-d1.ts` | ✅ | D1 仓储：预读快照 + 请求级同步仓储 + CAS 单事务批次写回 + 事件表 + 会话表 |
-| `migrations/0001_init.sql` | ✅ | 全部表与唯一索引（已在本地成功应用） |
-| `src/room-api.ts` | ⬜ **待写** | 无状态房间 API：载入 → catch-up → 动作 → flush → 返回事件 |
+| `migrations/0001…0010*.sql` | ✅ | 全部表与唯一索引；线上已应用到 `0010_room_solo`（单人房标记） |
+| `src/room-api.ts` | ✅ | 无状态房间 API：载入 → catch-up → 动作 → flush → 返回事件；单人房的多人动作在这里被拒（`SOLO_BLOCKED_ACTIONS`） |
 
-## 待办（按顺序，我下一步就做这些）
+## 待办（**历史记录**：写下这段时 room-api 还没写，现已全部完成）
 
-1. `src/room-api.ts`
-   - `withRoom(db, roomId, fn)`：预读 → `new RoomRuntime(room, deps)` → `await runtime.tickOnce()`（补算）→ `fn(runtime)` → `flushRoomStore()`；CAS 失败则重放
-   - 动作分发（与 Node 版 `handleFrame` 同一套语义）：`submit / hint / guess / vote / config / start / skip_turn / end_match / resume_transfer / return_host / decline_return / reenable_key / revoke_key / heartbeat / activity`
-   - `RoomRuntime.broadcast` → 改写为「写入 `room_events` + 记录本次事件」，由 `GET /events?since=` 拉取
-   - 会话/房间码（`sessions` / `room_codes` 表）+ 建房、加入、鉴权
-   - 复盘：`recap()`（三道门禁：settled + 非 aborted + 参与者）+ 汤底由服务端注入
-   - 凭据：连接测试 + WebCrypto 加密入库 + 撤销销毁（逻辑可从 Node 版 `server.ts` 直接搬）
-2. `src/index.ts` 路由收口（把 501 换成真实实现）
-3. 前端 `packages/web/public/index.html`：WebSocket → 轮询（约 30 行：`send()` → `POST actions`；`onmessage` → 轮询回调 + `since=seq` 增量）
-4. Cron 清理（已实现，在 `src/index.ts` 的 `scheduled()` 里，不在单独的 `src/cron.ts`）：
+1. ~~`src/room-api.ts`~~ ✅ 已完成（`withRoom()` + 动作分发 + 事件落表 + 会话/房间码 + 复盘 + 凭据）
+2. ~~`src/index.ts` 路由收口~~ ✅ 已完成（501 全部换成了真实实现）
+3. ~~前端 WebSocket → 轮询~~ ✅ 已完成（`GET /api/rooms/state` 一个端点拿全量）
+4. Cron 清理（✅ 在 `src/index.ts` 的 `scheduled()` 里，不在单独的 `src/cron.ts`）：
    空房间 / 等待开局超时 / **没人了**（无状态变化且无心跳，`PLATFORM.roomDestroySec`）/ 过期密钥 TTL。
    判据与 Node 参考实现共用 `core/room.ts` 的 `isRoomAbandoned()` 语义；每次销毁写 `room_destroyed` 审计。
-5. 测试：核心 50 项不动；集成测试从「WS 客户端」改为「HTTP 客户端 + 假时钟手动驱动 catch-up」
-6. 部署：`wrangler d1 migrations apply haiguitang --remote` → `pnpm cf:deploy` → 两台设备试玩验收
+5. 测试（✅ 188 项：core 纯函数 + 集成真服务器 + 前端契约）
+6. 部署（✅ GitHub Actions：验证 → D1 迁移 → 部署 → 健康检查）
 
 ## 本地开发
 
 ```bash
 pnpm install
-pnpm cf:preflight                                   # 环境自检
-npx wrangler d1 migrations apply haiguitang --local # 建本地表（已执行过一次）
-pnpm cf:dev                                         # http://localhost:8787
-curl http://localhost:8787/api/health               # 应返回 storage:"d1", db.ok:true
+pnpm cf:preflight                 # 环境自检
+pnpm cf:migrate:local             # 建/更新本地表（拉了新迁移后要跑；漏跑会 500）
+pnpm cf:dev                       # http://127.0.0.1:8787
+curl http://127.0.0.1:8787/api/health   # 应返回 storage:"d1", db.ok:true
 ```
 
-线上迁移与密钥（部署时执行）：
+线上迁移与密钥（部署时执行；CI 会自动做迁移那一步）：
 
 ```bash
-npx wrangler d1 migrations apply haiguitang --remote
+pnpm cf:migrate                       # = wrangler d1 migrations apply haiguitang --remote
 npx wrangler secret put MASTER_KEY
 npx wrangler secret put AI_KEY        # 可选
 pnpm cf:deploy

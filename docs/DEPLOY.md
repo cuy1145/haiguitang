@@ -9,7 +9,7 @@
 
 ## 0. 先看这一屏：整体流程
 
-**你的当前进度**（2026-09-23 实测）：
+**当前进度（已经部署完成，线上在跑 <https://haiguitang.luowanx70636.workers.dev>）**：
 
 | 项 | 状态 |
 |---|---|
@@ -17,23 +17,25 @@
 | `wrangler login` | ✅ 已完成（OAuth Token 已存到本机） |
 | GitHub 仓库 | ✅ 已建：<https://github.com/cuy1145/haiguitang> |
 | 本地 git remote | ✅ 已配置 `origin` |
-| **Durable Objects** | ❌ 免费计划不可用（需付费）→ **已按方案 A 改为 D1**，见 `docs/CF-WITHOUT-DO.md` |
-| **D1 数据库** | ✅ 已创建 `haiguitang`（id `201c8906-63dd-4b55-9678-0f568c76fb57`），迁移已在本地应用 |
-| **Worker 基础层** | ✅ 本地实测：health 真实查 D1 通过、静态资源 200、未完成端点 501 |
-| **workers.dev 子域** | ❌ **未注册 —— 任何部署都必需，见 §2.0** |
-| Cloudflare API Token | ⬜ 可选（只为 GitHub Actions 自动部署；本地部署不需要，见 §2.3） |
-| Worker 移植 | ⬜ 我这边收尾中（`packages/worker/README.md`） |
+| **Durable Objects** | ❌ 免费计划不可用（需付费）→ **方案 A 改成 D1，不用 DO**，见 `docs/CF-WITHOUT-DO.md` |
+| **D1 数据库** | ✅ `haiguitang`（id `201c8906-63dd-4b55-9678-0f568c76fb57`），迁移已应用到 `0010_room_solo` |
+| **Worker** | ✅ 生产运行时完整落地（D1 + 惰性推进 + 轮询 + Cron 清理） |
+| **workers.dev 子域** | ✅ 已注册（`luowanx70636.workers.dev`） |
+| Cloudflare API Token | ✅ 已配（GitHub Actions 自动部署用；本地部署不需要，见 §2.3） |
+
+> 这一屏保留原样是因为它同时是**从零再配一遍的步骤说明**：下面的 ⓪～⑧ 依然按顺序有效，
+> 只是你（或接手的人）不必重做已经打勾的部分。日常改代码只需要看 §5.2。
 
 ```
 ⓪ 注册 workers.dev 子域（必须先做，30 秒）
     ↓
 ① GitHub 建仓库 → ② 推送代码 → ③ 配置 2 个仓库 Secret（可选，给自动部署用）
     ↓
-④ Cloudflare 建 API Token + 记下 Account ID（可选）→ ⑤ 本地 wrangler login（✅ 已完成）
+④ Cloudflare 建 API Token + 记下 Account ID（可选）→ ⑤ 本地 wrangler login
     ↓
-⑥ 我完成 CF 移植（library-do.ts + 端到端验证）
+⑥ 设置运行期密钥（MASTER_KEY / 可选 AI_KEY）→ ⑦ 首次部署 → ⑧ 两台设备试玩验收
     ↓
-⑦ 设置运行期密钥（MASTER_KEY / 可选 AI_KEY）→ ⑧ 首次部署 → ⑨ 两台设备试玩
+（推送 main 之后，CI 自动：验证 → D1 迁移 → 部署 → 健康检查）
 ```
 
 预计你本人需要花的时间：**20～30 分钟**（主要是注册后的点选与复制粘贴）。
@@ -125,24 +127,23 @@ X [ERROR] You can either deploy your worker to one or more routes by specifying 
 3. 点确认完成注册（免费计划同样可以注册）
 4. 回到项目目录重试部署即可
 
-> 注册完成后告诉我，我会立刻重跑那个 Durable Object 探针，实测三件事：
-> ① 免费计划能否创建 **SQLite 后端**的 DO；② DO SQLite 持久化是否跨请求生效；③ **alarm** 能否在无请求时自行触发。
-> 这三条都通过，才说明架构选型在这个账号上成立。
+> 注册完成后告诉我，我会立刻重跑一遍部署自检（`pnpm cf:preflight`）与健康检查。
 
-### 2.1 确认计划与 Durable Objects 可用性
+### 2.1 确认计划（**免费计划就够，不需要 Durable Objects**）
 
 1. 登录 <https://dash.cloudflare.com>
 2. 左侧 **Workers & Pages** → 如果是第一次用，会引导你设置一个 **workers.dev 子域**（例如 `abc-xyz.workers.dev`），照着设置即可
-3. 本项目需要 **Durable Objects（SQLite 后端）**。配置里用的是 `new_sqlite_classes`（免费计划可用的形态）；
-   KV 后端的新命名空间已被 Cloudflare 停止支持，所以不要改成 `new_classes`
-4. 顺手确认一下当前限额（部署前建议核对，页面里数字可能随官方调整而变化）：
-   - Durable Objects Limits：<https://developers.cloudflare.com/durable-objects/platform/limits/>
+3. 本项目**只用免费计划里就有的东西**：Workers（每天 10 万请求）、**D1**（云端 SQLite：5 GB 存储 / 500 万行读 / 10 万行写）、
+   **Cron Triggers**（每小时清理"没人了"的房间）、Static Assets。
+   **不用 Durable Objects**（那条路要付费）—— 方案与由来见 [`CF-WITHOUT-DO.md`](CF-WITHOUT-DO.md)。
+4. 顺手确认一下当前限额（页面里的数字可能随官方调整而变化）：
+   - D1 Limits：<https://developers.cloudflare.com/d1/platform/limits/>
    - Workers Limits：<https://developers.cloudflare.com/workers/platform/limits/>
    - Workers 定价/免费额度：<https://developers.cloudflare.com/workers/platform/pricing/>
-   - WebSocket 休眠：<https://developers.cloudflare.com/durable-objects/best-practices/websockets/>
 
-> 说明：我的沙箱把 `developers.cloudflare.com` 解析到非公网地址，取不到这些页面，所以上面列了链接给你核对。
-> 实现上我已按"免费计划可用"做保守设计：tick 间隔 1 秒、单次 tick 只做纯计算与少量 SQL、DO 可休眠时不计时长。
+> 沙箱里 `developers.cloudflare.com` 解析不到，取不到这些页面，所以上面列链接给你核对。
+> 实现按"免费计划可用"做的保守设计：**没有常驻进程、没有定时轮询**，状态全在 D1，
+> 靠"每个请求先补算过期事件"推进；Cron 每小时一次，只做清理。
 
 ### 2.2 拿到 Account ID
 
@@ -215,8 +216,9 @@ npx wrangler whoami         # 确认已登录，并显示 Account ID
 
 ### 2.5 等你把上面做完，告诉我进度
 
-我这边同时在做「把服务端移植到 Workers + Durable Objects」的收尾（`packages/worker/README.md` 里有待办清单）。
-**移植完成前执行部署会失败**（缺少 Library DO），所以第 3 步之前请等我一句"可以部署了"。
+**移植已经完成、线上正在跑**（`packages/worker/` 是生产运行时，方案 A：D1 + 轮询，无 Durable Objects）。
+所以到这里就可以直接进第 3 步：配密钥 → `pnpm cf:deploy`（或 push 让 Actions 自动部署）。
+部署流程里已经包含「应用 D1 迁移 → 部署 → 健康检查」。
 
 ---
 
@@ -261,16 +263,18 @@ pnpm cf:tail
 
 | # | 检查 | 期望 |
 |---|---|---|
-| 1 | 打开 `https://<你的地址>/` | 出现海龟汤首页（黄条提示 + 昵称输入框） |
-| 2 | 打开 `https://<你的地址>/api/health` | `{"ok":true,"runtime":"cloudflare-workers",...}`，`db` 完整性正常 |
-| 3 | 电脑 A 建房、电脑 B（或手机）输房间码加入 | 双方成员列表一致，网页底部显示"已连接" |
-| 4 | 房主开局 → 双方轮流提问 | 只有轮到自己时才能发送；超时会被跳过并广播 |
-| 5 | 故意晚 5 秒提交（宽限期内） | 提交成功且被标记为临界提交 |
-| 6 | 在一台设备上关掉网页 30 秒再打开 | 会自动重连并拉到最新状态（被跳过的回合不补回） |
-| 7 | 房主关闭网页超过 90 秒 | 房主位移交给下一位，额度来源变为"平台备用"，原 Key 显示"已挂起" |
+| 1 | 打开 `https://<你的地址>/` | 出现首页「深夜档案桌」（案卷封面 + 署名 + 创建/加入 + **单人模式**） |
+| 2 | 打开 `https://<你的地址>/api/health` | `{"ok":true,"runtime":"cloudflare-workers","storage":"d1","db":{"ok":true,…}}` |
+| 3 | 电脑 A 建房、电脑 B（或手机）输房间码加入 | 双方成员列表一致，顶栏显示"已连接" |
+| 4 | 房主开局 → 双方轮流提问 | 只有轮到自己时才能发送；**回车即可发送**（Shift+回车换行）；超时会跳过并广播 |
+| 5 | 提一个"一句话里两件事"的问题（例：内疚成立、下毒不成立时问「他是不是因为内疚才下毒的？」） | 判定回「**部分接近**」+ 一句"只说对了一部分"（**不指出哪一半对**） |
+| 6 | 关掉网页再打开 | 令牌还在 → 自动回到原房间；若房间已被回收 → 停在首页并给中文说明（不甩错误码） |
+| 7 | 房主关闭网页超过 3 分钟 | 房主位移交给下一位，额度来源变"平台备用"，原 Key 显示"已挂起" |
 | 8 | 对局结束后看复盘 | 能看到汤底与完整提问记录；中途"结束本局"的对局**看不到汤底** |
-| 9 | 浏览器 DevTools → Network/WS | 任何响应与帧里都搜不到 `sk-` 形态的字符串 |
-| 10 | `npx wrangler tail` 看日志 | 日志里没有汤底原文、没有 Key、没有 token |
+| 9 | 点「单人模式」开一局 | 没有讨论页签/名册/准备/房号邀请/投票/跳过；计时牌写"不限时"；别人输房号进不来（403） |
+| 10 | 浏览器 DevTools → Network | 全是 `GET /api/rooms/state` 轮询（**已经没有 WebSocket**）；任何响应里搜不到 `sk-` 形态字符串 |
+| 11 | `pnpm cf:tail` 看日志 | 没有汤底原文、没有 Key、没有 token；判定失败会给出明确 errorClass |
+| 12 | `pnpm audit` | 审计/用量/提问与判定都在；**③b「说明与结论自相矛盾」应为 0 行** |
 
 ---
 
@@ -289,7 +293,7 @@ pnpm cf:tail
 | 提交提问后一直"主持人判定中" | 模型调用卡住/上游无响应 | `wrangler tail` 看 `judge_call_failed` / `judge_failed`（超时 20 秒即中断并暂停对局） |
 | 房主提交 Key 报 `VAULT_DISABLED` | 没设置 `MASTER_KEY` | `npx wrangler secret put MASTER_KEY`（32 字节 base64） |
 | 房主提交 Key 报 `AUTH_FAILED` / `MODEL_OR_BASE_URL_NOT_FOUND` | Key 无效，或地址/模型名不对 | 点弹窗里的「测试连接（不入库）」看具体原因与真实请求地址；DeepSeek 用 `https://api.deepseek.com` + `deepseek-flash` |
-| 免费额度告警 | 请求数超限 | 提高轮询间隔（前端 1.8 秒）、减少日志；或升级 Workers Paid（$5/月） |
+| 免费额度告警 | 请求数超限 | 提高轮询间隔（前端当前 1.2 秒）、减少日志；或升级 Workers Paid（$5/月） |
 
 ---
 
@@ -304,14 +308,20 @@ pnpm cf:tail
 #      judge_result              — 判定成功（含 credit_source: host_key / site_fallback）
 #      judge_call_failed         — 上游调用失败（errorClass：HTTP_401 / HTTP_429 / CONNECT_TIMEOUT…）
 #      judge_output_parse_failed — 模型没给出可解析 JSON（带 finish_reason 与预览；预览已过汤底泄露检查）
+#      judge_answer_overridden   — 模型结论被事实表改写（含 model_answer / final_answer：判定体检用）
+#      judge_thinking_only       — 模型只回思考过程、正文为空（多半是开着思考模式）
+#      room_purged               — Cron 回收了一个"没人了"的房间（原因码：ABANDONED / WAIT_EXPIRED / NO_MEMBERS）
 #      ai_puzzle_created / ai_puzzle_rejected — 房主 AI 出题的结果
 #      member_kicked             — 房主移出玩家
 
-# ② 历史记录速查（一次看完审计/用量/提问/凭据/时间线）
+# ② 历史记录速查（一次看完审计/用量/提问/凭据/时间线 + **判定体检**）
 pnpm audit              # 走线上 D1
 pnpm audit --local      # 走本地 wrangler dev 的库
 pnpm audit --tail 50    # 多看几行
 pnpm audit --sql        # 只打印 SQL，自己拿去改着查
+#    其中 ③a/③b 是判定体检：
+#      ③a 结论被事实表改写过的记录（模型说 A、最终是 B）
+#      ③b 说明句与结论自相矛盾的记录（正常应恒为 0 行）
 ```
 
 Cloudflare 面板里对应位置：
@@ -382,13 +392,17 @@ git push                   # CI 跑验证 → 应用 D1 迁移 → wrangler depl
 **改数据库结构**（加字段/加表）：
 
 ```powershell
-# 1) 新建迁移文件（编号递增，只追加、不改历史文件）
-#    packages/worker/migrations/0005_xxx.sql
+# 1) 新建迁移文件（编号递增，只追加、不改历史文件；当前已到 0010）
+#    packages/worker/migrations/0011_xxx.sql
 # 2) 本地先应用并自测
-npx wrangler d1 migrations apply haiguitang            # 本地
+pnpm cf:migrate:local                                  # = npx wrangler d1 migrations apply haiguitang --local
 # 3) 推送后由 CI 自动应用到线上（部署流程里有这一步）
-#    也可以手动：npx wrangler d1 migrations apply haiguitang --remote
+#    也可以手动：pnpm cf:migrate
 ```
+
+> ⚠️ 本地改完代码、拉了新迁移之后**一定要先跑一次 `pnpm cf:migrate:local`**：
+> 少了新列会让相关写入直接报错（比如漏了 `0010_room_solo` 时提交提问会 500）。
+> 线上不用担心，CI 在部署前会自动 `d1 migrations apply --remote`。
 
 **改题库**：
 

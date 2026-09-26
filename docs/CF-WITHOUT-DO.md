@@ -3,6 +3,9 @@
 > 触发原因：实测你的账号上 **Durable Objects 需要付费、当前不可用**（免费计划拿不到）。
 > 本文件给出替代方案对比与推荐方案，是《阶段6》的**再次修订**（《阶段6》里"每房一个 DO"的部分作废，
 > 其余结论——域名、CI/CD、密钥、红线、复用策略——继续有效）。
+>
+> **状态：推荐方案 A 已实现并上线**（<https://haiguitang.luowanx70636.workers.dev>）。
+> 本文保留当时的实测与选型过程；具体实现见 `packages/worker/`，功能与验证见 [`功能总览.md`](功能总览.md)。
 
 ---
 
@@ -14,7 +17,7 @@
 | 建表 / 插入 / 读回 | `wrangler d1 execute ... --remote` | ✅ 全部成功 |
 | **乐观锁 CAS**（并发控制的关键） | `UPDATE rooms SET state_version = state_version + 1 ... WHERE id='r1' AND state_version = 0` | ✅ `changes: 1`，条件不满足时为 0（可据此做重试） |
 | Durable Objects | 你账号内的提示 | ❌ 需要付费，当前不可用 |
-| `workers.dev` 子域 | `wrangler deploy` | ❌ 未注册（**与 DO 无关，任何方案都必须先注册**） |
+| `workers.dev` 子域 | `wrangler deploy` | ✅ 已注册（`luowanx70636.workers.dev`；当时未注册，先注册才能部署） |
 
 探针数据库与临时 Worker 已删除，账号里没有留下任何东西。
 

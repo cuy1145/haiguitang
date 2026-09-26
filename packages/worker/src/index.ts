@@ -50,14 +50,18 @@ export default {
       } catch (err) {
         db = { ok: false, detail: (err as Error).message };
       }
+      const site = siteAiConfig(env);
       return json({
         ok: db.ok,
         runtime: 'cloudflare-workers',
         storage: 'd1',
         persistence: 'd1',
         vault: Boolean(env.MASTER_KEY),
-        realModel: Boolean(env.AI_KEY && env.AI_BASE_URL && env.AI_MODEL),
-        migration: 'room-api-in-progress',
+        // 与 /api/config 的 realModelEnabled 用**同一个判据**（只配 AI_KEY 就算启用，地址/模型缺省自动用 DeepSeek）。
+        // 以前这里要求 AI_KEY + AI_BASE_URL + AI_MODEL 三件齐全，于是"线上模型明明在工作、health 却报 false"，
+        // 排查时会被带偏（真实踩过）。
+        realModel: site.enabled,
+        migration: 'ready',
         db,
       }, db.ok ? 200 : 503);
     }
